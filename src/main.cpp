@@ -218,6 +218,36 @@ namespace {
             DrawMesh(sm.mesh);
     }
 
+    // Upload all scene lights to a shader program.
+    void UploadLights(GLuint prog) {
+        int count = 0;
+        for (auto& e : gScene.entities) {
+            if (!e.light || count >= kMaxLights) continue;
+            const Light& L = *e.light;
+            std::string idx = std::to_string(count);
+
+            glUniform1i(glGetUniformLocation(prog,
+                ("uLightType[" + idx + "]").c_str()),
+                L.type == LightType::Directional ? 0 : 1);
+
+            glm::vec3 posOrDir = (L.type == LightType::Directional)
+                ? L.direction : e.transform.position;
+            glUniform3fv(glGetUniformLocation(prog,
+                ("uLightPosOrDir[" + idx + "]").c_str()),
+                1, glm::value_ptr(posOrDir));
+
+            glUniform3fv(glGetUniformLocation(prog,
+                ("uLightColor[" + idx + "]").c_str()),
+                1, glm::value_ptr(L.color));
+            glUniform1f(glGetUniformLocation(prog,
+                ("uLightIntensity[" + idx + "]").c_str()), L.intensity);
+            glUniform1f(glGetUniformLocation(prog,
+                ("uLightRadius[" + idx + "]").c_str()), L.radius);
+            ++count;
+        }
+        glUniform1i(glGetUniformLocation(prog, "uLightCount"), count);
+    }
+
     void RenderToon(const Entity& entity, const glm::mat4& vp) {
         if (!gToonShader.id || !gOutlineShader.id) return;
 
@@ -247,8 +277,7 @@ namespace {
                 glm::value_ptr(entity.animator.jointMatrices[0]));
         }
 
-        glUniform3fv(glGetUniformLocation(gToonShader.id, "uLightDir"),
-            1, glm::value_ptr(gSettings.lightDir));
+        UploadLights(gToonShader.id);
         glUniform1f(glGetUniformLocation(gToonShader.id, "uBandHigh"),
             gSettings.bandThresholdHigh);
         glUniform1f(glGetUniformLocation(gToonShader.id, "uBandLow"),
@@ -322,6 +351,7 @@ namespace {
             * CameraViewMatrix(gCamera);
 
         for (auto& entity : gScene.entities) {
+            if (entity.light) continue;  // lights have no geometry
             switch (entity.shading) {
             case ShadingMode::VertexColor: RenderVertexColor(entity, vp); break;
             case ShadingMode::Toon:        RenderToon(entity, vp);        break;
@@ -486,6 +516,14 @@ int main(int argc, char* argv[]) {
         sm.mesh = CreateMesh(triVerts, sizeof(triVerts), 8 * sizeof(float),
                              triAttribs, 3, 3);
         e.subMeshes.push_back(std::move(sm));
+        gScene.entities.push_back(std::move(e));
+    }
+
+    // Default scene light — directional "sun."
+    {
+        Entity e;
+        e.name = "Sun";
+        e.light = Light{};
         gScene.entities.push_back(std::move(e));
     }
 

@@ -41,6 +41,14 @@ static const char* ShadingModeLabel(ShadingMode m) {
     return "?";
 }
 
+static const char* LightTypeLabel(LightType t) {
+    switch (t) {
+    case LightType::Directional: return "Directional";
+    case LightType::Point:       return "Point";
+    }
+    return "?";
+}
+
 bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
     // -- Render settings panel ------------------------------------------------
     ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
@@ -52,7 +60,6 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Toon Shading", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::DragFloat3("Light Dir", &s.lightDir.x, 0.01f, -1.0f, 1.0f);
         ImGui::SliderFloat("Band High", &s.bandThresholdHigh, -1.0f, 1.0f);
         ImGui::SliderFloat("Band Low", &s.bandThresholdLow, -1.0f, 1.0f);
         ImGui::SliderFloat("Bright", &s.brightIntensity, 0.0f, 1.0f);
@@ -114,21 +121,46 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
     if (scene.selected >= 0 && scene.selected < count) {
         Entity& e = entities[scene.selected];
 
-        ImGui::Text("Shading: %s", ShadingModeLabel(e.shading));
-
-        int meshCount = 0;
-        int triCount  = 0;
-        for (auto& sm : e.subMeshes) {
-            ++meshCount;
-            int n = sm.mesh.indexCount > 0 ? sm.mesh.indexCount : sm.mesh.vertexCount;
-            triCount += n / 3;
+        // Light entity inspector.
+        if (e.light) {
+            Light& L = *e.light;
+            ImGui::Text("Light: %s", LightTypeLabel(L.type));
+            if (ImGui::BeginCombo("Type", LightTypeLabel(L.type))) {
+                if (ImGui::Selectable("Directional", L.type == LightType::Directional))
+                    L.type = LightType::Directional;
+                if (ImGui::Selectable("Point", L.type == LightType::Point))
+                    L.type = LightType::Point;
+                ImGui::EndCombo();
+            }
+            ImGui::ColorEdit3("Color", &L.color.x);
+            ImGui::SliderFloat("Intensity", &L.intensity, 0.0f, 5.0f);
+            if (L.type == LightType::Directional) {
+                ImGui::DragFloat3("Direction", &L.direction.x, 0.01f, -1.0f, 1.0f);
+            } else {
+                ImGui::DragFloat3("Position", &e.transform.position.x, 0.05f);
+                ImGui::SliderFloat("Radius", &L.radius, 0.1f, 50.0f);
+            }
+            ImGui::Separator();
         }
-        ImGui::Text("Meshes: %d  |  Triangles: %d", meshCount, triCount);
-        ImGui::Separator();
 
-        ImGui::DragFloat3("Position", &e.transform.position.x, 0.05f);
-        ImGui::DragFloat3("Rotation", &e.transform.rotation.x, 0.5f);
-        ImGui::DragFloat3("Scale", &e.transform.scale.x, 0.01f, 0.01f, 100.0f);
+        // Mesh entity inspector.
+        if (!e.light) {
+            ImGui::Text("Shading: %s", ShadingModeLabel(e.shading));
+
+            int meshCount = 0;
+            int triCount  = 0;
+            for (auto& sm : e.subMeshes) {
+                ++meshCount;
+                int n = sm.mesh.indexCount > 0 ? sm.mesh.indexCount : sm.mesh.vertexCount;
+                triCount += n / 3;
+            }
+            ImGui::Text("Meshes: %d  |  Triangles: %d", meshCount, triCount);
+            ImGui::Separator();
+
+            ImGui::DragFloat3("Position", &e.transform.position.x, 0.05f);
+            ImGui::DragFloat3("Rotation", &e.transform.rotation.x, 0.5f);
+            ImGui::DragFloat3("Scale", &e.transform.scale.x, 0.01f, 0.01f, 100.0f);
+        }
 
         // Animation controls (only for skinned entities with clips).
         if (e.skinned && !e.clips.empty()) {

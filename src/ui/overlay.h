@@ -14,8 +14,7 @@
 struct GLFWwindow;
 
 struct RenderSettings {
-    // Toon shading.
-    glm::vec3 lightDir{0.3f, 1.0f, 0.5f};
+    // Toon shading (lights are now per-entity, not here).
     float bandThresholdHigh = 0.5f;
     float bandThresholdLow  = 0.0f;
     float brightIntensity   = 1.0f;

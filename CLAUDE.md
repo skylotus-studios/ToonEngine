@@ -26,14 +26,14 @@ src/
     animation.h             Joint, Skeleton, AnimationClip, keyframe types
     animator.h/.cpp         Playback, keyframe interpolation, joint matrix computation
   scene/                    Scene graph and asset loading
-    scene.h                 Entity (transform, meshes, skeleton, animator), Scene
+    scene.h                 Entity (transform, meshes, skeleton, animator, light), Scene
     camera.h/.cpp           FPS fly camera (right-click + WASD)
     model_loader.h/.cpp     glTF (cgltf) + FBX (ufbx), skinning, skeleton, animations
   ui/                       Debug tooling
     overlay.h/.cpp          ImGui panels: render settings + entity list/inspector + anim controls
 assets/shaders/
   model.vert                Shared vertex shader (MVP + GPU skinning via uJoints[128])
-  toon.frag                 Cel shading + shadow tint + rim lighting
+  toon.frag                 Multi-light cel shading + shadow tint + rim lighting
   outline.*                 Inverted hull outlines (with skinning support)
   edge.*                    Sobel edge detection post-process (depth-based)
   triangle.*                Vertex-colored demo geometry
@@ -49,7 +49,8 @@ Scene renders to an FBO when Sobel edge detection is on, otherwise straight to s
 
 1. **Scene pass** -- iterates `Scene::entities`, dispatches by `ShadingMode`:
    - *VertexColor*: `triangle.*` shaders
-   - *Toon*: front faces with `toon.frag` (cel + rim + shadow tint), back faces with `outline.*`
+   - *Toon*: front faces with `toon.frag` (multi-light cel + rim + shadow tint), back faces with `outline.*`
+   - Light entities (directional/point) are gathered and uploaded as uniform arrays (max 8)
    - Skinned entities upload `uJoints[]` and set `uSkinned=true` for GPU skinning
 2. **Post-process** (optional) -- fullscreen Sobel on linearized depth via `edge.*`
 3. **ImGui overlay** -- render settings, entity inspector, animation controls
@@ -59,7 +60,7 @@ Scene renders to an FBO when Sobel edge detection is on, otherwise straight to s
 - Target-based CMake only. Dependencies via vcpkg manifest; single-header libs in `libs/`.
 - `src/` is the include root. Cross-directory includes use `"core/mesh.h"`, `"scene/scene.h"`, etc.
 - Shader hot-reload: edit `.vert`/`.frag` while running, changes apply next frame.
-- Model loading via argv[1]. Auto-fit normalizes to ~5 units at origin.
+- Model loading via argv[1]. Auto-fit normalizes to 1 unit at origin.
 - Per-mesh materials: glTF per-primitive PBR; FBX split by `material_parts`.
 - Vertex layout: non-skinned = pos+norm+uv (stride 32), skinned = +boneIds+weights (stride 64).
 - Skeletal animation: max 128 joints (uniform array). Keyframe interpolation (lerp/slerp) with hierarchy walk. glTF reads JOINTS_0/WEIGHTS_0 accessors; FBX uses ufbx bake API.
@@ -73,7 +74,6 @@ Scene renders to an FBO when Sobel edge detection is on, otherwise straight to s
 
 ## What's next
 
-- Point / directional light entities (replace hardcoded light direction)
 - Shadow mapping
 - Normal-based edge detection (Sobel on normals, complementing depth edges)
 - Specular highlight band (toon-style specular lobe)
