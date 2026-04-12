@@ -67,6 +67,7 @@ add_executable(ToonEngine
     src/material.h
     src/model_loader.h
     src/model_loader.cpp
+    src/scene.h
     src/overlay.h
     src/overlay.cpp
 )

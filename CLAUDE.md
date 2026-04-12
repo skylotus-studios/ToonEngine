@@ -32,10 +32,12 @@ src/
   texture.h/.cpp     stb_image loading, from-file and from-memory
   material.h         Base color + texture per mesh
   model_loader.h/.cpp  glTF (cgltf) and FBX (ufbx) loading with auto-normals
+  scene.h            Entity (name + transform + submeshes + shading mode) and Scene
+  overlay.h/.cpp     ImGui debug overlay: render settings panel + entity list/inspector
 assets/shaders/
   triangle.*         Vertex-colored demo geometry
   model.vert         Shared vertex shader for loaded models (MVP + normal transform)
-  toon.frag          Cel shading: three-band quantized diffuse
+  toon.frag          Cel shading: uniform-driven three-band quantized diffuse
   outline.*          Inverted hull silhouette outlines
   model.frag         Plain diffuse lighting (non-toon fallback)
 libs/
@@ -45,12 +47,26 @@ libs/
 
 ### Render pipeline
 
-1. Clear color + depth
-2. Demo triangles: `triangle.vert` + `triangle.frag` (vertex colors)
-3. Loaded model pass 1 (front faces): `model.vert` + `toon.frag` (cel shading + materials)
-4. Loaded model pass 2 (back faces): `outline.vert` + `outline.frag` (inverted hull outlines)
+The render loop iterates `Scene::entities` and dispatches by `ShadingMode`:
 
-Face culling is enabled only during the model passes.
+- **VertexColor** entities: `triangle.vert` + `triangle.frag` (vertex colors)
+- **Toon** entities (two sub-passes):
+  1. Front faces: `model.vert` + `toon.frag` (cel shading + per-mesh materials)
+  2. Back faces: `outline.vert` + `outline.frag` (inverted hull outlines)
+
+Face culling is enabled only during the Toon sub-passes.
+
+### ImGui overlay
+
+Two panels rendered after the scene each frame:
+
+- **ToonEngine** — FPS counter, toon shading params (light dir, band thresholds,
+  intensities), outline width/color, background color. All values are uniforms
+  in toon.frag, tweakable live.
+- **Entities** — selectable list of all entities in the scene. Selecting one
+  shows an inspector with shading mode, mesh/triangle counts, and editable
+  position/rotation/scale. Camera input is suppressed while interacting with
+  ImGui widgets.
 
 ### Conventions
 
@@ -69,8 +85,8 @@ Face culling is enabled only during the model passes.
 
 ## What's next
 
-- ImGui debug overlay (vcpkg: `imgui[glfw-binding,opengl3-binding]`)
-- Scene/entity list (replace hardcoded globals)
-- Per-mesh material textures from glTF/FBX (partially implemented)
 - Toon shader refinements: rim lighting, shadow color ramp, Sobel edge detection
+- Per-mesh material textures from glTF/FBX (partially implemented)
 - Skeletal animation
+- Point / directional light entities (replace hardcoded light direction)
+- Shadow mapping

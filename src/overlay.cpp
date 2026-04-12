@@ -31,7 +31,16 @@ void OverlayNewFrame() {
     ImGui::NewFrame();
 }
 
-bool OverlayRender(RenderSettings& s, float fps) {
+static const char* ShadingModeLabel(ShadingMode m) {
+    switch (m) {
+    case ShadingMode::VertexColor: return "Vertex Color";
+    case ShadingMode::Toon:        return "Toon";
+    }
+    return "?";
+}
+
+bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
+    // -- Render settings panel ------------------------------------------------
     ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
 
@@ -56,6 +65,52 @@ bool OverlayRender(RenderSettings& s, float fps) {
 
     if (ImGui::CollapsingHeader("Scene")) {
         ImGui::ColorEdit3("Background", &s.clearColor.x);
+    }
+
+    ImGui::End();
+
+    // -- Entity list panel ----------------------------------------------------
+    ImGui::SetNextWindowPos(ImVec2(16, 400), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(320, 350), ImGuiCond_FirstUseEver);
+
+    ImGui::Begin("Entities");
+
+    auto& entities = scene.entities;
+    int count = static_cast<int>(entities.size());
+
+    ImGui::Text("%d entit%s", count, count == 1 ? "y" : "ies");
+    ImGui::Separator();
+
+    // Selectable list.
+    for (int i = 0; i < count; ++i) {
+        bool selected = (scene.selected == i);
+        if (ImGui::Selectable(entities[i].name.c_str(), selected))
+            scene.selected = (scene.selected == i) ? -1 : i;
+    }
+
+    ImGui::Separator();
+
+    // Inspector for selected entity.
+    if (scene.selected >= 0 && scene.selected < count) {
+        Entity& e = entities[scene.selected];
+
+        ImGui::Text("Shading: %s", ShadingModeLabel(e.shading));
+
+        int meshCount = 0;
+        int triCount  = 0;
+        for (auto& sm : e.subMeshes) {
+            ++meshCount;
+            int n = sm.mesh.indexCount > 0 ? sm.mesh.indexCount : sm.mesh.vertexCount;
+            triCount += n / 3;
+        }
+        ImGui::Text("Meshes: %d  |  Triangles: %d", meshCount, triCount);
+        ImGui::Separator();
+
+        ImGui::DragFloat3("Position", &e.transform.position.x, 0.05f);
+        ImGui::DragFloat3("Rotation", &e.transform.rotation.x, 0.5f);
+        ImGui::DragFloat3("Scale", &e.transform.scale.x, 0.01f, 0.01f, 100.0f);
+    } else {
+        ImGui::TextDisabled("Select an entity to inspect");
     }
 
     ImGui::End();

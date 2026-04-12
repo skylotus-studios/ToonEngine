@@ -2,9 +2,12 @@
 //
 // RenderSettings holds all tunable rendering parameters that were previously
 // hardcoded in shaders or main.cpp. The overlay draws an ImGui panel each
-// frame so you can adjust them live.
+// frame so you can adjust them live. The entity list lets you inspect and
+// edit transforms for every object in the scene.
 
 #pragma once
+
+#include "scene.h"
 
 #include <glm/glm.hpp>
 
@@ -37,7 +40,7 @@ void OverlayNewFrame();
 // Draw the debug panel and submit ImGui draw data. Returns true if
 // ImGui wants to capture mouse/keyboard input (i.e. the user is
 // interacting with a widget — the camera should ignore input).
-bool OverlayRender(RenderSettings& settings, float fps);
+bool OverlayRender(RenderSettings& settings, Scene& scene, float fps);
 
 // Shutdown ImGui. Call once before destroying the GL context.
 void OverlayShutdown();

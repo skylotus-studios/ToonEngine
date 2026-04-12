@@ -8,10 +8,10 @@
 #include <GLFW/glfw3.h>
 
 #include "camera.h"
-#include "material.h"
 #include "mesh.h"
 #include "model_loader.h"
 #include "overlay.h"
+#include "scene.h"
 #include "shader.h"
 #include "texture.h"
 #include "transform.h"
@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -35,17 +36,13 @@ namespace {
     constexpr double kFixedTimestep = 1.0 / 60.0;
 
     ShaderProgram gShader{};
-    Mesh          gTriangleMesh{};
     Texture       gDefaultTexture{};
 
     // Toon rendering shaders.
     ShaderProgram gToonShader{};
     ShaderProgram gOutlineShader{};
 
-    // Loaded 3D model (populated when a file path is passed via argv[1]).
-    std::vector<SubMesh> gModelSubMeshes;
-    Transform            gModelTransform{};
-
+    Scene          gScene{};
     RenderSettings gSettings{};
     bool           gOverlayCapturing = false;
 
@@ -58,16 +55,6 @@ namespace {
     double gLastMouseY = 0.0;
     bool   gRightMouseHeld = false;
 
-    // Demo scene: three triangles at different transforms.
-    // clang-format off
-    Transform gTransforms[] = {
-        { { 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f,   0.0f}, {1.0f, 1.0f, 1.0f} },
-        { { 2.0f, 0.0f, 0.0f}, {0.0f, 0.0f,  45.0f}, {0.8f, 0.8f, 0.8f} },
-        { {-2.0f, 0.5f, 0.0f}, {0.0f, 0.0f, -30.0f}, {1.2f, 1.2f, 1.2f} },
-    };
-    // clang-format on
-
-    constexpr int kTransformCount = sizeof(gTransforms) / sizeof(gTransforms[0]);
 
     // -----------------------------------------------------------------------
     // GLFW callbacks.
@@ -150,7 +137,76 @@ namespace {
     // -----------------------------------------------------------------------
 
     void Update(double dt) {
-        gTransforms[1].rotation.z += 45.0f * static_cast<float>(dt);
+        // Spin the second demo triangle (if it exists).
+        if (gScene.entities.size() > 1)
+            gScene.entities[1].transform.rotation.z += 45.0f * static_cast<float>(dt);
+    }
+
+    void RenderVertexColor(const Entity& entity, const glm::mat4& vp) {
+        glUseProgram(gShader.id);
+        BindTexture(gDefaultTexture, 0);
+        glUniform1i(glGetUniformLocation(gShader.id, "uTexture"), 0);
+
+        glm::mat4 mvp = vp * TransformMatrix(entity.transform);
+        glUniformMatrix4fv(glGetUniformLocation(gShader.id, "uMVP"),
+            1, GL_FALSE, glm::value_ptr(mvp));
+
+        for (auto& sm : entity.subMeshes)
+            DrawMesh(sm.mesh);
+    }
+
+    void RenderToon(const Entity& entity, const glm::mat4& vp) {
+        if (!gToonShader.id || !gOutlineShader.id) return;
+
+        glm::mat4 model = TransformMatrix(entity.transform);
+        glm::mat4 mvp   = vp * model;
+
+        glEnable(GL_CULL_FACE);
+
+        // Pass 1: toon shading (front faces).
+        glCullFace(GL_BACK);
+        glUseProgram(gToonShader.id);
+        glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uMVP"),
+            1, GL_FALSE, glm::value_ptr(mvp));
+        glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uModel"),
+            1, GL_FALSE, glm::value_ptr(model));
+        glUniform1i(glGetUniformLocation(gToonShader.id, "uTexture"), 0);
+
+        glUniform3fv(glGetUniformLocation(gToonShader.id, "uLightDir"),
+            1, glm::value_ptr(gSettings.lightDir));
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uBandHigh"),
+            gSettings.bandThresholdHigh);
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uBandLow"),
+            gSettings.bandThresholdLow);
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uBrightness"),
+            gSettings.brightIntensity);
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uMid"),
+            gSettings.midIntensity);
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uShadow"),
+            gSettings.shadowIntensity);
+
+        GLint baseColorLoc = glGetUniformLocation(gToonShader.id, "uBaseColor");
+        for (auto& sm : entity.subMeshes) {
+            BindTexture(sm.material.texture.id ? sm.material.texture
+                : gDefaultTexture, 0);
+            glUniform4fv(baseColorLoc, 1, glm::value_ptr(sm.material.baseColor));
+            DrawMesh(sm.mesh);
+        }
+
+        // Pass 2: outlines (back faces extruded along normals).
+        glCullFace(GL_FRONT);
+        glUseProgram(gOutlineShader.id);
+        glUniformMatrix4fv(glGetUniformLocation(gOutlineShader.id, "uMVP"),
+            1, GL_FALSE, glm::value_ptr(mvp));
+        glUniform1f(glGetUniformLocation(gOutlineShader.id, "uOutlineWidth"),
+            gSettings.outlineWidth);
+        glUniform4fv(glGetUniformLocation(gOutlineShader.id, "uOutlineColor"),
+            1, glm::value_ptr(gSettings.outlineColor));
+
+        for (auto& sm : entity.subMeshes)
+            DrawMesh(sm.mesh);
+
+        glDisable(GL_CULL_FACE);
     }
 
     void Render(double /*alpha*/) {
@@ -158,79 +214,17 @@ namespace {
                      gSettings.clearColor.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Compute view-projection once per frame.
         float aspect = (gFramebufferH > 0)
             ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
             : 1.0f;
         glm::mat4 vp = CameraProjectionMatrix(gCamera, aspect)
             * CameraViewMatrix(gCamera);
 
-        // -- Demo triangles (vertex-colored) --------------------------------
-        glUseProgram(gShader.id);
-        BindTexture(gDefaultTexture, 0);
-        glUniform1i(glGetUniformLocation(gShader.id, "uTexture"), 0);
-
-        GLint mvpLoc = glGetUniformLocation(gShader.id, "uMVP");
-        for (int i = 0; i < kTransformCount; ++i) {
-            glm::mat4 mvp = vp * TransformMatrix(gTransforms[i]);
-            glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
-            DrawMesh(gTriangleMesh);
-        }
-
-        // -- Loaded model (toon shading + outlines) -------------------------
-        if (!gModelSubMeshes.empty() && gToonShader.id && gOutlineShader.id) {
-            glm::mat4 model = TransformMatrix(gModelTransform);
-            glm::mat4 mvpModel = vp * model;
-
-            glEnable(GL_CULL_FACE);
-
-            // Pass 1: toon shading (front faces).
-            glCullFace(GL_BACK);
-            glUseProgram(gToonShader.id);
-            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uMVP"),
-                1, GL_FALSE, glm::value_ptr(mvpModel));
-            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uModel"),
-                1, GL_FALSE, glm::value_ptr(model));
-            glUniform1i(glGetUniformLocation(gToonShader.id, "uTexture"), 0);
-
-            // Toon parameters from overlay settings.
-            glUniform3fv(glGetUniformLocation(gToonShader.id, "uLightDir"),
-                1, glm::value_ptr(gSettings.lightDir));
-            glUniform1f(glGetUniformLocation(gToonShader.id, "uBandHigh"),
-                gSettings.bandThresholdHigh);
-            glUniform1f(glGetUniformLocation(gToonShader.id, "uBandLow"),
-                gSettings.bandThresholdLow);
-            glUniform1f(glGetUniformLocation(gToonShader.id, "uBrightness"),
-                gSettings.brightIntensity);
-            glUniform1f(glGetUniformLocation(gToonShader.id, "uMid"),
-                gSettings.midIntensity);
-            glUniform1f(glGetUniformLocation(gToonShader.id, "uShadow"),
-                gSettings.shadowIntensity);
-
-            GLint baseColorLoc = glGetUniformLocation(gToonShader.id, "uBaseColor");
-            for (auto& sm : gModelSubMeshes) {
-                // Bind material texture, or default white if none.
-                BindTexture(sm.material.texture.id ? sm.material.texture
-                    : gDefaultTexture, 0);
-                glUniform4fv(baseColorLoc, 1, glm::value_ptr(sm.material.baseColor));
-                DrawMesh(sm.mesh);
+        for (auto& entity : gScene.entities) {
+            switch (entity.shading) {
+            case ShadingMode::VertexColor: RenderVertexColor(entity, vp); break;
+            case ShadingMode::Toon:        RenderToon(entity, vp);        break;
             }
-
-            // Pass 2: outlines (back faces extruded along normals).
-            glCullFace(GL_FRONT);
-            glUseProgram(gOutlineShader.id);
-            glUniformMatrix4fv(glGetUniformLocation(gOutlineShader.id, "uMVP"),
-                1, GL_FALSE, glm::value_ptr(mvpModel));
-            glUniform1f(glGetUniformLocation(gOutlineShader.id, "uOutlineWidth"),
-                gSettings.outlineWidth);
-            glUniform4fv(glGetUniformLocation(gOutlineShader.id, "uOutlineColor"),
-                1, glm::value_ptr(gSettings.outlineColor));
-
-            for (auto& sm : gModelSubMeshes) {
-                DrawMesh(sm.mesh);
-            }
-
-            glDisable(GL_CULL_FACE);
         }
     }
 
@@ -321,24 +315,42 @@ int main(int argc, char* argv[]) {
 
     gDefaultTexture = CreateWhiteTexture();
 
-    // Triangle mesh: position (vec3) + color (vec3) + texcoord (vec2).
+    // Demo triangle vertex data: position (vec3) + color (vec3) + texcoord (vec2).
     // clang-format off
-    float vertices[] = {
-        //  position              color              texcoord
-            -0.5f, -0.5f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f,
-             0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f,  1.0f, 0.0f,
-             0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f,
+    float triVerts[] = {
+        -0.5f, -0.5f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f,
+         0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f,  1.0f, 0.0f,
+         0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f,
     };
-    VertexAttrib attribs[] = {
+    VertexAttrib triAttribs[] = {
         {3, GL_FLOAT, 0},                  // location 0: position
         {3, GL_FLOAT, 3 * sizeof(float)},  // location 1: color
         {2, GL_FLOAT, 6 * sizeof(float)},  // location 2: texcoord
     };
     // clang-format on
 
-    gTriangleMesh = CreateMesh(
-        vertices, sizeof(vertices), 8 * sizeof(float),
-        attribs, 3, 3);
+    // Create three demo triangle entities.
+    struct DemoTriangle { const char* name; Transform transform; };
+    // clang-format off
+    DemoTriangle demoTriangles[] = {
+        { "Triangle 1", {{ 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f,   0.0f}, {1.0f, 1.0f, 1.0f}} },
+        { "Triangle 2", {{ 2.0f, 0.0f, 0.0f}, {0.0f, 0.0f,  45.0f}, {0.8f, 0.8f, 0.8f}} },
+        { "Triangle 3", {{-2.0f, 0.5f, 0.0f}, {0.0f, 0.0f, -30.0f}, {1.2f, 1.2f, 1.2f}} },
+    };
+    // clang-format on
+
+    for (auto& dt : demoTriangles) {
+        Entity e;
+        e.name      = dt.name;
+        e.transform = dt.transform;
+        e.shading   = ShadingMode::VertexColor;
+
+        SubMesh sm;
+        sm.mesh = CreateMesh(triVerts, sizeof(triVerts), 8 * sizeof(float),
+                             triAttribs, 3, 3);
+        e.subMeshes.push_back(std::move(sm));
+        gScene.entities.push_back(std::move(e));
+    }
 
     // Toon + outline shaders. model.vert is reused for the toon pass since
     // it already transforms normals to world space.
@@ -356,9 +368,8 @@ int main(int argc, char* argv[]) {
     // at the origin, and back the camera up to frame it.
     if (argc > 1) {
         LoadedModel loaded = LoadModel(argv[1]);
-        gModelSubMeshes = std::move(loaded.subMeshes);
 
-        if (gModelSubMeshes.empty()) {
+        if (loaded.subMeshes.empty()) {
             std::fprintf(stderr, "Failed to load model: %s\n", argv[1]);
         } else {
             glm::vec3 center = (loaded.boundsMin + loaded.boundsMax) * 0.5f;
@@ -368,8 +379,13 @@ int main(int argc, char* argv[]) {
             constexpr float kTargetSize = 5.0f;
             float s = (maxExtent > 0.0f) ? kTargetSize / maxExtent : 1.0f;
 
-            gModelTransform.scale = glm::vec3(s);
-            gModelTransform.position = -center * s;
+            Entity e;
+            e.name      = std::filesystem::path(argv[1]).filename().string();
+            e.shading   = ShadingMode::Toon;
+            e.transform.scale    = glm::vec3(s);
+            e.transform.position = -center * s;
+            e.subMeshes = std::move(loaded.subMeshes);
+            gScene.entities.push_back(std::move(e));
 
             gCamera.position = glm::vec3(0.0f, 0.0f, kTargetSize * 2.0f);
             gCamera.moveSpeed = kTargetSize;
@@ -417,7 +433,7 @@ int main(int argc, char* argv[]) {
         // ImGui overlay (rendered after the scene, on top).
         OverlayNewFrame();
         float fps = (frame > 0.0) ? static_cast<float>(1.0 / frame) : 0.0f;
-        gOverlayCapturing = OverlayRender(gSettings, fps);
+        gOverlayCapturing = OverlayRender(gSettings, gScene, fps);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -431,13 +447,9 @@ int main(int argc, char* argv[]) {
     // Cleanup — reverse order of creation.
     // -----------------------------------------------------------------------
     OverlayShutdown();
-    for (auto& sm : gModelSubMeshes) {
-        DestroyMesh(sm.mesh);
-        DestroyTexture(sm.material.texture);
-    }
+    DestroyScene(gScene);
     DestroyShader(gOutlineShader);
     DestroyShader(gToonShader);
-    DestroyMesh(gTriangleMesh);
     DestroyTexture(gDefaultTexture);
     DestroyShader(gShader);
 
