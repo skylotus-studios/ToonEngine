@@ -11,35 +11,35 @@
 
 // Convert yaw/pitch to a unit direction vector (spherical -> cartesian).
 glm::vec3 CameraFront(const Camera& cam) {
-    float yawRad   = glm::radians(cam.yaw);
+    float yawRad = glm::radians(cam.yaw);
     float pitchRad = glm::radians(cam.pitch);
     return glm::normalize(glm::vec3{
         std::cos(yawRad) * std::cos(pitchRad),
         std::sin(pitchRad),
         std::sin(yawRad) * std::cos(pitchRad)
-    });
+        });
 }
 
 // World-space right vector, derived from front x world-up.
 static glm::vec3 CameraRight(const Camera& cam) {
-    return glm::normalize(glm::cross(CameraFront(cam), glm::vec3{0.0f, 1.0f, 0.0f}));
+    return glm::normalize(glm::cross(CameraFront(cam), glm::vec3{ 0.0f, 1.0f, 0.0f }));
 }
 
 glm::mat4 CameraViewMatrix(const Camera& cam) {
     return glm::lookAt(cam.position, cam.position + CameraFront(cam),
-                       glm::vec3{0.0f, 1.0f, 0.0f});
+        glm::vec3{ 0.0f, 1.0f, 0.0f });
 }
 
 glm::mat4 CameraProjectionMatrix(const Camera& cam, float aspectRatio) {
     return glm::perspective(glm::radians(cam.fovY), aspectRatio,
-                            cam.nearPlane, cam.farPlane);
+        cam.nearPlane, cam.farPlane);
 }
 
 void CameraProcessMouse(Camera& cam, float dx, float dy) {
-    cam.yaw   += dx * cam.lookSensitivity;
+    cam.yaw += dx * cam.lookSensitivity;
     cam.pitch += dy * cam.lookSensitivity;
     // Clamp pitch to avoid flipping at the poles.
-    cam.pitch  = std::clamp(cam.pitch, -89.0f, 89.0f);
+    cam.pitch = std::clamp(cam.pitch, -89.0f, 89.0f);
 }
 
 void CameraProcessKeyboard(Camera& cam, GLFWwindow* window, float dt) {

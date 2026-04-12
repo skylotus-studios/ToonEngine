@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 project(ToonEngine
     VERSION 0.1.0
     DESCRIPTION "ToonEngine - game engine"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
@@ -34,11 +34,23 @@ if(DEFINED VCPKG_TARGET_TRIPLET)
     list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
 endif()
 
+# --- Dependencies (vcpkg) ---------------------------------------------------
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad  CONFIG REQUIRED)
 find_package(glm   CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 
+# --- Vendored libraries (single-header / single-file, committed in libs/) ---
+# ufbx: compiled as a static lib so its C code gets its own warning settings.
+add_library(ufbx STATIC libs/ufbx/ufbx.c)
+target_include_directories(ufbx SYSTEM PUBLIC libs/ufbx)
+if(MSVC)
+    target_compile_options(ufbx PRIVATE /W0)
+else()
+    target_compile_options(ufbx PRIVATE -w)
+endif()
+
+# --- Engine executable -------------------------------------------------------
 add_executable(ToonEngine
     src/main.cpp
     src/shader.h
@@ -51,6 +63,8 @@ add_executable(ToonEngine
     src/transform.cpp
     src/texture.h
     src/texture.cpp
+    src/model_loader.h
+    src/model_loader.cpp
 )
 
 target_compile_features(ToonEngine PRIVATE cxx_std_20)
@@ -60,13 +74,17 @@ set_target_properties(ToonEngine PROPERTIES
     CXX_EXTENSIONS        OFF
 )
 
-target_include_directories(ToonEngine PRIVATE ${Stb_INCLUDE_DIR})
+target_include_directories(ToonEngine PRIVATE
+    ${Stb_INCLUDE_DIR}
+    libs/cgltf
+)
 
 target_link_libraries(ToonEngine
     PRIVATE
         glfw
         glad::glad
         glm::glm
+        ufbx
 )
 
 if(MSVC)

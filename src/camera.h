@@ -16,8 +16,8 @@ struct Camera {
     float pitch  = 0.0f;   // degrees; clamped to +/-89 to avoid gimbal lock
     float fovY   = 45.0f;  // vertical field of view in degrees
     float nearPlane = 0.1f;
-    float farPlane  = 100.0f;
-    float moveSpeed = 3.0f;       // units per second
+    float farPlane  = 10000.0f;
+    float moveSpeed = 5.0f;       // units per second
     float lookSensitivity = 0.1f; // degrees per pixel of mouse movement
 };
 

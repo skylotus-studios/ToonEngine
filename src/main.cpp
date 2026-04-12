@@ -9,15 +9,18 @@
 
 #include "camera.h"
 #include "mesh.h"
+#include "model_loader.h"
 #include "shader.h"
 #include "texture.h"
 #include "transform.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Application state (file-scope, anonymous namespace).
@@ -32,6 +35,11 @@ namespace {
     ShaderProgram gShader{};
     Mesh          gTriangleMesh{};
     Texture       gDefaultTexture{};
+
+    // Loaded 3D model (populated when a file path is passed via argv[1]).
+    ShaderProgram      gModelShader{};
+    std::vector<Mesh>  gModelMeshes;
+    Transform          gModelTransform{};
 
     Camera gCamera{};
     int    gFramebufferW = kWindowWidth;
@@ -141,25 +149,41 @@ namespace {
         glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        glUseProgram(gShader.id);
-
-        // Bind the default (white) texture so untextured objects render
-        // as pure vertex color (white * color = color).
-        BindTexture(gDefaultTexture, 0);
-        glUniform1i(glGetUniformLocation(gShader.id, "uTexture"), 0);
-
-        // Compute view-projection once per frame, then per-object MVP.
+        // Compute view-projection once per frame.
         float aspect = (gFramebufferH > 0)
             ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
             : 1.0f;
         glm::mat4 vp = CameraProjectionMatrix(gCamera, aspect)
                       * CameraViewMatrix(gCamera);
 
+        // -- Demo triangles (vertex-colored) --------------------------------
+        glUseProgram(gShader.id);
+        BindTexture(gDefaultTexture, 0);
+        glUniform1i(glGetUniformLocation(gShader.id, "uTexture"), 0);
+
         GLint mvpLoc = glGetUniformLocation(gShader.id, "uMVP");
         for (int i = 0; i < kTransformCount; ++i) {
             glm::mat4 mvp = vp * TransformMatrix(gTransforms[i]);
             glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
             DrawMesh(gTriangleMesh);
+        }
+
+        // -- Loaded model (lit) ---------------------------------------------
+        if (!gModelMeshes.empty() && gModelShader.id) {
+            glUseProgram(gModelShader.id);
+            BindTexture(gDefaultTexture, 0);
+            glUniform1i(glGetUniformLocation(gModelShader.id, "uTexture"), 0);
+
+            glm::mat4 model = TransformMatrix(gModelTransform);
+            glm::mat4 mvpModel = vp * model;
+            glUniformMatrix4fv(glGetUniformLocation(gModelShader.id, "uMVP"),
+                               1, GL_FALSE, glm::value_ptr(mvpModel));
+            glUniformMatrix4fv(glGetUniformLocation(gModelShader.id, "uModel"),
+                               1, GL_FALSE, glm::value_ptr(model));
+
+            for (auto& mesh : gModelMeshes) {
+                DrawMesh(mesh);
+            }
         }
     }
 
@@ -168,7 +192,7 @@ namespace {
 // ---------------------------------------------------------------------------
 // Entry point.
 // ---------------------------------------------------------------------------
-int main() {
+int main(int argc, char* argv[]) {
     glfwSetErrorCallback(GlfwErrorCallback);
 
     if (!glfwInit()) {
@@ -267,6 +291,42 @@ int main() {
         vertices, sizeof(vertices), 8 * sizeof(float),
         attribs, 3, 3);
 
+    // Model shader (used for loaded meshes with normals + lighting).
+    if (!LoadShader(gModelShader, "assets/shaders/model.vert",
+                                  "assets/shaders/model.frag")) {
+        std::fprintf(stderr, "Failed to load model shaders\n");
+    }
+
+    // Load a model if a path was passed on the command line.
+    // Auto-fit: normalize the model so it fits in a ~5-unit sphere centered
+    // at the origin, and back the camera up to frame it.
+    if (argc > 1) {
+        LoadedModel loaded = LoadModel(argv[1]);
+        gModelMeshes = std::move(loaded.meshes);
+
+        if (gModelMeshes.empty()) {
+            std::fprintf(stderr, "Failed to load model: %s\n", argv[1]);
+        } else {
+            glm::vec3 center = (loaded.boundsMin + loaded.boundsMax) * 0.5f;
+            glm::vec3 extent = loaded.boundsMax - loaded.boundsMin;
+            float maxExtent = std::max({extent.x, extent.y, extent.z});
+
+            constexpr float kTargetSize = 5.0f;
+            float s = (maxExtent > 0.0f) ? kTargetSize / maxExtent : 1.0f;
+
+            gModelTransform.scale    = glm::vec3(s);
+            gModelTransform.position = -center * s;
+
+            // Position camera to see the whole model.
+            gCamera.position = glm::vec3(0.0f, 0.0f, kTargetSize * 2.0f);
+            gCamera.moveSpeed = kTargetSize;
+
+            std::printf("Model bounds: (%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f), scale=%.4f\n",
+                        loaded.boundsMin.x, loaded.boundsMin.y, loaded.boundsMin.z,
+                        loaded.boundsMax.x, loaded.boundsMax.y, loaded.boundsMax.z, s);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Main loop — fixed timestep with variable-rate rendering.
     // See: "Fix Your Timestep" (Glenn Fiedler).
@@ -293,6 +353,7 @@ int main() {
             CameraProcessKeyboard(gCamera, window, static_cast<float>(frame));
 
         ReloadIfChanged(gShader);
+        ReloadIfChanged(gModelShader);
 
         const double alpha = accumulator / kFixedTimestep;
         Render(alpha);
@@ -308,6 +369,8 @@ int main() {
     // -----------------------------------------------------------------------
     // Cleanup — reverse order of creation.
     // -----------------------------------------------------------------------
+    for (auto& mesh : gModelMeshes) DestroyMesh(mesh);
+    DestroyShader(gModelShader);
     DestroyMesh(gTriangleMesh);
     DestroyTexture(gDefaultTexture);
     DestroyShader(gShader);
