@@ -1,3 +1,7 @@
+// Fragment shader: samples the texture and multiplies by vertex color.
+// When bound to the default 1x1 white texture, this produces pure
+// vertex-colored output (white * color = color).
+
 #version 410 core
 
 in vec3 vColor;

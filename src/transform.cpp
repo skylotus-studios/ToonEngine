@@ -1,3 +1,5 @@
+// Transform -> model matrix. Order: translate, rotate XYZ, scale (TRS).
+
 #include "transform.h"
 
 #include <glm/gtc/matrix_transform.hpp>

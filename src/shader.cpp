@@ -1,3 +1,7 @@
+// Shader compilation pipeline: read source from disk, compile vertex and
+// fragment stages separately, link into a GL program. Hot-reload support
+// compares file timestamps each frame and attempts recompile on change.
+
 #include "shader.h"
 
 #include <cstdio>
@@ -7,6 +11,7 @@
 
 namespace fs = std::filesystem;
 
+// Read an entire text file into a string. Returns empty on failure.
 static std::string ReadFile(const char* path) {
     std::ifstream f(path);
     if (!f) {
@@ -18,6 +23,7 @@ static std::string ReadFile(const char* path) {
     return ss.str();
 }
 
+// Compile a single shader stage. Returns 0 on failure (error logged).
 static GLuint CompileShader(GLenum type, const char* source, const char* label) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
@@ -35,6 +41,8 @@ static GLuint CompileShader(GLenum type, const char* source, const char* label) 
     return shader;
 }
 
+// Read, compile, and link a vertex + fragment shader into a program.
+// Shader objects are deleted after linking (GL keeps internal refs).
 static GLuint BuildProgram(const char* vertPath, const char* fragPath) {
     std::string vertSrc = ReadFile(vertPath);
     std::string fragSrc = ReadFile(fragPath);
@@ -72,15 +80,20 @@ bool LoadShader(ShaderProgram& prog, const char* vertPath, const char* fragPath)
     GLuint id = BuildProgram(vertPath, fragPath);
     if (!id) return false;
 
+    // Cache timestamps for hot-reload comparison. Uses error_code overload
+    // so a filesystem failure doesn't throw — timestamps stay default.
+    std::error_code ec;
     prog.id       = id;
     prog.vertPath = vertPath;
     prog.fragPath = fragPath;
-    prog.vertTime = fs::last_write_time(vertPath);
-    prog.fragTime = fs::last_write_time(fragPath);
+    prog.vertTime = fs::last_write_time(vertPath, ec);
+    prog.fragTime = fs::last_write_time(fragPath, ec);
     return true;
 }
 
 bool ReloadIfChanged(ShaderProgram& prog) {
+    // error_code overload: if a file is inaccessible (e.g. mid-save by
+    // the editor), we silently skip rather than throwing.
     std::error_code ec;
     auto vertNow = fs::last_write_time(prog.vertPath, ec);
     if (ec) return false;
@@ -90,8 +103,8 @@ bool ReloadIfChanged(ShaderProgram& prog) {
     if (vertNow == prog.vertTime && fragNow == prog.fragTime)
         return false;
 
-    // Timestamps changed — update them regardless of compile outcome
-    // so we don't spam recompile every frame on a broken shader.
+    // Update timestamps regardless of compile outcome so we don't
+    // spam recompile every frame on a broken shader.
     prog.vertTime = vertNow;
     prog.fragTime = fragNow;
 

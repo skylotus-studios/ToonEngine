@@ -1,3 +1,7 @@
+// Texture loading: stb_image decodes the file, then we upload to GL
+// with mipmaps and standard filtering. The STB_IMAGE_IMPLEMENTATION
+// define must appear in exactly one .cpp — this is that file.
+
 #include "texture.h"
 
 #include <cstdio>
@@ -24,6 +28,7 @@ Texture CreateWhiteTexture() {
 bool LoadTexture(Texture& tex, const char* path, bool flipY) {
     stbi_set_flip_vertically_on_load(flipY ? 1 : 0);
 
+    // Force 4 channels (RGBA) regardless of source format.
     int channels = 0;
     unsigned char* data = stbi_load(path, &tex.width, &tex.height, &channels, 4);
     if (!data) {

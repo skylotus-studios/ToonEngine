@@ -1,3 +1,7 @@
+// Mesh GPU resource management: creates VAO/VBO/EBO from raw vertex data,
+// configures vertex attribute pointers from a caller-supplied layout, and
+// dispatches the correct draw call (indexed vs non-indexed).
+
 #include "mesh.h"
 
 Mesh CreateMesh(const void* vertices, size_t verticesSize, GLsizei stride,
@@ -12,18 +16,20 @@ Mesh CreateMesh(const void* vertices, size_t verticesSize, GLsizei stride,
     glGenBuffers(1, &m.vbo);
     glBindVertexArray(m.vao);
 
+    // Upload vertex data.
     glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
     glBufferData(GL_ARRAY_BUFFER,
                  static_cast<GLsizeiptr>(verticesSize), vertices, GL_STATIC_DRAW);
 
-    for (int i = 0; i < attribCount; ++i) {
-        auto idx = static_cast<GLuint>(i);
-        glVertexAttribPointer(idx, attribs[i].components, attribs[i].type,
+    // Configure each attribute: location i maps to attribs[i].
+    for (GLuint i = 0; i < static_cast<GLuint>(attribCount); ++i) {
+        glVertexAttribPointer(i, attribs[i].components, attribs[i].type,
                               GL_FALSE, stride,
                               reinterpret_cast<const void*>(attribs[i].offset));
-        glEnableVertexAttribArray(idx);
+        glEnableVertexAttribArray(i);
     }
 
+    // Optional index buffer — stays bound to this VAO.
     if (indices && indexCount > 0) {
         glGenBuffers(1, &m.ebo);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m.ebo);

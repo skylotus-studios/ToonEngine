@@ -1,3 +1,6 @@
+// Camera implementation: orientation from spherical coordinates (yaw/pitch),
+// view matrix via glm::lookAt, perspective projection via glm::perspective.
+
 #include "camera.h"
 
 #include <GLFW/glfw3.h>
@@ -6,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
+// Convert yaw/pitch to a unit direction vector (spherical -> cartesian).
 glm::vec3 CameraFront(const Camera& cam) {
     float yawRad   = glm::radians(cam.yaw);
     float pitchRad = glm::radians(cam.pitch);
@@ -16,6 +20,7 @@ glm::vec3 CameraFront(const Camera& cam) {
     });
 }
 
+// World-space right vector, derived from front x world-up.
 static glm::vec3 CameraRight(const Camera& cam) {
     return glm::normalize(glm::cross(CameraFront(cam), glm::vec3{0.0f, 1.0f, 0.0f}));
 }
@@ -33,6 +38,7 @@ glm::mat4 CameraProjectionMatrix(const Camera& cam, float aspectRatio) {
 void CameraProcessMouse(Camera& cam, float dx, float dy) {
     cam.yaw   += dx * cam.lookSensitivity;
     cam.pitch += dy * cam.lookSensitivity;
+    // Clamp pitch to avoid flipping at the poles.
     cam.pitch  = std::clamp(cam.pitch, -89.0f, 89.0f);
 }
 

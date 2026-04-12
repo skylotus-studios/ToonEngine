@@ -1,3 +1,9 @@
+// ToonEngine entry point.
+//
+// Sets up a GLFW window with an OpenGL 4.1 core context, loads shaders
+// and demo geometry, and runs a fixed-timestep game loop with camera
+// input and shader hot-reload.
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
@@ -13,6 +19,9 @@
 #include <cstdio>
 #include <cstdlib>
 
+// ---------------------------------------------------------------------------
+// Application state (file-scope, anonymous namespace).
+// ---------------------------------------------------------------------------
 namespace {
 
     constexpr int    kWindowWidth = 3840;
@@ -28,10 +37,12 @@ namespace {
     int    gFramebufferW = kWindowWidth;
     int    gFramebufferH = kWindowHeight;
 
+    // Mouse state for right-click look mode.
     double gLastMouseX = 0.0;
     double gLastMouseY = 0.0;
     bool   gRightMouseHeld = false;
 
+    // Demo scene: three triangles at different transforms.
     // clang-format off
     Transform gTransforms[] = {
         { { 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f,   0.0f}, {1.0f, 1.0f, 1.0f} },
@@ -41,6 +52,10 @@ namespace {
     // clang-format on
 
     constexpr int kTransformCount = sizeof(gTransforms) / sizeof(gTransforms[0]);
+
+    // -----------------------------------------------------------------------
+    // GLFW callbacks.
+    // -----------------------------------------------------------------------
 
     void GlfwErrorCallback(int error, const char* description) {
         std::fprintf(stderr, "[GLFW] error %d: %s\n", error, description);
@@ -52,6 +67,7 @@ namespace {
         glViewport(0, 0, width, height);
     }
 
+    // Right-click toggles cursor capture for camera look mode.
     void MouseButtonCallback(GLFWwindow* window, int button, int action, int /*mods*/) {
         if (button == GLFW_MOUSE_BUTTON_RIGHT) {
             gRightMouseHeld = (action == GLFW_PRESS);
@@ -64,6 +80,8 @@ namespace {
         }
     }
 
+    // Feed mouse deltas into the camera. Y is inverted because screen Y
+    // increases downward but pitch-up should be positive.
     void CursorPosCallback(GLFWwindow*, double x, double y) {
         if (!gRightMouseHeld) return;
         auto dx = static_cast<float>(x - gLastMouseX);
@@ -73,6 +91,9 @@ namespace {
         CameraProcessMouse(gCamera, dx, dy);
     }
 
+    // -----------------------------------------------------------------------
+    // GL debug callback (only active when KHR_debug is available; not on macOS).
+    // -----------------------------------------------------------------------
     void APIENTRY GlDebugCallback(GLenum source, GLenum type, GLuint id,
         GLenum severity, GLsizei /*length*/,
         const GLchar* message, const void* /*user*/) {
@@ -106,7 +127,13 @@ namespace {
         std::fprintf(stderr, "[GL %s/%s/%s #%u] %s\n", sev, typ, src, id, message);
     }
 
+    // -----------------------------------------------------------------------
+    // Frame logic.
+    // -----------------------------------------------------------------------
+
+    // Fixed-timestep simulation tick.
     void Update(double dt) {
+        // Spin the second triangle to demonstrate live transforms.
         gTransforms[1].rotation.z += 45.0f * static_cast<float>(dt);
     }
 
@@ -115,9 +142,13 @@ namespace {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glUseProgram(gShader.id);
+
+        // Bind the default (white) texture so untextured objects render
+        // as pure vertex color (white * color = color).
         BindTexture(gDefaultTexture, 0);
         glUniform1i(glGetUniformLocation(gShader.id, "uTexture"), 0);
 
+        // Compute view-projection once per frame, then per-object MVP.
         float aspect = (gFramebufferH > 0)
             ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
             : 1.0f;
@@ -134,6 +165,9 @@ namespace {
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// Entry point.
+// ---------------------------------------------------------------------------
 int main() {
     glfwSetErrorCallback(GlfwErrorCallback);
 
@@ -142,10 +176,11 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // Request OpenGL 4.1 core — the highest version macOS supports.
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    // Required on macOS; harmless on Windows.
+    // Required on macOS (gives a legacy 2.1 context without it); harmless on Windows.
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #ifndef NDEBUG
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
@@ -162,6 +197,7 @@ int main() {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
+    // Load GL function pointers via GLAD.
     if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
         std::fprintf(stderr, "gladLoadGLLoader failed\n");
         glfwDestroyWindow(window);
@@ -174,7 +210,8 @@ int main() {
     std::printf("GL version:  %s\n", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
     std::printf("GLSL:        %s\n", reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION)));
 
-    // KHR_debug: core in GL 4.3+, extension below that. macOS 4.1 won't have it.
+    // GL debug output — core in 4.3+, available as KHR_debug extension on
+    // some 4.1 drivers. Not present on macOS; the null check skips it there.
     if (glDebugMessageCallback) {
         glEnable(GL_DEBUG_OUTPUT);
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
@@ -182,9 +219,12 @@ int main() {
         glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
     }
 
+    // Register input callbacks.
     glfwSetFramebufferSizeCallback(window, FramebufferSizeCallback);
     glfwSetMouseButtonCallback(window, MouseButtonCallback);
     glfwSetCursorPosCallback(window, CursorPosCallback);
+
+    // Sync framebuffer dimensions (may differ from window size on HiDPI).
     {
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(window, &fbw, &fbh);
@@ -195,6 +235,9 @@ int main() {
 
     glEnable(GL_DEPTH_TEST);
 
+    // -----------------------------------------------------------------------
+    // Resource loading.
+    // -----------------------------------------------------------------------
     if (!LoadShader(gShader, "assets/shaders/triangle.vert",
                              "assets/shaders/triangle.frag")) {
         std::fprintf(stderr, "Failed to load shaders\n");
@@ -205,6 +248,7 @@ int main() {
 
     gDefaultTexture = CreateWhiteTexture();
 
+    // Triangle mesh: position (vec3) + color (vec3) + texcoord (vec2).
     // clang-format off
     float vertices[] = {
     //  position              color              texcoord
@@ -213,9 +257,9 @@ int main() {
          0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f,
     };
     VertexAttrib attribs[] = {
-        {3, GL_FLOAT, 0},
-        {3, GL_FLOAT, 3 * sizeof(float)},
-        {2, GL_FLOAT, 6 * sizeof(float)},
+        {3, GL_FLOAT, 0},                  // location 0: position
+        {3, GL_FLOAT, 3 * sizeof(float)},  // location 1: color
+        {2, GL_FLOAT, 6 * sizeof(float)},  // location 2: texcoord
     };
     // clang-format on
 
@@ -223,6 +267,10 @@ int main() {
         vertices, sizeof(vertices), 8 * sizeof(float),
         attribs, 3, 3);
 
+    // -----------------------------------------------------------------------
+    // Main loop — fixed timestep with variable-rate rendering.
+    // See: "Fix Your Timestep" (Glenn Fiedler).
+    // -----------------------------------------------------------------------
     using Clock = std::chrono::high_resolution_clock;
     auto   prev = Clock::now();
     double accumulator = 0.0;
@@ -240,6 +288,7 @@ int main() {
             accumulator -= kFixedTimestep;
         }
 
+        // Camera input runs at frame rate (not fixed timestep) for responsiveness.
         if (gRightMouseHeld)
             CameraProcessKeyboard(gCamera, window, static_cast<float>(frame));
 
@@ -256,6 +305,9 @@ int main() {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Cleanup — reverse order of creation.
+    // -----------------------------------------------------------------------
     DestroyMesh(gTriangleMesh);
     DestroyTexture(gDefaultTexture);
     DestroyShader(gShader);
