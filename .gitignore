@@ -1,0 +1,14 @@
+build/
+out/
+.cache/
+vcpkg_installed/
+compile_commands.json
+
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+.DS_Store
+Thumbs.db
