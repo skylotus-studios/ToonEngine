@@ -1,23 +1,38 @@
 // Toon / cel-shading fragment shader.
-// Quantizes the diffuse lighting into discrete bands for a cartoon look.
-// All band thresholds and intensities are driven by uniforms so the debug
-// overlay can tweak them at runtime.
+//
+// Features:
+//   - Three-band quantized diffuse (bright / mid / shadow)
+//   - Shadow color ramp: shadow bands are tinted by uShadowTint
+//   - Rim lighting: Fresnel-based edge highlight facing the camera
+//
+// All parameters are driven by uniforms for live tweaking via the overlay.
 
 #version 410 core
 
+in vec3 vWorldPos;
 in vec3 vNormal;
 in vec2 vTexCoord;
 
 uniform sampler2D uTexture;
 uniform vec4 uBaseColor;
 
-// Toon parameters (set from CPU each frame).
+// Toon parameters.
 uniform vec3  uLightDir;
-uniform float uBandHigh;     // NdotL threshold for bright band
-uniform float uBandLow;      // NdotL threshold for mid band
-uniform float uBrightness;   // intensity of bright band
-uniform float uMid;          // intensity of mid band
-uniform float uShadow;       // intensity of shadow band
+uniform float uBandHigh;
+uniform float uBandLow;
+uniform float uBrightness;
+uniform float uMid;
+uniform float uShadow;
+
+// Shadow color ramp — multiplied into shadow/mid bands.
+// (1,1,1) = no tinting, (0.6, 0.6, 1.0) = cool blue shadows.
+uniform vec3 uShadowTint;
+
+// Rim lighting.
+uniform vec3  uViewPos;
+uniform vec3  uRimColor;
+uniform float uRimPower;
+uniform float uRimStrength;
 
 out vec4 FragColor;
 
@@ -26,12 +41,18 @@ void main() {
     vec3 normal   = normalize(vNormal);
     float NdotL   = dot(normal, lightDir);
 
-    // Three-band cel shading.
-    float light;
-    if      (NdotL > uBandHigh) light = uBrightness;
-    else if (NdotL > uBandLow)  light = uMid;
-    else                         light = uShadow;
+    vec4 albedo = texture(uTexture, vTexCoord) * uBaseColor;
 
-    vec4 color = texture(uTexture, vTexCoord) * uBaseColor;
-    FragColor  = vec4(color.rgb * light, color.a);
+    // Three-band cel shading with shadow tint.
+    vec3 lit;
+    if      (NdotL > uBandHigh) lit = albedo.rgb * uBrightness;
+    else if (NdotL > uBandLow)  lit = albedo.rgb * uShadowTint * uMid;
+    else                         lit = albedo.rgb * uShadowTint * uShadow;
+
+    // Rim lighting — highlights silhouette edges facing the camera.
+    vec3 viewDir = normalize(uViewPos - vWorldPos);
+    float rim = pow(1.0 - max(dot(normal, viewDir), 0.0), uRimPower);
+    lit += uRimColor * rim * uRimStrength;
+
+    FragColor = vec4(lit, albedo.a);
 }

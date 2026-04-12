@@ -1,6 +1,6 @@
 // Vertex shader for loaded 3D models.
-// Transforms positions by MVP, passes world-space normal and texcoords
-// to the fragment stage for lighting.
+// Transforms positions by MVP, passes world-space position, normal, and
+// texcoords to the fragment stage for lighting and rim effects.
 
 #version 410 core
 
@@ -11,11 +11,14 @@ layout(location = 2) in vec2 aTexCoord;
 uniform mat4 uMVP;
 uniform mat4 uModel;
 
+out vec3 vWorldPos;
 out vec3 vNormal;
 out vec2 vTexCoord;
 
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
+
+    vWorldPos = vec3(uModel * vec4(aPos, 1.0));
 
     // Transform normal to world space. mat3(uModel) is correct for
     // uniform scale; use transpose(inverse(mat3(uModel))) if non-uniform

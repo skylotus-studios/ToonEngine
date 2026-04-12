@@ -42,6 +42,15 @@ namespace {
     ShaderProgram gToonShader{};
     ShaderProgram gOutlineShader{};
 
+    // Sobel edge detection post-process.
+    ShaderProgram gEdgeShader{};
+    GLuint gFBO        = 0;
+    GLuint gColorTex   = 0;
+    GLuint gDepthTex   = 0;
+    GLuint gFullscreenVAO = 0;
+    int    gFBOWidth   = 0;
+    int    gFBOHeight  = 0;
+
     Scene          gScene{};
     RenderSettings gSettings{};
     bool           gOverlayCapturing = false;
@@ -57,6 +66,50 @@ namespace {
 
 
     // -----------------------------------------------------------------------
+    // FBO for post-processing (Sobel edge detection).
+    // -----------------------------------------------------------------------
+    void CreateOrResizeFBO(int w, int h) {
+        if (w == gFBOWidth && h == gFBOHeight && gFBO) return;
+        if (w <= 0 || h <= 0) return;
+
+        if (gFBO)      { glDeleteFramebuffers(1, &gFBO);  gFBO = 0; }
+        if (gColorTex) { glDeleteTextures(1, &gColorTex);  gColorTex = 0; }
+        if (gDepthTex) { glDeleteTextures(1, &gDepthTex);  gDepthTex = 0; }
+
+        glGenFramebuffers(1, &gFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, gFBO);
+
+        glGenTextures(1, &gColorTex);
+        glBindTexture(GL_TEXTURE_2D, gColorTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, gColorTex, 0);
+
+        glGenTextures(1, &gDepthTex);
+        glBindTexture(GL_TEXTURE_2D, gDepthTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, w, h, 0,
+                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D, gDepthTex, 0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::fprintf(stderr, "FBO incomplete (%dx%d)\n", w, h);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        gFBOWidth  = w;
+        gFBOHeight = h;
+    }
+
+    // -----------------------------------------------------------------------
     // GLFW callbacks.
     // -----------------------------------------------------------------------
 
@@ -68,6 +121,7 @@ namespace {
         gFramebufferW = width;
         gFramebufferH = height;
         glViewport(0, 0, width, height);
+        CreateOrResizeFBO(width, height);
     }
 
     // Right-click toggles cursor capture for camera look mode.
@@ -184,6 +238,18 @@ namespace {
             gSettings.midIntensity);
         glUniform1f(glGetUniformLocation(gToonShader.id, "uShadow"),
             gSettings.shadowIntensity);
+        glUniform3fv(glGetUniformLocation(gToonShader.id, "uShadowTint"),
+            1, glm::value_ptr(gSettings.shadowTint));
+
+        // Rim lighting.
+        glUniform3fv(glGetUniformLocation(gToonShader.id, "uViewPos"),
+            1, glm::value_ptr(gCamera.position));
+        glUniform3fv(glGetUniformLocation(gToonShader.id, "uRimColor"),
+            1, glm::value_ptr(gSettings.rimColor));
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uRimPower"),
+            gSettings.rimPower);
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uRimStrength"),
+            gSettings.rimStrength);
 
         GLint baseColorLoc = glGetUniformLocation(gToonShader.id, "uBaseColor");
         for (auto& sm : entity.subMeshes) {
@@ -210,6 +276,11 @@ namespace {
     }
 
     void Render(double /*alpha*/) {
+        bool postProcess = gSettings.edgeEnabled && gEdgeShader.id && gFBO;
+
+        if (postProcess)
+            glBindFramebuffer(GL_FRAMEBUFFER, gFBO);
+
         glClearColor(gSettings.clearColor.r, gSettings.clearColor.g,
                      gSettings.clearColor.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -225,6 +296,42 @@ namespace {
             case ShadingMode::VertexColor: RenderVertexColor(entity, vp); break;
             case ShadingMode::Toon:        RenderToon(entity, vp);        break;
             }
+        }
+
+        // -- Sobel edge detection post-process --------------------------------
+        if (postProcess) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+            glDisable(GL_DEPTH_TEST);
+            glUseProgram(gEdgeShader.id);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, gColorTex);
+            glUniform1i(glGetUniformLocation(gEdgeShader.id, "uSceneColor"), 0);
+
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, gDepthTex);
+            glUniform1i(glGetUniformLocation(gEdgeShader.id, "uSceneDepth"), 1);
+
+            glUniform3fv(glGetUniformLocation(gEdgeShader.id, "uEdgeColor"),
+                1, glm::value_ptr(gSettings.edgeColor));
+            glUniform1f(glGetUniformLocation(gEdgeShader.id, "uEdgeThreshold"),
+                gSettings.edgeThreshold);
+            glUniform1f(glGetUniformLocation(gEdgeShader.id, "uEdgeWidth"),
+                gSettings.edgeWidth);
+            glUniform2f(glGetUniformLocation(gEdgeShader.id, "uTexelSize"),
+                1.0f / static_cast<float>(gFramebufferW),
+                1.0f / static_cast<float>(gFramebufferH));
+            glUniform1f(glGetUniformLocation(gEdgeShader.id, "uNear"),
+                gCamera.nearPlane);
+            glUniform1f(glGetUniformLocation(gEdgeShader.id, "uFar"),
+                gCamera.farPlane);
+
+            glBindVertexArray(gFullscreenVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+
+            glEnable(GL_DEPTH_TEST);
+            glActiveTexture(GL_TEXTURE0);
         }
     }
 
@@ -362,6 +469,16 @@ int main(int argc, char* argv[]) {
         "assets/shaders/outline.frag")) {
         std::fprintf(stderr, "Failed to load outline shaders\n");
     }
+    if (!LoadShader(gEdgeShader, "assets/shaders/edge.vert",
+        "assets/shaders/edge.frag")) {
+        std::fprintf(stderr, "Failed to load edge shaders\n");
+    }
+
+    // Fullscreen triangle VAO (attributeless — positions from gl_VertexID).
+    glGenVertexArrays(1, &gFullscreenVAO);
+
+    // Off-screen FBO for the edge detection post-process.
+    CreateOrResizeFBO(gFramebufferW, gFramebufferH);
 
     // Load a model if a path was passed on the command line.
     // Auto-fit: normalize the model so it fits in a ~5-unit sphere centered
@@ -426,6 +543,7 @@ int main(int argc, char* argv[]) {
         ReloadIfChanged(gShader);
         ReloadIfChanged(gToonShader);
         ReloadIfChanged(gOutlineShader);
+        ReloadIfChanged(gEdgeShader);
 
         const double alpha = accumulator / kFixedTimestep;
         Render(alpha);
@@ -448,6 +566,11 @@ int main(int argc, char* argv[]) {
     // -----------------------------------------------------------------------
     OverlayShutdown();
     DestroyScene(gScene);
+    if (gFBO)           glDeleteFramebuffers(1, &gFBO);
+    if (gColorTex)      glDeleteTextures(1, &gColorTex);
+    if (gDepthTex)      glDeleteTextures(1, &gDepthTex);
+    if (gFullscreenVAO) glDeleteVertexArrays(1, &gFullscreenVAO);
+    DestroyShader(gEdgeShader);
     DestroyShader(gOutlineShader);
     DestroyShader(gToonShader);
     DestroyTexture(gDefaultTexture);

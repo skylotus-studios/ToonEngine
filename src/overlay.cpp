@@ -56,11 +56,25 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
         ImGui::SliderFloat("Bright", &s.brightIntensity, 0.0f, 1.0f);
         ImGui::SliderFloat("Mid", &s.midIntensity, 0.0f, 1.0f);
         ImGui::SliderFloat("Shadow", &s.shadowIntensity, 0.0f, 1.0f);
+        ImGui::ColorEdit3("Shadow Tint", &s.shadowTint.x);
+    }
+
+    if (ImGui::CollapsingHeader("Rim Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::ColorEdit3("Rim Color", &s.rimColor.x);
+        ImGui::SliderFloat("Rim Power", &s.rimPower, 0.5f, 10.0f);
+        ImGui::SliderFloat("Rim Strength", &s.rimStrength, 0.0f, 2.0f);
     }
 
     if (ImGui::CollapsingHeader("Outlines", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("Width", &s.outlineWidth, 0.0f, 2.0f);
-        ImGui::ColorEdit4("Color", &s.outlineColor.x);
+        ImGui::SliderFloat("Hull Width", &s.outlineWidth, 0.0f, 2.0f);
+        ImGui::ColorEdit4("Hull Color", &s.outlineColor.x);
+    }
+
+    if (ImGui::CollapsingHeader("Edge Detection", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Enabled", &s.edgeEnabled);
+        ImGui::ColorEdit3("Edge Color", &s.edgeColor.x);
+        ImGui::SliderFloat("Threshold", &s.edgeThreshold, 0.001f, 0.2f, "%.3f");
+        ImGui::SliderFloat("Edge Width", &s.edgeWidth, 0.5f, 5.0f);
     }
 
     if (ImGui::CollapsingHeader("Scene")) {

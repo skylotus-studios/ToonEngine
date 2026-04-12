@@ -36,9 +36,10 @@ src/
   overlay.h/.cpp     ImGui debug overlay: render settings panel + entity list/inspector
 assets/shaders/
   triangle.*         Vertex-colored demo geometry
-  model.vert         Shared vertex shader for loaded models (MVP + normal transform)
-  toon.frag          Cel shading: uniform-driven three-band quantized diffuse
+  model.vert         Shared vertex shader (MVP + world pos/normal for rim + toon)
+  toon.frag          Cel shading + shadow tint + rim lighting (all uniform-driven)
   outline.*          Inverted hull silhouette outlines
+  edge.*             Sobel edge detection post-process (depth-based, fullscreen pass)
   model.frag         Plain diffuse lighting (non-toon fallback)
 libs/
   cgltf/             Single-header glTF 2.0 loader
@@ -47,22 +48,30 @@ libs/
 
 ### Render pipeline
 
-The render loop iterates `Scene::entities` and dispatches by `ShadingMode`:
+The render loop iterates `Scene::entities` and dispatches by `ShadingMode`.
+When Sobel edge detection is enabled, the scene renders to an FBO first;
+otherwise it goes straight to the default framebuffer.
 
-- **VertexColor** entities: `triangle.vert` + `triangle.frag` (vertex colors)
-- **Toon** entities (two sub-passes):
-  1. Front faces: `model.vert` + `toon.frag` (cel shading + per-mesh materials)
-  2. Back faces: `outline.vert` + `outline.frag` (inverted hull outlines)
-
-Face culling is enabled only during the Toon sub-passes.
+1. **Scene pass** (to FBO or screen):
+   - **VertexColor** entities: `triangle.vert` + `triangle.frag` (vertex colors)
+   - **Toon** entities (two sub-passes):
+     1. Front faces: `model.vert` + `toon.frag` (cel shading + shadow tint + rim)
+     2. Back faces: `outline.vert` + `outline.frag` (inverted hull outlines)
+   - Face culling is enabled only during the Toon sub-passes.
+2. **Post-process pass** (if edge detection enabled):
+   - Fullscreen triangle (attributeless, gl_VertexID) reads FBO color + depth
+   - `edge.vert` + `edge.frag`: Sobel operator on linearized depth, smoothstep threshold
+   - Composites edges over scene color to the default framebuffer
+3. **ImGui overlay** on top of final image
 
 ### ImGui overlay
 
 Two panels rendered after the scene each frame:
 
-- **ToonEngine** — FPS counter, toon shading params (light dir, band thresholds,
-  intensities), outline width/color, background color. All values are uniforms
-  in toon.frag, tweakable live.
+- **ToonEngine** — FPS counter, toon shading (light dir, band thresholds,
+  intensities, shadow tint), rim lighting (color, power, strength), inverted
+  hull outlines (width, color), Sobel edge detection (enable, color, threshold,
+  width), background color. All live-tweakable.
 - **Entities** — selectable list of all entities in the scene. Selecting one
   shows an inspector with shading mode, mesh/triangle counts, and editable
   position/rotation/scale. Camera input is suppressed while interacting with
@@ -85,8 +94,9 @@ Two panels rendered after the scene each frame:
 
 ## What's next
 
-- Toon shader refinements: rim lighting, shadow color ramp, Sobel edge detection
 - Per-mesh material textures from glTF/FBX (partially implemented)
 - Skeletal animation
 - Point / directional light entities (replace hardcoded light direction)
 - Shadow mapping
+- Normal-based edge detection (Sobel on normals, complementing depth edges)
+- Specular highlight band (toon-style specular lobe)

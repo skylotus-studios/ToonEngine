@@ -22,9 +22,23 @@ struct RenderSettings {
     float midIntensity      = 0.55f;
     float shadowIntensity   = 0.15f;
 
-    // Outlines.
+    // Shadow color ramp — multiplied into shadow/mid bands.
+    glm::vec3 shadowTint{1.0f, 1.0f, 1.0f};
+
+    // Rim lighting.
+    glm::vec3 rimColor{1.0f, 1.0f, 1.0f};
+    float     rimPower    = 3.0f;
+    float     rimStrength = 0.4f;
+
+    // Outlines (inverted hull).
     float     outlineWidth = 0.755f;
     glm::vec4 outlineColor{0.05f, 0.05f, 0.05f, 1.0f};
+
+    // Sobel edge detection (post-process).
+    bool      edgeEnabled   = true;
+    glm::vec3 edgeColor{0.0f, 0.0f, 0.0f};
+    float     edgeThreshold = 0.02f;
+    float     edgeWidth     = 1.0f;
 
     // Scene.
     glm::vec3 clearColor{0.08f, 0.09f, 0.11f};
