@@ -42,6 +42,9 @@ struct RenderSettings {
 
     // Scene.
     glm::vec3 clearColor{0.08f, 0.09f, 0.11f};
+
+    // Debug.
+    bool debugDisableSkinning = false;
 };
 
 // Initialize ImGui for the given GLFW/OpenGL context. Call once after

@@ -63,6 +63,9 @@ add_executable(ToonEngine
     src/core/texture.h
     src/core/texture.cpp
     src/core/material.h
+    src/core/animation.h
+    src/core/animator.h
+    src/core/animator.cpp
     src/scene/camera.h
     src/scene/camera.cpp
     src/scene/model_loader.h

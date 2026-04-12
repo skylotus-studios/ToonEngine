@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "core/animation.h"
+#include "core/animator.h"
 #include "core/material.h"
 #include "core/mesh.h"
 #include "core/texture.h"
@@ -25,6 +27,12 @@ struct Entity {
     Transform            transform;
     std::vector<SubMesh> subMeshes;
     ShadingMode          shading = ShadingMode::Toon;
+
+    // Skeletal animation (empty skeleton = not skinned).
+    Skeleton                   skeleton;
+    std::vector<AnimationClip> clips;
+    Animator                   animator;
+    bool                       skinned = false;
 };
 
 struct Scene {

@@ -3,7 +3,12 @@
     "allow": [
       "Bash(cmake --build --preset windows-debug)",
       "Bash(cmake --preset windows-debug)",
-      "Bash(git mv:*)"
+      "Bash(git mv:*)",
+      "Bash(./build/windows-debug/ToonEngine.exe assets/models/morph.glb)",
+      "Bash(curl -L -o assets/models/fox.glb \"https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Fox/glTF-Binary/Fox.glb\")",
+      "Bash(taskkill //F //IM ToonEngine.exe)",
+      "Bash(timeout 3 ./build/windows-debug/ToonEngine.exe assets/models/fox.glb)",
+      "Bash(timeout 3 ./build/windows-debug/ToonEngine.exe assets/models/dragon.gltf)"
     ]
   }
 }

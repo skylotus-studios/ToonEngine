@@ -1,29 +1,41 @@
 // Vertex shader for loaded 3D models.
-// Transforms positions by MVP, passes world-space position, normal, and
-// texcoords to the fragment stage for lighting and rim effects.
+// Supports optional skeletal animation via uSkinned + uJoints[].
 
 #version 410 core
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aTexCoord;
+layout(location = 3) in vec4 aBoneIds;
+layout(location = 4) in vec4 aBoneWeights;
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
+uniform bool uSkinned;
+uniform mat4 uJoints[128];
 
 out vec3 vWorldPos;
 out vec3 vNormal;
 out vec2 vTexCoord;
 
 void main() {
-    gl_Position = uMVP * vec4(aPos, 1.0);
+    vec4 pos;
+    vec3 norm;
 
-    vWorldPos = vec3(uModel * vec4(aPos, 1.0));
+    if (uSkinned) {
+        mat4 skin = aBoneWeights.x * uJoints[int(aBoneIds.x)]
+                  + aBoneWeights.y * uJoints[int(aBoneIds.y)]
+                  + aBoneWeights.z * uJoints[int(aBoneIds.z)]
+                  + aBoneWeights.w * uJoints[int(aBoneIds.w)];
+        pos  = skin * vec4(aPos, 1.0);
+        norm = mat3(skin) * aNormal;
+    } else {
+        pos  = vec4(aPos, 1.0);
+        norm = aNormal;
+    }
 
-    // Transform normal to world space. mat3(uModel) is correct for
-    // uniform scale; use transpose(inverse(mat3(uModel))) if non-uniform
-    // scale is needed later.
-    vNormal = mat3(uModel) * aNormal;
-
-    vTexCoord = aTexCoord;
+    gl_Position = uMVP * pos;
+    vWorldPos   = vec3(uModel * pos);
+    vNormal     = mat3(uModel) * norm;
+    vTexCoord   = aTexCoord;
 }

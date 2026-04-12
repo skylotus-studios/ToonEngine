@@ -7,6 +7,8 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+#include "core/animation.h"
+#include "core/animator.h"
 #include "core/mesh.h"
 #include "core/shader.h"
 #include "core/texture.h"
@@ -194,6 +196,13 @@ namespace {
         // Spin the second demo triangle (if it exists).
         if (gScene.entities.size() > 1)
             gScene.entities[1].transform.rotation.z += 45.0f * static_cast<float>(dt);
+
+        // Tick skeletal animation for all entities.
+        float fdt = static_cast<float>(dt);
+        for (auto& e : gScene.entities) {
+            if (e.skinned)
+                AnimatorUpdate(e.animator, e.skeleton, e.clips, fdt);
+        }
     }
 
     void RenderVertexColor(const Entity& entity, const glm::mat4& vp) {
@@ -225,6 +234,18 @@ namespace {
         glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uModel"),
             1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(glGetUniformLocation(gToonShader.id, "uTexture"), 0);
+
+        // Skeletal animation (DEBUG: override via gSettings.debugDisableSkinning).
+        bool doSkin = entity.skinned && !gSettings.debugDisableSkinning;
+        glUniform1i(glGetUniformLocation(gToonShader.id, "uSkinned"),
+            doSkin ? 1 : 0);
+        if (doSkin && !entity.animator.jointMatrices.empty()) {
+            int count = std::min(static_cast<int>(entity.animator.jointMatrices.size()),
+                                 kMaxJoints);
+            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uJoints"),
+                count, GL_FALSE,
+                glm::value_ptr(entity.animator.jointMatrices[0]));
+        }
 
         glUniform3fv(glGetUniformLocation(gToonShader.id, "uLightDir"),
             1, glm::value_ptr(gSettings.lightDir));
@@ -268,6 +289,15 @@ namespace {
             gSettings.outlineWidth);
         glUniform4fv(glGetUniformLocation(gOutlineShader.id, "uOutlineColor"),
             1, glm::value_ptr(gSettings.outlineColor));
+        glUniform1i(glGetUniformLocation(gOutlineShader.id, "uSkinned"),
+            doSkin ? 1 : 0);
+        if (doSkin && !entity.animator.jointMatrices.empty()) {
+            int count = std::min(static_cast<int>(entity.animator.jointMatrices.size()),
+                                 kMaxJoints);
+            glUniformMatrix4fv(glGetUniformLocation(gOutlineShader.id, "uJoints"),
+                count, GL_FALSE,
+                glm::value_ptr(entity.animator.jointMatrices[0]));
+        }
 
         for (auto& sm : entity.subMeshes)
             DrawMesh(sm.mesh);
@@ -481,8 +511,9 @@ int main(int argc, char* argv[]) {
     CreateOrResizeFBO(gFramebufferW, gFramebufferH);
 
     // Load a model if a path was passed on the command line.
-    // Auto-fit: normalize the model so it fits in a ~5-unit sphere centered
-    // at the origin, and back the camera up to frame it.
+    // Normalize: scale so the model's largest axis fits in 1 unit, centered
+    // at the origin.  1 engine unit = 1 world unit.  Camera frames the
+    // 1-unit cube from a fixed, predictable position.
     if (argc > 1) {
         LoadedModel loaded = LoadModel(argv[1]);
 
@@ -492,9 +523,7 @@ int main(int argc, char* argv[]) {
             glm::vec3 center = (loaded.boundsMin + loaded.boundsMax) * 0.5f;
             glm::vec3 extent = loaded.boundsMax - loaded.boundsMin;
             float maxExtent = std::max({ extent.x, extent.y, extent.z });
-
-            constexpr float kTargetSize = 5.0f;
-            float s = (maxExtent > 0.0f) ? kTargetSize / maxExtent : 1.0f;
+            float s = (maxExtent > 0.0f) ? 1.0f / maxExtent : 1.0f;
 
             Entity e;
             e.name      = std::filesystem::path(argv[1]).filename().string();
@@ -502,14 +531,23 @@ int main(int argc, char* argv[]) {
             e.transform.scale    = glm::vec3(s);
             e.transform.position = -center * s;
             e.subMeshes = std::move(loaded.subMeshes);
+            e.skeleton  = std::move(loaded.skeleton);
+            e.clips     = std::move(loaded.clips);
+            e.skinned   = loaded.skinned;
+            if (e.skinned && !e.clips.empty()) {
+                AnimatorSetClip(e.animator, e.skeleton, 0);
+                AnimatorUpdate(e.animator, e.skeleton, e.clips, 0.0f);
+            }
             gScene.entities.push_back(std::move(e));
 
-            gCamera.position = glm::vec3(0.0f, 0.0f, kTargetSize * 2.0f);
-            gCamera.moveSpeed = kTargetSize;
+            // Camera frames the 1-unit model: 3 units back, slightly above
+            // center, looking slightly down. Works for any normalized model.
+            gCamera.position = glm::vec3(0.0f, 0.4f, 2.5f);
+            gCamera.pitch    = -5.0f;
+            gCamera.moveSpeed = 2.0f;
 
-            std::printf("Model bounds: (%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f), scale=%.4f\n",
-                loaded.boundsMin.x, loaded.boundsMin.y, loaded.boundsMin.z,
-                loaded.boundsMax.x, loaded.boundsMax.y, loaded.boundsMax.z, s);
+            std::printf("Model: center=(%.1f,%.1f,%.1f) extent=%.1f scale=%.4f\n",
+                center.x, center.y, center.z, maxExtent, s);
         }
     }
 

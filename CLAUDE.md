@@ -23,16 +23,18 @@ src/
     texture.h/.cpp          stb_image loading (file + memory), GL texture management
     material.h              Base color (vec4) + optional texture per sub-mesh
     transform.h/.cpp        Position/rotation/scale -> model matrix (TRS)
+    animation.h             Joint, Skeleton, AnimationClip, keyframe types
+    animator.h/.cpp         Playback, keyframe interpolation, joint matrix computation
   scene/                    Scene graph and asset loading
-    scene.h                 Entity, ShadingMode, Scene, DestroyScene
+    scene.h                 Entity (transform, meshes, skeleton, animator), Scene
     camera.h/.cpp           FPS fly camera (right-click + WASD)
-    model_loader.h/.cpp     glTF (cgltf) + FBX (ufbx), per-material splitting
+    model_loader.h/.cpp     glTF (cgltf) + FBX (ufbx), skinning, skeleton, animations
   ui/                       Debug tooling
-    overlay.h/.cpp          ImGui panels: render settings + entity list/inspector
+    overlay.h/.cpp          ImGui panels: render settings + entity list/inspector + anim controls
 assets/shaders/
+  model.vert                Shared vertex shader (MVP + GPU skinning via uJoints[128])
   toon.frag                 Cel shading + shadow tint + rim lighting
-  model.vert                Shared vertex shader (MVP + world pos/normal)
-  outline.*                 Inverted hull silhouette outlines
+  outline.*                 Inverted hull outlines (with skinning support)
   edge.*                    Sobel edge detection post-process (depth-based)
   triangle.*                Vertex-colored demo geometry
   model.frag                Plain diffuse fallback
@@ -48,8 +50,9 @@ Scene renders to an FBO when Sobel edge detection is on, otherwise straight to s
 1. **Scene pass** -- iterates `Scene::entities`, dispatches by `ShadingMode`:
    - *VertexColor*: `triangle.*` shaders
    - *Toon*: front faces with `toon.frag` (cel + rim + shadow tint), back faces with `outline.*`
+   - Skinned entities upload `uJoints[]` and set `uSkinned=true` for GPU skinning
 2. **Post-process** (optional) -- fullscreen Sobel on linearized depth via `edge.*`
-3. **ImGui overlay** -- render settings panel + entity list/inspector
+3. **ImGui overlay** -- render settings, entity inspector, animation controls
 
 ## Conventions
 
@@ -57,8 +60,9 @@ Scene renders to an FBO when Sobel edge detection is on, otherwise straight to s
 - `src/` is the include root. Cross-directory includes use `"core/mesh.h"`, `"scene/scene.h"`, etc.
 - Shader hot-reload: edit `.vert`/`.frag` while running, changes apply next frame.
 - Model loading via argv[1]. Auto-fit normalizes to ~5 units at origin.
-- Per-mesh materials: glTF per-primitive PBR; FBX split by `material_parts`. Texture path resolution tries relative, absolute, then filename-only fallback.
-- Vertex layout for models: pos(vec3) + normal(vec3) + uv(vec2), stride 32.
+- Per-mesh materials: glTF per-primitive PBR; FBX split by `material_parts`.
+- Vertex layout: non-skinned = pos+norm+uv (stride 32), skinned = +boneIds+weights (stride 64).
+- Skeletal animation: max 128 joints (uniform array). Keyframe interpolation (lerp/slerp) with hierarchy walk. glTF reads JOINTS_0/WEIGHTS_0 accessors; FBX uses ufbx bake API.
 - Fixed timestep (60 Hz) for simulation, variable-rate rendering.
 
 ## Constraints
@@ -69,9 +73,9 @@ Scene renders to an FBO when Sobel edge detection is on, otherwise straight to s
 
 ## What's next
 
-- Skeletal animation
 - Point / directional light entities (replace hardcoded light direction)
 - Shadow mapping
 - Normal-based edge detection (Sobel on normals, complementing depth edges)
 - Specular highlight band (toon-style specular lobe)
 - Normal map support (sample normal texture in toon.frag)
+- Animation blending / crossfade between clips

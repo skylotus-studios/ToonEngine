@@ -2,6 +2,8 @@
 
 #include "overlay.h"
 
+#include "core/animator.h"
+
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
@@ -81,6 +83,10 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
         ImGui::ColorEdit3("Background", &s.clearColor.x);
     }
 
+    if (ImGui::CollapsingHeader("Debug")) {
+        ImGui::Checkbox("Disable Skinning", &s.debugDisableSkinning);
+    }
+
     ImGui::End();
 
     // -- Entity list panel ----------------------------------------------------
@@ -123,6 +129,35 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
         ImGui::DragFloat3("Position", &e.transform.position.x, 0.05f);
         ImGui::DragFloat3("Rotation", &e.transform.rotation.x, 0.5f);
         ImGui::DragFloat3("Scale", &e.transform.scale.x, 0.01f, 0.01f, 100.0f);
+
+        // Animation controls (only for skinned entities with clips).
+        if (e.skinned && !e.clips.empty()) {
+            ImGui::Separator();
+            ImGui::Text("Joints: %d  |  Clips: %d",
+                        static_cast<int>(e.skeleton.joints.size()),
+                        static_cast<int>(e.clips.size()));
+
+            // Clip selector.
+            const char* currentName = (e.animator.clipIndex >= 0 &&
+                e.animator.clipIndex < static_cast<int>(e.clips.size()))
+                ? e.clips[e.animator.clipIndex].name.c_str() : "(none)";
+            if (ImGui::BeginCombo("Clip", currentName)) {
+                for (int ci = 0; ci < static_cast<int>(e.clips.size()); ++ci) {
+                    bool sel = (ci == e.animator.clipIndex);
+                    if (ImGui::Selectable(e.clips[ci].name.c_str(), sel))
+                        AnimatorSetClip(e.animator, e.skeleton, ci);
+                }
+                ImGui::EndCombo();
+            }
+
+            if (e.animator.clipIndex >= 0) {
+                float dur = e.clips[e.animator.clipIndex].duration;
+                ImGui::SliderFloat("Time", &e.animator.time, 0.0f, dur, "%.2f s");
+                ImGui::Checkbox("Play", &e.animator.playing);
+                ImGui::SameLine();
+                ImGui::Checkbox("Loop", &e.animator.looping);
+            }
+        }
     } else {
         ImGui::TextDisabled("Select an entity to inspect");
     }
