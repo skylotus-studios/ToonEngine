@@ -2,9 +2,11 @@
 #include <GLFW/glfw3.h>
 
 #include "camera.h"
+#include "mesh.h"
 #include "shader.h"
+#include "texture.h"
+#include "transform.h"
 
-#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #include <chrono>
@@ -19,8 +21,8 @@ namespace {
     constexpr double kFixedTimestep = 1.0 / 60.0;
 
     ShaderProgram gShader{};
-    GLuint gTriangleVAO = 0;
-    GLuint gTriangleVBO = 0;
+    Mesh          gTriangleMesh{};
+    Texture       gDefaultTexture{};
 
     Camera gCamera{};
     int    gFramebufferW = kWindowWidth;
@@ -29,6 +31,16 @@ namespace {
     double gLastMouseX = 0.0;
     double gLastMouseY = 0.0;
     bool   gRightMouseHeld = false;
+
+    // clang-format off
+    Transform gTransforms[] = {
+        { { 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f,   0.0f}, {1.0f, 1.0f, 1.0f} },
+        { { 2.0f, 0.0f, 0.0f}, {0.0f, 0.0f,  45.0f}, {0.8f, 0.8f, 0.8f} },
+        { {-2.0f, 0.5f, 0.0f}, {0.0f, 0.0f, -30.0f}, {1.2f, 1.2f, 1.2f} },
+    };
+    // clang-format on
+
+    constexpr int kTransformCount = sizeof(gTransforms) / sizeof(gTransforms[0]);
 
     void GlfwErrorCallback(int error, const char* description) {
         std::fprintf(stderr, "[GLFW] error %d: %s\n", error, description);
@@ -94,26 +106,30 @@ namespace {
         std::fprintf(stderr, "[GL %s/%s/%s #%u] %s\n", sev, typ, src, id, message);
     }
 
-    void Update(double /*dt*/) {}
+    void Update(double dt) {
+        gTransforms[1].rotation.z += 45.0f * static_cast<float>(dt);
+    }
 
     void Render(double /*alpha*/) {
         glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glUseProgram(gShader.id);
+        BindTexture(gDefaultTexture, 0);
+        glUniform1i(glGetUniformLocation(gShader.id, "uTexture"), 0);
 
         float aspect = (gFramebufferH > 0)
             ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
             : 1.0f;
-        glm::mat4 model = glm::mat4(1.0f);
-        glm::mat4 mvp   = CameraProjectionMatrix(gCamera, aspect)
-                         * CameraViewMatrix(gCamera)
-                         * model;
-        glUniformMatrix4fv(glGetUniformLocation(gShader.id, "uMVP"),
-                           1, GL_FALSE, glm::value_ptr(mvp));
+        glm::mat4 vp = CameraProjectionMatrix(gCamera, aspect)
+                      * CameraViewMatrix(gCamera);
 
-        glBindVertexArray(gTriangleVAO);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        GLint mvpLoc = glGetUniformLocation(gShader.id, "uMVP");
+        for (int i = 0; i < kTransformCount; ++i) {
+            glm::mat4 mvp = vp * TransformMatrix(gTransforms[i]);
+            glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
+            DrawMesh(gTriangleMesh);
+        }
     }
 
 } // namespace
@@ -187,31 +203,25 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    gDefaultTexture = CreateWhiteTexture();
+
     // clang-format off
     float vertices[] = {
-    //  position        color
-        -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,
-         0.5f, -0.5f,  0.0f, 1.0f, 0.0f,
-         0.0f,  0.5f,  0.0f, 0.0f, 1.0f,
+    //  position              color              texcoord
+        -0.5f, -0.5f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f,
+         0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f,  1.0f, 0.0f,
+         0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f,
+    };
+    VertexAttrib attribs[] = {
+        {3, GL_FLOAT, 0},
+        {3, GL_FLOAT, 3 * sizeof(float)},
+        {2, GL_FLOAT, 6 * sizeof(float)},
     };
     // clang-format on
 
-    glGenVertexArrays(1, &gTriangleVAO);
-    glGenBuffers(1, &gTriangleVBO);
-
-    glBindVertexArray(gTriangleVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, gTriangleVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
-                          reinterpret_cast<void*>(0));
-    glEnableVertexAttribArray(0);
-
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
-                          reinterpret_cast<void*>(2 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    glBindVertexArray(0);
+    gTriangleMesh = CreateMesh(
+        vertices, sizeof(vertices), 8 * sizeof(float),
+        attribs, 3, 3);
 
     using Clock = std::chrono::high_resolution_clock;
     auto   prev = Clock::now();
@@ -246,8 +256,8 @@ int main() {
         }
     }
 
-    glDeleteVertexArrays(1, &gTriangleVAO);
-    glDeleteBuffers(1, &gTriangleVBO);
+    DestroyMesh(gTriangleMesh);
+    DestroyTexture(gDefaultTexture);
     DestroyShader(gShader);
 
     glfwDestroyWindow(window);

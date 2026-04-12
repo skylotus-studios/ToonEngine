@@ -37,6 +37,7 @@ endif()
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad  CONFIG REQUIRED)
 find_package(glm   CONFIG REQUIRED)
+find_package(Stb REQUIRED)
 
 add_executable(ToonEngine
     src/main.cpp
@@ -44,6 +45,12 @@ add_executable(ToonEngine
     src/shader.cpp
     src/camera.h
     src/camera.cpp
+    src/mesh.h
+    src/mesh.cpp
+    src/transform.h
+    src/transform.cpp
+    src/texture.h
+    src/texture.cpp
 )
 
 target_compile_features(ToonEngine PRIVATE cxx_std_20)
@@ -52,6 +59,8 @@ set_target_properties(ToonEngine PROPERTIES
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS        OFF
 )
+
+target_include_directories(ToonEngine PRIVATE ${Stb_INCLUDE_DIR})
 
 target_link_libraries(ToonEngine
     PRIVATE
