@@ -7,8 +7,8 @@
 
 #pragma once
 
-#include "material.h"
-#include "mesh.h"
+#include "core/material.h"
+#include "core/mesh.h"
 
 #include <glm/glm.hpp>
 

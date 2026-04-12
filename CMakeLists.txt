@@ -54,22 +54,22 @@ endif()
 # --- Engine executable -------------------------------------------------------
 add_executable(ToonEngine
     src/main.cpp
-    src/shader.h
-    src/shader.cpp
-    src/camera.h
-    src/camera.cpp
-    src/mesh.h
-    src/mesh.cpp
-    src/transform.h
-    src/transform.cpp
-    src/texture.h
-    src/texture.cpp
-    src/material.h
-    src/model_loader.h
-    src/model_loader.cpp
-    src/scene.h
-    src/overlay.h
-    src/overlay.cpp
+    src/core/shader.h
+    src/core/shader.cpp
+    src/core/mesh.h
+    src/core/mesh.cpp
+    src/core/transform.h
+    src/core/transform.cpp
+    src/core/texture.h
+    src/core/texture.cpp
+    src/core/material.h
+    src/scene/camera.h
+    src/scene/camera.cpp
+    src/scene/model_loader.h
+    src/scene/model_loader.cpp
+    src/scene/scene.h
+    src/ui/overlay.h
+    src/ui/overlay.cpp
 )
 
 target_compile_features(ToonEngine PRIVATE cxx_std_20)
@@ -80,6 +80,7 @@ set_target_properties(ToonEngine PROPERTIES
 )
 
 target_include_directories(ToonEngine PRIVATE
+    src
     ${Stb_INCLUDE_DIR}
     libs/cgltf
 )

@@ -6,11 +6,11 @@
 
 #pragma once
 
-#include "material.h"
-#include "mesh.h"
-#include "model_loader.h"
-#include "texture.h"
-#include "transform.h"
+#include "core/material.h"
+#include "core/mesh.h"
+#include "core/texture.h"
+#include "core/transform.h"
+#include "scene/model_loader.h"
 
 #include <string>
 #include <vector>

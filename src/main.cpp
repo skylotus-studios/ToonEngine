@@ -7,14 +7,14 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
-#include "camera.h"
-#include "mesh.h"
-#include "model_loader.h"
-#include "overlay.h"
-#include "scene.h"
-#include "shader.h"
-#include "texture.h"
-#include "transform.h"
+#include "core/mesh.h"
+#include "core/shader.h"
+#include "core/texture.h"
+#include "core/transform.h"
+#include "scene/camera.h"
+#include "scene/model_loader.h"
+#include "scene/scene.h"
+#include "ui/overlay.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
