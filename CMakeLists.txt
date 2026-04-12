@@ -42,6 +42,8 @@ add_executable(ToonEngine
     src/main.cpp
     src/shader.h
     src/shader.cpp
+    src/camera.h
+    src/camera.cpp
 )
 
 target_compile_features(ToonEngine PRIVATE cxx_std_20)

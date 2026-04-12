@@ -3,7 +3,9 @@
 #include <cstdio>
 #include <fstream>
 #include <sstream>
-#include <string>
+#include <system_error>
+
+namespace fs = std::filesystem;
 
 static std::string ReadFile(const char* path) {
     std::ifstream f(path);
@@ -33,7 +35,7 @@ static GLuint CompileShader(GLenum type, const char* source, const char* label) 
     return shader;
 }
 
-GLuint LoadShaderProgram(const char* vertPath, const char* fragPath) {
+static GLuint BuildProgram(const char* vertPath, const char* fragPath) {
     std::string vertSrc = ReadFile(vertPath);
     std::string fragSrc = ReadFile(fragPath);
     if (vertSrc.empty() || fragSrc.empty()) return 0;
@@ -64,4 +66,50 @@ GLuint LoadShaderProgram(const char* vertPath, const char* fragPath) {
         return 0;
     }
     return program;
+}
+
+bool LoadShader(ShaderProgram& prog, const char* vertPath, const char* fragPath) {
+    GLuint id = BuildProgram(vertPath, fragPath);
+    if (!id) return false;
+
+    prog.id       = id;
+    prog.vertPath = vertPath;
+    prog.fragPath = fragPath;
+    prog.vertTime = fs::last_write_time(vertPath);
+    prog.fragTime = fs::last_write_time(fragPath);
+    return true;
+}
+
+bool ReloadIfChanged(ShaderProgram& prog) {
+    std::error_code ec;
+    auto vertNow = fs::last_write_time(prog.vertPath, ec);
+    if (ec) return false;
+    auto fragNow = fs::last_write_time(prog.fragPath, ec);
+    if (ec) return false;
+
+    if (vertNow == prog.vertTime && fragNow == prog.fragTime)
+        return false;
+
+    // Timestamps changed — update them regardless of compile outcome
+    // so we don't spam recompile every frame on a broken shader.
+    prog.vertTime = vertNow;
+    prog.fragTime = fragNow;
+
+    GLuint newId = BuildProgram(prog.vertPath.c_str(), prog.fragPath.c_str());
+    if (!newId) {
+        std::fprintf(stderr, "[SHADER] Reload failed, keeping previous program\n");
+        return false;
+    }
+
+    glDeleteProgram(prog.id);
+    prog.id = newId;
+    std::printf("[SHADER] Reloaded successfully\n");
+    return true;
+}
+
+void DestroyShader(ShaderProgram& prog) {
+    if (prog.id) {
+        glDeleteProgram(prog.id);
+        prog.id = 0;
+    }
 }
