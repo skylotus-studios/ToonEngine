@@ -1,6 +1,8 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+#include "shader.h"
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +13,10 @@ namespace {
     constexpr int    kWindowHeight = 2160;
     constexpr char   kWindowTitle[] = "ToonEngine";
     constexpr double kFixedTimestep = 1.0 / 60.0;
+
+    GLuint gShaderProgram = 0;
+    GLuint gTriangleVAO   = 0;
+    GLuint gTriangleVBO   = 0;
 
     void GlfwErrorCallback(int error, const char* description) {
         std::fprintf(stderr, "[GLFW] error %d: %s\n", error, description);
@@ -58,6 +64,10 @@ namespace {
     void Render(double /*alpha*/) {
         glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glUseProgram(gShaderProgram);
+        glBindVertexArray(gTriangleVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
 } // namespace
@@ -119,6 +129,41 @@ int main() {
 
     glEnable(GL_DEPTH_TEST);
 
+    gShaderProgram = LoadShaderProgram(
+        "assets/shaders/triangle.vert", "assets/shaders/triangle.frag");
+    if (!gShaderProgram) {
+        std::fprintf(stderr, "Failed to load shaders\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
+    // clang-format off
+    float vertices[] = {
+    //  position        color
+        -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,
+         0.5f, -0.5f,  0.0f, 1.0f, 0.0f,
+         0.0f,  0.5f,  0.0f, 0.0f, 1.0f,
+    };
+    // clang-format on
+
+    glGenVertexArrays(1, &gTriangleVAO);
+    glGenBuffers(1, &gTriangleVBO);
+
+    glBindVertexArray(gTriangleVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, gTriangleVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
+                          reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
+                          reinterpret_cast<void*>(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glBindVertexArray(0);
+
     using Clock = std::chrono::high_resolution_clock;
     auto   prev = Clock::now();
     double accumulator = 0.0;
@@ -146,6 +191,10 @@ int main() {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
     }
+
+    glDeleteVertexArrays(1, &gTriangleVAO);
+    glDeleteBuffers(1, &gTriangleVBO);
+    glDeleteProgram(gShaderProgram);
 
     glfwDestroyWindow(window);
     glfwTerminate();

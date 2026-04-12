@@ -40,6 +40,8 @@ find_package(glm   CONFIG REQUIRED)
 
 add_executable(ToonEngine
     src/main.cpp
+    src/shader.h
+    src/shader.cpp
 )
 
 target_compile_features(ToonEngine PRIVATE cxx_std_20)
