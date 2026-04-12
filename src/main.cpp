@@ -2,12 +2,13 @@
 //
 // Sets up a GLFW window with an OpenGL 4.1 core context, loads shaders
 // and demo geometry, and runs a fixed-timestep game loop with camera
-// input and shader hot-reload.
+// input, shader hot-reload, and toon shading with outlines.
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
 #include "camera.h"
+#include "material.h"
 #include "mesh.h"
 #include "model_loader.h"
 #include "shader.h"
@@ -36,10 +37,16 @@ namespace {
     Mesh          gTriangleMesh{};
     Texture       gDefaultTexture{};
 
+    // Toon rendering shaders.
+    ShaderProgram gToonShader{};
+    ShaderProgram gOutlineShader{};
+
     // Loaded 3D model (populated when a file path is passed via argv[1]).
-    ShaderProgram      gModelShader{};
-    std::vector<Mesh>  gModelMeshes;
-    Transform          gModelTransform{};
+    std::vector<SubMesh> gModelSubMeshes;
+    Transform            gModelTransform{};
+
+    constexpr float kOutlineWidth = 0.755f;
+    constexpr glm::vec4 kOutlineColor{ 0.05f, 0.05f, 0.05f, 1.0f };
 
     Camera gCamera{};
     int    gFramebufferW = kWindowWidth;
@@ -139,9 +146,7 @@ namespace {
     // Frame logic.
     // -----------------------------------------------------------------------
 
-    // Fixed-timestep simulation tick.
     void Update(double dt) {
-        // Spin the second triangle to demonstrate live transforms.
         gTransforms[1].rotation.z += 45.0f * static_cast<float>(dt);
     }
 
@@ -154,7 +159,7 @@ namespace {
             ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
             : 1.0f;
         glm::mat4 vp = CameraProjectionMatrix(gCamera, aspect)
-                      * CameraViewMatrix(gCamera);
+            * CameraViewMatrix(gCamera);
 
         // -- Demo triangles (vertex-colored) --------------------------------
         glUseProgram(gShader.id);
@@ -168,22 +173,46 @@ namespace {
             DrawMesh(gTriangleMesh);
         }
 
-        // -- Loaded model (lit) ---------------------------------------------
-        if (!gModelMeshes.empty() && gModelShader.id) {
-            glUseProgram(gModelShader.id);
-            BindTexture(gDefaultTexture, 0);
-            glUniform1i(glGetUniformLocation(gModelShader.id, "uTexture"), 0);
-
+        // -- Loaded model (toon shading + outlines) -------------------------
+        if (!gModelSubMeshes.empty() && gToonShader.id && gOutlineShader.id) {
             glm::mat4 model = TransformMatrix(gModelTransform);
             glm::mat4 mvpModel = vp * model;
-            glUniformMatrix4fv(glGetUniformLocation(gModelShader.id, "uMVP"),
-                               1, GL_FALSE, glm::value_ptr(mvpModel));
-            glUniformMatrix4fv(glGetUniformLocation(gModelShader.id, "uModel"),
-                               1, GL_FALSE, glm::value_ptr(model));
 
-            for (auto& mesh : gModelMeshes) {
-                DrawMesh(mesh);
+            glEnable(GL_CULL_FACE);
+
+            // Pass 1: toon shading (front faces).
+            glCullFace(GL_BACK);
+            glUseProgram(gToonShader.id);
+            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uMVP"),
+                1, GL_FALSE, glm::value_ptr(mvpModel));
+            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uModel"),
+                1, GL_FALSE, glm::value_ptr(model));
+            glUniform1i(glGetUniformLocation(gToonShader.id, "uTexture"), 0);
+
+            GLint baseColorLoc = glGetUniformLocation(gToonShader.id, "uBaseColor");
+            for (auto& sm : gModelSubMeshes) {
+                // Bind material texture, or default white if none.
+                BindTexture(sm.material.texture.id ? sm.material.texture
+                    : gDefaultTexture, 0);
+                glUniform4fv(baseColorLoc, 1, glm::value_ptr(sm.material.baseColor));
+                DrawMesh(sm.mesh);
             }
+
+            // Pass 2: outlines (back faces extruded along normals).
+            glCullFace(GL_FRONT);
+            glUseProgram(gOutlineShader.id);
+            glUniformMatrix4fv(glGetUniformLocation(gOutlineShader.id, "uMVP"),
+                1, GL_FALSE, glm::value_ptr(mvpModel));
+            glUniform1f(glGetUniformLocation(gOutlineShader.id, "uOutlineWidth"),
+                kOutlineWidth);
+            glUniform4fv(glGetUniformLocation(gOutlineShader.id, "uOutlineColor"),
+                1, glm::value_ptr(kOutlineColor));
+
+            for (auto& sm : gModelSubMeshes) {
+                DrawMesh(sm.mesh);
+            }
+
+            glDisable(GL_CULL_FACE);
         }
     }
 
@@ -206,9 +235,9 @@ int main(int argc, char* argv[]) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     // Required on macOS (gives a legacy 2.1 context without it); harmless on Windows.
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-#ifndef NDEBUG
+    #ifndef NDEBUG
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
-#endif
+    #endif
 
     GLFWwindow* window = glfwCreateWindow(
         kWindowWidth, kWindowHeight, kWindowTitle, nullptr, nullptr);
@@ -263,8 +292,8 @@ int main(int argc, char* argv[]) {
     // Resource loading.
     // -----------------------------------------------------------------------
     if (!LoadShader(gShader, "assets/shaders/triangle.vert",
-                             "assets/shaders/triangle.frag")) {
-        std::fprintf(stderr, "Failed to load shaders\n");
+        "assets/shaders/triangle.frag")) {
+        std::fprintf(stderr, "Failed to load triangle shaders\n");
         glfwDestroyWindow(window);
         glfwTerminate();
         return EXIT_FAILURE;
@@ -275,10 +304,10 @@ int main(int argc, char* argv[]) {
     // Triangle mesh: position (vec3) + color (vec3) + texcoord (vec2).
     // clang-format off
     float vertices[] = {
-    //  position              color              texcoord
-        -0.5f, -0.5f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f,
-         0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f,  1.0f, 0.0f,
-         0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f,
+        //  position              color              texcoord
+            -0.5f, -0.5f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 0.0f,
+             0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f,  1.0f, 0.0f,
+             0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f,
     };
     VertexAttrib attribs[] = {
         {3, GL_FLOAT, 0},                  // location 0: position
@@ -291,10 +320,15 @@ int main(int argc, char* argv[]) {
         vertices, sizeof(vertices), 8 * sizeof(float),
         attribs, 3, 3);
 
-    // Model shader (used for loaded meshes with normals + lighting).
-    if (!LoadShader(gModelShader, "assets/shaders/model.vert",
-                                  "assets/shaders/model.frag")) {
-        std::fprintf(stderr, "Failed to load model shaders\n");
+    // Toon + outline shaders. model.vert is reused for the toon pass since
+    // it already transforms normals to world space.
+    if (!LoadShader(gToonShader, "assets/shaders/model.vert",
+        "assets/shaders/toon.frag")) {
+        std::fprintf(stderr, "Failed to load toon shaders\n");
+    }
+    if (!LoadShader(gOutlineShader, "assets/shaders/outline.vert",
+        "assets/shaders/outline.frag")) {
+        std::fprintf(stderr, "Failed to load outline shaders\n");
     }
 
     // Load a model if a path was passed on the command line.
@@ -302,28 +336,27 @@ int main(int argc, char* argv[]) {
     // at the origin, and back the camera up to frame it.
     if (argc > 1) {
         LoadedModel loaded = LoadModel(argv[1]);
-        gModelMeshes = std::move(loaded.meshes);
+        gModelSubMeshes = std::move(loaded.subMeshes);
 
-        if (gModelMeshes.empty()) {
+        if (gModelSubMeshes.empty()) {
             std::fprintf(stderr, "Failed to load model: %s\n", argv[1]);
         } else {
             glm::vec3 center = (loaded.boundsMin + loaded.boundsMax) * 0.5f;
             glm::vec3 extent = loaded.boundsMax - loaded.boundsMin;
-            float maxExtent = std::max({extent.x, extent.y, extent.z});
+            float maxExtent = std::max({ extent.x, extent.y, extent.z });
 
             constexpr float kTargetSize = 5.0f;
             float s = (maxExtent > 0.0f) ? kTargetSize / maxExtent : 1.0f;
 
-            gModelTransform.scale    = glm::vec3(s);
+            gModelTransform.scale = glm::vec3(s);
             gModelTransform.position = -center * s;
 
-            // Position camera to see the whole model.
             gCamera.position = glm::vec3(0.0f, 0.0f, kTargetSize * 2.0f);
             gCamera.moveSpeed = kTargetSize;
 
             std::printf("Model bounds: (%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f), scale=%.4f\n",
-                        loaded.boundsMin.x, loaded.boundsMin.y, loaded.boundsMin.z,
-                        loaded.boundsMax.x, loaded.boundsMax.y, loaded.boundsMax.z, s);
+                loaded.boundsMin.x, loaded.boundsMin.y, loaded.boundsMin.z,
+                loaded.boundsMax.x, loaded.boundsMax.y, loaded.boundsMax.z, s);
         }
     }
 
@@ -353,7 +386,8 @@ int main(int argc, char* argv[]) {
             CameraProcessKeyboard(gCamera, window, static_cast<float>(frame));
 
         ReloadIfChanged(gShader);
-        ReloadIfChanged(gModelShader);
+        ReloadIfChanged(gToonShader);
+        ReloadIfChanged(gOutlineShader);
 
         const double alpha = accumulator / kFixedTimestep;
         Render(alpha);
@@ -369,8 +403,12 @@ int main(int argc, char* argv[]) {
     // -----------------------------------------------------------------------
     // Cleanup — reverse order of creation.
     // -----------------------------------------------------------------------
-    for (auto& mesh : gModelMeshes) DestroyMesh(mesh);
-    DestroyShader(gModelShader);
+    for (auto& sm : gModelSubMeshes) {
+        DestroyMesh(sm.mesh);
+        DestroyTexture(sm.material.texture);
+    }
+    DestroyShader(gOutlineShader);
+    DestroyShader(gToonShader);
     DestroyMesh(gTriangleMesh);
     DestroyTexture(gDefaultTexture);
     DestroyShader(gShader);

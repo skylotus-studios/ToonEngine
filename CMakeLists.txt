@@ -63,6 +63,7 @@ add_executable(ToonEngine
     src/transform.cpp
     src/texture.h
     src/texture.cpp
+    src/material.h
     src/model_loader.h
     src/model_loader.cpp
 )

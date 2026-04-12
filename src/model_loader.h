@@ -2,24 +2,29 @@
 //
 // Dispatches to cgltf or ufbx based on file extension. Returns GPU-ready
 // meshes with a fixed vertex layout: position (vec3) + normal (vec3) +
-// texcoord (vec2). Missing attributes are filled with defaults
-// (normal = 0,0,1; texcoord = 0,0).
+// texcoord (vec2). Each sub-mesh carries its own Material (base color +
+// optional texture extracted from the source file).
 
 #pragma once
 
+#include "material.h"
 #include "mesh.h"
 
 #include <glm/glm.hpp>
 
 #include <vector>
 
-// Result of loading a model file.
+struct SubMesh {
+    Mesh     mesh;
+    Material material;
+};
+
 struct LoadedModel {
-    std::vector<Mesh> meshes;
-    glm::vec3 boundsMin{0.0f};  // axis-aligned bounding box minimum
-    glm::vec3 boundsMax{0.0f};  // axis-aligned bounding box maximum
+    std::vector<SubMesh> subMeshes;
+    glm::vec3 boundsMin{0.0f};
+    glm::vec3 boundsMax{0.0f};
 };
 
 // Load a 3D model from disk. Supported formats: .gltf, .glb, .fbx.
-// Returns meshes + bounding box. meshes is empty on failure.
+// Returns sub-meshes with materials + bounding box. Empty on failure.
 LoadedModel LoadModel(const char* path);

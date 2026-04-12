@@ -1,9 +1,9 @@
 // Model loading implementation.
 //
 // glTF: parsed by cgltf — iterates meshes/primitives, reads position/normal/
-//   texcoord accessors, builds interleaved vertex data + index buffer.
-// FBX:  parsed by ufbx — iterates meshes, triangulates faces, reads vertex
-//   attributes per face-corner.
+//   texcoord accessors, extracts PBR base color + texture from materials.
+// FBX:  parsed by ufbx — iterates meshes, triangulates faces, extracts
+//   diffuse color + texture from materials.
 //
 // Both loaders track the axis-aligned bounding box of all positions so the
 // caller can auto-fit the model to a reasonable scale.
@@ -53,7 +53,6 @@ static constexpr int kModelAttribCount = 3;
 
 static constexpr float kFloatMax = std::numeric_limits<float>::max();
 
-// Expand bounds to include a position.
 static void ExpandBounds(glm::vec3& bmin, glm::vec3& bmax, float x, float y, float z) {
     bmin.x = std::min(bmin.x, x);
     bmin.y = std::min(bmin.y, y);
@@ -63,6 +62,133 @@ static void ExpandBounds(glm::vec3& bmin, glm::vec3& bmax, float x, float y, flo
     bmax.z = std::max(bmax.z, z);
 }
 
+// Generate smooth normals by accumulating face normals per-vertex.
+// Vertex data is interleaved: [pos(3) norm(3) uv(2)] × vertCount.
+// Normals at offset 3,4,5 in each 8-float vertex must be zeroed before calling.
+static void GenerateNormals(float* verts, size_t vertCount,
+                            const std::uint32_t* indices, size_t indexCount) {
+    auto addFaceNormal = [&](size_t i0, size_t i1, size_t i2) {
+        float* v0 = &verts[i0 * 8];
+        float* v1 = &verts[i1 * 8];
+        float* v2 = &verts[i2 * 8];
+        glm::vec3 p0(v0[0], v0[1], v0[2]);
+        glm::vec3 p1(v1[0], v1[1], v1[2]);
+        glm::vec3 p2(v2[0], v2[1], v2[2]);
+        glm::vec3 n = glm::cross(p1 - p0, p2 - p0);
+        // Accumulate (not normalized yet — larger faces contribute more).
+        for (int a = 0; a < 3; ++a) { v0[3+a] += n[a]; v1[3+a] += n[a]; v2[3+a] += n[a]; }
+    };
+
+    if (indices && indexCount >= 3) {
+        for (size_t i = 0; i + 2 < indexCount; i += 3)
+            addFaceNormal(indices[i], indices[i+1], indices[i+2]);
+    } else {
+        for (size_t i = 0; i + 2 < vertCount; i += 3)
+            addFaceNormal(i, i+1, i+2);
+    }
+
+    for (size_t i = 0; i < vertCount; ++i) {
+        float* n = &verts[i * 8 + 3];
+        glm::vec3 nv(n[0], n[1], n[2]);
+        float len = glm::length(nv);
+        if (len > 1e-6f) { nv /= len; }
+        else { nv = glm::vec3(0.0f, 1.0f, 0.0f); }
+        n[0] = nv.x; n[1] = nv.y; n[2] = nv.z;
+    }
+}
+
+// Try to load a texture from a file path relative to the model directory.
+static Texture TryLoadTexture(const std::filesystem::path& modelDir,
+                               const char* relPath) {
+    Texture tex{};
+    if (!relPath || relPath[0] == '\0') return tex;
+    auto resolved = (modelDir / relPath).string();
+    if (LoadTexture(tex, resolved.c_str())) {
+        std::printf("  Loaded texture: %s\n", resolved.c_str());
+    }
+    return tex;
+}
+
+// Load a texture from a cgltf image — handles both file URIs and
+// embedded buffer views (base64 data URIs in .gltf, binary chunks in .glb).
+static Texture LoadGltfImage(const cgltf_image* image,
+                              const std::filesystem::path& modelDir) {
+    Texture tex{};
+    if (!image) return tex;
+
+    // Embedded image: data sits in a buffer view.
+    if (image->buffer_view && image->buffer_view->buffer) {
+        const auto* bv = image->buffer_view;
+        const auto* bytes = static_cast<const unsigned char*>(bv->buffer->data);
+        if (bytes) {
+            auto dataPtr = bytes + bv->offset;
+            auto dataLen = static_cast<int>(bv->size);
+            if (LoadTextureFromMemory(tex, dataPtr, dataLen)) {
+                std::printf("  Loaded embedded texture: %s\n",
+                            image->name ? image->name : "(unnamed)");
+            }
+        }
+        return tex;
+    }
+
+    // External file URI (skip data: URIs — those should have buffer_view).
+    if (image->uri && std::strncmp(image->uri, "data:", 5) != 0) {
+        tex = TryLoadTexture(modelDir, image->uri);
+    }
+    return tex;
+}
+
+// Extract Material from a cgltf primitive's material (PBR base color).
+static Material ExtractGltfMaterial(const cgltf_primitive& prim,
+                                     const std::filesystem::path& modelDir) {
+    Material mat;
+    if (!prim.material) return mat;
+
+    if (prim.material->has_pbr_metallic_roughness) {
+        const float* bc = prim.material->pbr_metallic_roughness.base_color_factor;
+        mat.baseColor = glm::vec4(bc[0], bc[1], bc[2], bc[3]);
+
+        const cgltf_texture_view& tv =
+            prim.material->pbr_metallic_roughness.base_color_texture;
+        if (tv.texture && tv.texture->image) {
+            mat.texture = LoadGltfImage(tv.texture->image, modelDir);
+        }
+    }
+    return mat;
+}
+
+// Extract Material from a ufbx mesh's first material.
+static Material ExtractFbxMaterial(const ufbx_mesh* mesh,
+                                    const std::filesystem::path& modelDir) {
+    Material mat;
+    if (mesh->materials.count == 0 || !mesh->materials.data[0]) return mat;
+
+    const ufbx_material* fbxMat = mesh->materials.data[0];
+
+    // Base color from PBR or legacy diffuse.
+    ufbx_material_map colorMap = fbxMat->pbr.base_color;
+    if (!colorMap.has_value)
+        colorMap = fbxMat->fbx.diffuse_color;
+
+    if (colorMap.has_value) {
+        mat.baseColor = glm::vec4(
+            static_cast<float>(colorMap.value_vec4.x),
+            static_cast<float>(colorMap.value_vec4.y),
+            static_cast<float>(colorMap.value_vec4.z),
+            static_cast<float>(colorMap.value_vec4.w));
+    }
+
+    // Try to load diffuse/base color texture.
+    ufbx_texture* tex = colorMap.texture;
+    if (tex && tex->relative_filename.length > 0) {
+        mat.texture = TryLoadTexture(modelDir, tex->relative_filename.data);
+    } else if (tex && tex->filename.length > 0) {
+        mat.texture = TryLoadTexture(modelDir, tex->filename.data);
+    }
+
+    return mat;
+}
+
 // ---------------------------------------------------------------------------
 // glTF loader (cgltf).
 // ---------------------------------------------------------------------------
@@ -70,6 +196,7 @@ static LoadedModel LoadGltf(const char* path) {
     LoadedModel result;
     glm::vec3 bmin{kFloatMax};
     glm::vec3 bmax{-kFloatMax};
+    auto modelDir = std::filesystem::path(path).parent_path();
 
     cgltf_options options{};
     cgltf_data* data = nullptr;
@@ -91,7 +218,6 @@ static LoadedModel LoadGltf(const char* path) {
             cgltf_primitive& prim = mesh.primitives[pi];
             if (prim.type != cgltf_primitive_type_triangles) continue;
 
-            // Find the attribute accessors we care about.
             cgltf_accessor* posAcc  = nullptr;
             cgltf_accessor* normAcc = nullptr;
             cgltf_accessor* uvAcc   = nullptr;
@@ -105,28 +231,34 @@ static LoadedModel LoadGltf(const char* path) {
             }
             if (!posAcc) continue;
 
-            // Build interleaved vertex data.
             auto vertCount = static_cast<size_t>(posAcc->count);
-            std::vector<float> verts(vertCount * 8);
+            std::vector<float> verts(vertCount * 8, 0.0f);
 
             for (size_t vi = 0; vi < vertCount; ++vi) {
-                float pos[3]  = {0.0f, 0.0f, 0.0f};
-                float norm[3] = {0.0f, 0.0f, 1.0f};
-                float uv[2]   = {0.0f, 0.0f};
+                float pos[3] = {0.0f, 0.0f, 0.0f};
+                float uv[2]  = {0.0f, 0.0f};
 
                 cgltf_accessor_read_float(posAcc, vi, pos, 3);
-                if (normAcc) cgltf_accessor_read_float(normAcc, vi, norm, 3);
-                if (uvAcc)   cgltf_accessor_read_float(uvAcc,   vi, uv,   2);
+                if (uvAcc) cgltf_accessor_read_float(uvAcc, vi, uv, 2);
 
                 ExpandBounds(bmin, bmax, pos[0], pos[1], pos[2]);
 
                 float* v = &verts[vi * 8];
-                v[0] = pos[0];  v[1] = pos[1];  v[2] = pos[2];
-                v[3] = norm[0]; v[4] = norm[1]; v[5] = norm[2];
-                v[6] = uv[0];  v[7] = uv[1];
+                v[0] = pos[0]; v[1] = pos[1]; v[2] = pos[2];
+                // normals filled below (from accessor or generated)
+                v[6] = uv[0]; v[7] = uv[1];
             }
 
-            // Read index buffer (if present).
+            // Read normals from accessor if available.
+            if (normAcc) {
+                for (size_t vi = 0; vi < vertCount; ++vi) {
+                    float norm[3] = {0.0f, 0.0f, 1.0f};
+                    cgltf_accessor_read_float(normAcc, vi, norm, 3);
+                    float* v = &verts[vi * 8];
+                    v[3] = norm[0]; v[4] = norm[1]; v[5] = norm[2];
+                }
+            }
+
             std::vector<std::uint32_t> indices;
             if (prim.indices) {
                 indices.resize(static_cast<size_t>(prim.indices->count));
@@ -136,21 +268,33 @@ static LoadedModel LoadGltf(const char* path) {
                 }
             }
 
-            result.meshes.push_back(CreateMesh(
+            // Generate smooth normals if the mesh has none.
+            if (!normAcc) {
+                std::printf("  Generating normals for primitive %zu/%zu\n", pi, mi);
+                GenerateNormals(verts.data(), vertCount,
+                                indices.empty() ? nullptr : indices.data(),
+                                indices.size());
+            }
+
+            SubMesh sm;
+            sm.mesh = CreateMesh(
                 verts.data(), verts.size() * sizeof(float), kModelStride,
                 kModelAttribs, kModelAttribCount,
                 static_cast<GLsizei>(vertCount),
                 indices.empty() ? nullptr : indices.data(),
-                static_cast<GLsizei>(indices.size())));
+                static_cast<GLsizei>(indices.size()));
+            sm.material = ExtractGltfMaterial(prim, modelDir);
+            result.subMeshes.push_back(std::move(sm));
         }
     }
 
     cgltf_free(data);
 
-    if (!result.meshes.empty()) {
+    if (!result.subMeshes.empty()) {
         result.boundsMin = bmin;
         result.boundsMax = bmax;
-        std::printf("Loaded %zu mesh(es) from %s (glTF)\n", result.meshes.size(), path);
+        std::printf("Loaded %zu mesh(es) from %s (glTF)\n",
+                    result.subMeshes.size(), path);
     }
     return result;
 }
@@ -162,6 +306,7 @@ static LoadedModel LoadFbx(const char* path) {
     LoadedModel result;
     glm::vec3 bmin{kFloatMax};
     glm::vec3 bmax{-kFloatMax};
+    auto modelDir = std::filesystem::path(path).parent_path();
 
     ufbx_load_opts opts{};
     opts.generate_missing_normals = true;
@@ -177,7 +322,6 @@ static LoadedModel LoadFbx(const char* path) {
     for (size_t mi = 0; mi < scene->meshes.count; ++mi) {
         ufbx_mesh* mesh = scene->meshes.data[mi];
 
-        // ufbx faces may be quads/ngons — triangulate each face.
         size_t maxTriVerts = mesh->max_face_triangles * 3;
         std::vector<uint32_t> triIndices(maxTriVerts);
         std::vector<float> verts;
@@ -191,10 +335,10 @@ static LoadedModel LoadFbx(const char* path) {
                 uint32_t idx = triIndices[ti];
 
                 ufbx_vec3 pos = ufbx_get_vertex_vec3(&mesh->vertex_position, idx);
-                ufbx_vec3 norm = {0.0, 0.0, 1.0};
+                ufbx_vec3 norm{}; norm.x = 0.0; norm.y = 0.0; norm.z = 1.0;
                 if (mesh->vertex_normal.exists)
                     norm = ufbx_get_vertex_vec3(&mesh->vertex_normal, idx);
-                ufbx_vec2 uv = {0.0, 0.0};
+                ufbx_vec2 uv{};
                 if (mesh->vertex_uv.exists)
                     uv = ufbx_get_vertex_vec2(&mesh->vertex_uv, idx);
 
@@ -217,18 +361,21 @@ static LoadedModel LoadFbx(const char* path) {
         auto vertCount = static_cast<GLsizei>(verts.size() / 8);
         if (vertCount == 0) continue;
 
-        // Non-indexed draw — vertices are fully expanded from face corners.
-        result.meshes.push_back(CreateMesh(
+        SubMesh sm;
+        sm.mesh = CreateMesh(
             verts.data(), verts.size() * sizeof(float), kModelStride,
-            kModelAttribs, kModelAttribCount, vertCount));
+            kModelAttribs, kModelAttribCount, vertCount);
+        sm.material = ExtractFbxMaterial(mesh, modelDir);
+        result.subMeshes.push_back(std::move(sm));
     }
 
     ufbx_free_scene(scene);
 
-    if (!result.meshes.empty()) {
+    if (!result.subMeshes.empty()) {
         result.boundsMin = bmin;
         result.boundsMax = bmax;
-        std::printf("Loaded %zu mesh(es) from %s (FBX)\n", result.meshes.size(), path);
+        std::printf("Loaded %zu mesh(es) from %s (FBX)\n",
+                    result.subMeshes.size(), path);
     }
     return result;
 }

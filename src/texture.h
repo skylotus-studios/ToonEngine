@@ -17,6 +17,11 @@ struct Texture {
 // 1x1 white pixel texture used as a default when no image is loaded.
 Texture CreateWhiteTexture();
 
+// Load an image from raw bytes in memory (PNG, JPG, etc.) into a GL texture.
+// Used for embedded textures in glTF/glb files.
+bool LoadTextureFromMemory(Texture& tex, const unsigned char* data, int dataSize,
+                           bool flipY = true);
+
 // Load an image file (PNG, JPG, BMP, etc.) into a GL texture with mipmaps.
 // flipY: true flips the image vertically (OpenGL expects bottom-left origin,
 // most image formats store top-left first).
