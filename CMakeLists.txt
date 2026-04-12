@@ -39,6 +39,7 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(glad  CONFIG REQUIRED)
 find_package(glm   CONFIG REQUIRED)
 find_package(Stb REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 # --- Vendored libraries (single-header / single-file, committed in libs/) ---
 # ufbx: compiled as a static lib so its C code gets its own warning settings.
@@ -66,6 +67,8 @@ add_executable(ToonEngine
     src/material.h
     src/model_loader.h
     src/model_loader.cpp
+    src/overlay.h
+    src/overlay.cpp
 )
 
 target_compile_features(ToonEngine PRIVATE cxx_std_20)
@@ -85,6 +88,7 @@ target_link_libraries(ToonEngine
         glfw
         glad::glad
         glm::glm
+        imgui::imgui
         ufbx
 )
 

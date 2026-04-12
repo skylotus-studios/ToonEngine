@@ -11,6 +11,7 @@
 #include "material.h"
 #include "mesh.h"
 #include "model_loader.h"
+#include "overlay.h"
 #include "shader.h"
 #include "texture.h"
 #include "transform.h"
@@ -45,8 +46,8 @@ namespace {
     std::vector<SubMesh> gModelSubMeshes;
     Transform            gModelTransform{};
 
-    constexpr float kOutlineWidth = 0.755f;
-    constexpr glm::vec4 kOutlineColor{ 0.05f, 0.05f, 0.05f, 1.0f };
+    RenderSettings gSettings{};
+    bool           gOverlayCapturing = false;
 
     Camera gCamera{};
     int    gFramebufferW = kWindowWidth;
@@ -83,7 +84,9 @@ namespace {
     }
 
     // Right-click toggles cursor capture for camera look mode.
+    // Ignored when ImGui wants the mouse (interacting with overlay widgets).
     void MouseButtonCallback(GLFWwindow* window, int button, int action, int /*mods*/) {
+        if (gOverlayCapturing && action == GLFW_PRESS) return;
         if (button == GLFW_MOUSE_BUTTON_RIGHT) {
             gRightMouseHeld = (action == GLFW_PRESS);
             if (gRightMouseHeld) {
@@ -151,7 +154,8 @@ namespace {
     }
 
     void Render(double /*alpha*/) {
-        glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
+        glClearColor(gSettings.clearColor.r, gSettings.clearColor.g,
+                     gSettings.clearColor.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // Compute view-projection once per frame.
@@ -189,6 +193,20 @@ namespace {
                 1, GL_FALSE, glm::value_ptr(model));
             glUniform1i(glGetUniformLocation(gToonShader.id, "uTexture"), 0);
 
+            // Toon parameters from overlay settings.
+            glUniform3fv(glGetUniformLocation(gToonShader.id, "uLightDir"),
+                1, glm::value_ptr(gSettings.lightDir));
+            glUniform1f(glGetUniformLocation(gToonShader.id, "uBandHigh"),
+                gSettings.bandThresholdHigh);
+            glUniform1f(glGetUniformLocation(gToonShader.id, "uBandLow"),
+                gSettings.bandThresholdLow);
+            glUniform1f(glGetUniformLocation(gToonShader.id, "uBrightness"),
+                gSettings.brightIntensity);
+            glUniform1f(glGetUniformLocation(gToonShader.id, "uMid"),
+                gSettings.midIntensity);
+            glUniform1f(glGetUniformLocation(gToonShader.id, "uShadow"),
+                gSettings.shadowIntensity);
+
             GLint baseColorLoc = glGetUniformLocation(gToonShader.id, "uBaseColor");
             for (auto& sm : gModelSubMeshes) {
                 // Bind material texture, or default white if none.
@@ -204,9 +222,9 @@ namespace {
             glUniformMatrix4fv(glGetUniformLocation(gOutlineShader.id, "uMVP"),
                 1, GL_FALSE, glm::value_ptr(mvpModel));
             glUniform1f(glGetUniformLocation(gOutlineShader.id, "uOutlineWidth"),
-                kOutlineWidth);
+                gSettings.outlineWidth);
             glUniform4fv(glGetUniformLocation(gOutlineShader.id, "uOutlineColor"),
-                1, glm::value_ptr(kOutlineColor));
+                1, glm::value_ptr(gSettings.outlineColor));
 
             for (auto& sm : gModelSubMeshes) {
                 DrawMesh(sm.mesh);
@@ -287,6 +305,8 @@ int main(int argc, char* argv[]) {
     }
 
     glEnable(GL_DEPTH_TEST);
+
+    OverlayInit(window);
 
     // -----------------------------------------------------------------------
     // Resource loading.
@@ -382,7 +402,9 @@ int main(int argc, char* argv[]) {
         }
 
         // Camera input runs at frame rate (not fixed timestep) for responsiveness.
-        if (gRightMouseHeld)
+        // Skip when ImGui is capturing input so widgets work without fighting
+        // the camera.
+        if (gRightMouseHeld && !gOverlayCapturing)
             CameraProcessKeyboard(gCamera, window, static_cast<float>(frame));
 
         ReloadIfChanged(gShader);
@@ -391,6 +413,11 @@ int main(int argc, char* argv[]) {
 
         const double alpha = accumulator / kFixedTimestep;
         Render(alpha);
+
+        // ImGui overlay (rendered after the scene, on top).
+        OverlayNewFrame();
+        float fps = (frame > 0.0) ? static_cast<float>(1.0 / frame) : 0.0f;
+        gOverlayCapturing = OverlayRender(gSettings, fps);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -403,6 +430,7 @@ int main(int argc, char* argv[]) {
     // -----------------------------------------------------------------------
     // Cleanup — reverse order of creation.
     // -----------------------------------------------------------------------
+    OverlayShutdown();
     for (auto& sm : gModelSubMeshes) {
         DestroyMesh(sm.mesh);
         DestroyTexture(sm.material.texture);

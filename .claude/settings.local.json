@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cmake --build --preset windows-debug)"
+      "Bash(cmake --build --preset windows-debug)",
+      "Bash(cmake --preset windows-debug)"
     ]
   }
 }
