@@ -157,13 +157,11 @@ static Material ExtractGltfMaterial(const cgltf_primitive& prim,
     return mat;
 }
 
-// Extract Material from a ufbx mesh's first material.
-static Material ExtractFbxMaterial(const ufbx_mesh* mesh,
+// Extract Material from a specific ufbx material.
+static Material ExtractFbxMaterial(const ufbx_material* fbxMat,
                                     const std::filesystem::path& modelDir) {
     Material mat;
-    if (mesh->materials.count == 0 || !mesh->materials.data[0]) return mat;
-
-    const ufbx_material* fbxMat = mesh->materials.data[0];
+    if (!fbxMat) return mat;
 
     // Base color from PBR or legacy diffuse.
     ufbx_material_map colorMap = fbxMat->pbr.base_color;
@@ -179,11 +177,20 @@ static Material ExtractFbxMaterial(const ufbx_mesh* mesh,
     }
 
     // Try to load diffuse/base color texture.
+    // Attempt relative path first, then absolute, then just the filename
+    // (FBX files often store stale absolute paths from the artist's machine).
     ufbx_texture* tex = colorMap.texture;
-    if (tex && tex->relative_filename.length > 0) {
-        mat.texture = TryLoadTexture(modelDir, tex->relative_filename.data);
-    } else if (tex && tex->filename.length > 0) {
-        mat.texture = TryLoadTexture(modelDir, tex->filename.data);
+    if (tex) {
+        if (tex->relative_filename.length > 0)
+            mat.texture = TryLoadTexture(modelDir, tex->relative_filename.data);
+
+        if (!mat.texture.id && tex->filename.length > 0)
+            mat.texture = TryLoadTexture(modelDir, tex->filename.data);
+
+        if (!mat.texture.id && tex->filename.length > 0) {
+            auto basename = std::filesystem::path(tex->filename.data).filename().string();
+            mat.texture = TryLoadTexture(modelDir, basename.c_str());
+        }
     }
 
     return mat;
@@ -324,10 +331,9 @@ static LoadedModel LoadFbx(const char* path) {
 
         size_t maxTriVerts = mesh->max_face_triangles * 3;
         std::vector<uint32_t> triIndices(maxTriVerts);
-        std::vector<float> verts;
 
-        for (size_t fi = 0; fi < mesh->faces.count; ++fi) {
-            ufbx_face face = mesh->faces.data[fi];
+        // Helper: triangulate a face and append vertices to a buffer.
+        auto triangulateFace = [&](ufbx_face face, std::vector<float>& verts) {
             size_t numTris = ufbx_triangulate_face(
                 triIndices.data(), triIndices.size(), mesh, face);
 
@@ -356,17 +362,53 @@ static LoadedModel LoadFbx(const char* path) {
                 verts.push_back(static_cast<float>(uv.x));
                 verts.push_back(static_cast<float>(uv.y));
             }
+        };
+
+        // Split mesh by material — one SubMesh per material partition.
+        // If no material_parts exist, fall back to one SubMesh for all faces.
+        size_t numParts = mesh->material_parts.count;
+
+        if (numParts == 0) {
+            // No material partitioning — single SubMesh for entire mesh.
+            std::vector<float> verts;
+            for (size_t fi = 0; fi < mesh->faces.count; ++fi)
+                triangulateFace(mesh->faces.data[fi], verts);
+
+            auto vertCount = static_cast<GLsizei>(verts.size() / 8);
+            if (vertCount == 0) continue;
+
+            SubMesh sm;
+            sm.mesh = CreateMesh(
+                verts.data(), verts.size() * sizeof(float), kModelStride,
+                kModelAttribs, kModelAttribCount, vertCount);
+            const ufbx_material* mat = (mesh->materials.count > 0)
+                ? mesh->materials.data[0] : nullptr;
+            sm.material = ExtractFbxMaterial(mat, modelDir);
+            result.subMeshes.push_back(std::move(sm));
+        } else {
+            for (size_t pi = 0; pi < numParts; ++pi) {
+                const ufbx_mesh_part& part = mesh->material_parts.data[pi];
+                if (part.num_faces == 0) continue;
+
+                std::vector<float> verts;
+                for (size_t fi = 0; fi < part.face_indices.count; ++fi) {
+                    uint32_t faceIdx = part.face_indices.data[fi];
+                    triangulateFace(mesh->faces.data[faceIdx], verts);
+                }
+
+                auto vertCount = static_cast<GLsizei>(verts.size() / 8);
+                if (vertCount == 0) continue;
+
+                SubMesh sm;
+                sm.mesh = CreateMesh(
+                    verts.data(), verts.size() * sizeof(float), kModelStride,
+                    kModelAttribs, kModelAttribCount, vertCount);
+                const ufbx_material* mat = (part.index < mesh->materials.count)
+                    ? mesh->materials.data[part.index] : nullptr;
+                sm.material = ExtractFbxMaterial(mat, modelDir);
+                result.subMeshes.push_back(std::move(sm));
+            }
         }
-
-        auto vertCount = static_cast<GLsizei>(verts.size() / 8);
-        if (vertCount == 0) continue;
-
-        SubMesh sm;
-        sm.mesh = CreateMesh(
-            verts.data(), verts.size() * sizeof(float), kModelStride,
-            kModelAttribs, kModelAttribCount, vertCount);
-        sm.material = ExtractFbxMaterial(mesh, modelDir);
-        result.subMeshes.push_back(std::move(sm));
     }
 
     ufbx_free_scene(scene);

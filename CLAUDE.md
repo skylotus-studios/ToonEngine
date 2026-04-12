@@ -31,7 +31,7 @@ src/
   transform.h/.cpp   Position/rotation/scale -> model matrix (TRS order)
   texture.h/.cpp     stb_image loading, from-file and from-memory
   material.h         Base color + texture per mesh
-  model_loader.h/.cpp  glTF (cgltf) and FBX (ufbx) loading with auto-normals
+  model_loader.h/.cpp  glTF (cgltf) and FBX (ufbx) loading, per-material splitting, auto-normals
   scene.h            Entity (name + transform + submeshes + shading mode) and Scene
   overlay.h/.cpp     ImGui debug overlay: render settings panel + entity list/inspector
 assets/shaders/
@@ -83,6 +83,9 @@ Two panels rendered after the scene each frame:
 - All dependencies via vcpkg manifest except single-header/file libs which go in `libs/`.
 - Shader hot-reload: edit any `.vert`/`.frag` while running, changes apply next frame.
 - Model loading: pass file path as argv[1]. Auto-fit normalizes to ~5 units at origin.
+- Per-mesh materials: glTF extracts per-primitive PBR base color + texture (file & embedded).
+  FBX meshes are split by `material_parts` so each material partition gets its own SubMesh.
+  Texture path resolution tries relative path, then absolute, then filename-only fallback.
 - Vertex layout for loaded models: position(vec3) + normal(vec3) + texcoord(vec2), stride 32.
 - Fixed timestep (60Hz) for simulation, variable-rate rendering. Camera input at frame rate.
 
@@ -94,9 +97,9 @@ Two panels rendered after the scene each frame:
 
 ## What's next
 
-- Per-mesh material textures from glTF/FBX (partially implemented)
 - Skeletal animation
 - Point / directional light entities (replace hardcoded light direction)
 - Shadow mapping
 - Normal-based edge detection (Sobel on normals, complementing depth edges)
 - Specular highlight band (toon-style specular lobe)
+- Normal map support (sample normal texture in toon.frag)
