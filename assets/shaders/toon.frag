@@ -10,6 +10,8 @@ in vec3 vNormal;
 in vec2 vTexCoord;
 
 uniform sampler2D uTexture;
+uniform sampler2D uNormalMap;
+uniform bool uHasNormalMap;
 uniform vec4 uBaseColor;
 
 // Toon band parameters.
@@ -91,8 +93,26 @@ float ComputeShadow() {
     return shadow / 9.0;
 }
 
+// Compute TBN from screen-space derivatives (no tangent attribute needed).
+vec3 PerturbNormal(vec3 N) {
+    vec3 dp1  = dFdx(vWorldPos);
+    vec3 dp2  = dFdy(vWorldPos);
+    vec2 duv1 = dFdx(vTexCoord);
+    vec2 duv2 = dFdy(vTexCoord);
+
+    vec3 T = normalize(dp1 * duv2.y - dp2 * duv1.y);
+    vec3 B = normalize(dp2 * duv1.x - dp1 * duv2.x);
+    mat3 TBN = mat3(T, B, N);
+
+    vec3 mapN = texture(uNormalMap, vTexCoord).rgb * 2.0 - 1.0;
+    return normalize(TBN * mapN);
+}
+
 void main() {
     vec3 normal = normalize(vNormal);
+    if (uHasNormalMap)
+        normal = PerturbNormal(normal);
+
     vec4 albedo = texture(uTexture, vTexCoord) * uBaseColor;
 
     float shadowFactor = ComputeShadow();

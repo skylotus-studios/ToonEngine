@@ -63,6 +63,7 @@ inline void DestroyScene(Scene& scene) {
         for (auto& sm : entity.subMeshes) {
             DestroyMesh(sm.mesh);
             DestroyTexture(sm.material.texture);
+            DestroyTexture(sm.material.normalMap);
         }
     }
     scene.entities.clear();

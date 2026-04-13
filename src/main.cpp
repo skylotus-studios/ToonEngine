@@ -376,10 +376,20 @@ namespace {
         glUniform1f(glGetUniformLocation(gToonShader.id, "uRimStrength"),
             gSettings.rimStrength);
 
-        GLint baseColorLoc = glGetUniformLocation(gToonShader.id, "uBaseColor");
+        GLint baseColorLoc  = glGetUniformLocation(gToonShader.id, "uBaseColor");
+        GLint hasNormalLoc  = glGetUniformLocation(gToonShader.id, "uHasNormalMap");
+        GLint normalMapLoc  = glGetUniformLocation(gToonShader.id, "uNormalMap");
         for (auto& sm : entity.subMeshes) {
             BindTexture(sm.material.texture.id ? sm.material.texture
                 : gDefaultTexture, 0);
+
+            bool hasNM = sm.material.normalMap.id != 0;
+            glUniform1i(hasNormalLoc, hasNM ? 1 : 0);
+            if (hasNM) {
+                BindTexture(sm.material.normalMap, 3);
+                glUniform1i(normalMapLoc, 3);
+            }
+
             glUniform4fv(baseColorLoc, 1, glm::value_ptr(sm.material.baseColor));
             DrawMesh(sm.mesh);
         }
@@ -738,6 +748,44 @@ int main(int argc, char* argv[]) {
         Entity e;
         e.name = "Sun";
         e.light = Light{};
+        gScene.entities.push_back(std::move(e));
+    }
+
+    // Test quad: a 2D plane with a checkerboard texture + procedural normal
+    // map.  Uses the Toon shading pipeline to verify stb_image textures,
+    // normal mapping, specular, rim, etc. on flat geometry.
+    {
+        // Unit quad: two triangles, model vertex layout (11 floats per vert).
+        // pos(3) + norm(3) + uv(2) + smoothNorm(3)
+        // Normal and smooth normal both point +Z (facing camera).
+        // clang-format off
+        float qv[] = {
+            // pos              normal          uv        smooth normal
+            -0.5f, -0.5f, 0.0f,  0,0,1,  0,0,  0,0,1,
+             0.5f, -0.5f, 0.0f,  0,0,1,  1,0,  0,0,1,
+             0.5f,  0.5f, 0.0f,  0,0,1,  1,1,  0,0,1,
+            -0.5f, -0.5f, 0.0f,  0,0,1,  0,0,  0,0,1,
+             0.5f,  0.5f, 0.0f,  0,0,1,  1,1,  0,0,1,
+            -0.5f,  0.5f, 0.0f,  0,0,1,  0,1,  0,0,1,
+        };
+        VertexAttrib qAttribs[] = {
+            {3, GL_FLOAT, 0},
+            {3, GL_FLOAT, 3  * sizeof(float)},
+            {2, GL_FLOAT, 6  * sizeof(float)},
+            {3, GL_FLOAT, 8  * sizeof(float), /*location=*/5},
+        };
+        // clang-format on
+
+        Entity e;
+        e.name    = "Test Quad";
+        e.shading = ShadingMode::Toon;
+        e.transform.position = {0.0f, 0.0f, -1.0f};
+
+        SubMesh sm;
+        sm.mesh = CreateMesh(qv, sizeof(qv), 11 * sizeof(float), qAttribs, 4, 6);
+        sm.material.texture   = CreateCheckerTexture();
+        sm.material.normalMap = CreateTestNormalMap();
+        e.subMeshes.push_back(std::move(sm));
         gScene.entities.push_back(std::move(e));
     }
 

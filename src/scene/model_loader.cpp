@@ -197,6 +197,10 @@ static Material ExtractGltfMaterial(const cgltf_primitive& prim,
         if (tv.texture && tv.texture->image)
             mat.texture = LoadGltfImage(tv.texture->image, modelDir);
     }
+    // Normal map.
+    const cgltf_texture_view& nv = prim.material->normal_texture;
+    if (nv.texture && nv.texture->image)
+        mat.normalMap = LoadGltfImage(nv.texture->image, modelDir);
     return mat;
 }
 
@@ -220,6 +224,21 @@ static Material ExtractFbxMaterial(const ufbx_material* fbxMat,
         if (!mat.texture.id && tex->filename.length > 0) {
             auto basename = std::filesystem::path(tex->filename.data).filename().string();
             mat.texture = TryLoadTexture(modelDir, basename.c_str());
+        }
+    }
+    // Normal map (PBR or legacy).
+    ufbx_material_map normalMapProp = fbxMat->pbr.normal_map;
+    if (!normalMapProp.texture)
+        normalMapProp = fbxMat->fbx.normal_map;
+    if (normalMapProp.texture) {
+        ufbx_texture* nt = normalMapProp.texture;
+        if (nt->relative_filename.length > 0)
+            mat.normalMap = TryLoadTexture(modelDir, nt->relative_filename.data);
+        if (!mat.normalMap.id && nt->filename.length > 0)
+            mat.normalMap = TryLoadTexture(modelDir, nt->filename.data);
+        if (!mat.normalMap.id && nt->filename.length > 0) {
+            auto basename = std::filesystem::path(nt->filename.data).filename().string();
+            mat.normalMap = TryLoadTexture(modelDir, basename.c_str());
         }
     }
     return mat;

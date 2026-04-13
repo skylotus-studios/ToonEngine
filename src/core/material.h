@@ -10,5 +10,6 @@
 
 struct Material {
     glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
-    Texture   texture{};  // 0 = no texture loaded, use default white
+    Texture   texture{};    // 0 = no texture loaded, use default white
+    Texture   normalMap{};  // 0 = no normal map, use vertex normal
 };

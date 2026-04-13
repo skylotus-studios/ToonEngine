@@ -17,6 +17,10 @@ struct Texture {
 // 1x1 white pixel texture used as a default when no image is loaded.
 Texture CreateWhiteTexture();
 
+// Programmatic test textures for verifying the pipeline.
+Texture CreateCheckerTexture(int size = 256, int cells = 8);
+Texture CreateTestNormalMap(int size = 256);
+
 // Load an image from raw bytes in memory (PNG, JPG, etc.) into a GL texture.
 // Used for embedded textures in glTF/glb files.
 bool LoadTextureFromMemory(Texture& tex, const unsigned char* data, int dataSize,

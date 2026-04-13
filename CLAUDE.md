@@ -33,7 +33,7 @@ src/
     overlay.h/.cpp          ImGui panels: render settings + entity inspector + anim controls
 assets/shaders/
   model.vert                Shared vertex shader (MVP + GPU skinning)
-  toon.frag                 Multi-light cel shading + CSM + specular band + shadow tint + rim
+  toon.frag                 Multi-light cel + CSM + specular + normal map + shadow tint + rim
   outline.*                 Inverted hull outlines (smooth normals, screen-space option)
   shadow.*                  Depth-only shadow map pass (with skinning)
   edge.*                    Sobel edge detection post-process (depth-based)
@@ -60,7 +60,7 @@ libs/
 - `src/` is the include root. Cross-directory includes: `"core/mesh.h"`, `"scene/scene.h"`, etc.
 - Shader hot-reload: edit `.vert`/`.frag` while running, changes apply next frame.
 - Model loading via argv[1]. Auto-fit normalizes to 1 unit at origin.
-- Per-mesh materials: glTF per-primitive PBR; FBX split by `material_parts`.
+- Per-mesh materials: base color + texture + normal map. glTF per-primitive PBR; FBX split by `material_parts`. Normal maps use derivative-based TBN (no tangent attribute needed).
 - Vertex layout: non-skinned = pos+norm+uv+smoothNorm (stride 44), skinned = +boneIds+weights (stride 76). Smooth normals at location 5 for gap-free outlines.
 - Skeletal animation: max 128 joints. Keyframe interpolation with hierarchy walk. Bind-pose local TRS as defaults for un-animated joints.
 - Cascaded shadow maps: 4 cascades, 2048x2048 per cascade (`GL_TEXTURE_2D_ARRAY`), log-linear frustum split, `sampler2DArrayShadow` with 3x3 PCF, per-cascade bias scaling. Cascade selected by view-space depth. Shadowed fragments forced to shadow band.
@@ -75,7 +75,6 @@ libs/
 
 ## What's next
 
-- Normal map support (sample normal texture in toon.frag)
 - Animation blending / crossfade between clips
 - Scene serialization (save/load entity hierarchy)
 - Ground plane / environment (sky, grid)

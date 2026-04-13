@@ -4,7 +4,9 @@
 
 #include "texture.h"
 
+#include <cmath>
 #include <cstdio>
+#include <vector>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -22,6 +24,73 @@ Texture CreateWhiteTexture() {
                  GL_RGBA, GL_UNSIGNED_BYTE, pixel);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    return tex;
+}
+
+Texture CreateCheckerTexture(int size, int cells) {
+    Texture tex{};
+    tex.width  = size;
+    tex.height = size;
+
+    std::vector<unsigned char> pixels(size * size * 4);
+    int cellSize = size / cells;
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            bool white = ((x / cellSize) + (y / cellSize)) % 2 == 0;
+            unsigned char c = white ? 220 : 50;
+            int i = (y * size + x) * 4;
+            pixels[i] = c; pixels[i+1] = c; pixels[i+2] = c; pixels[i+3] = 255;
+        }
+    }
+
+    glGenTextures(1, &tex.id);
+    glBindTexture(GL_TEXTURE_2D, tex.id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    return tex;
+}
+
+Texture CreateTestNormalMap(int size) {
+    Texture tex{};
+    tex.width  = size;
+    tex.height = size;
+
+    std::vector<unsigned char> pixels(size * size * 4);
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            // Wavy bumps via sine pattern.
+            float u = static_cast<float>(x) / size;
+            float v = static_cast<float>(y) / size;
+            float freq = 6.2832f * 4.0f;  // 4 waves
+            float nx = std::cos(u * freq) * 0.4f;
+            float ny = std::cos(v * freq) * 0.4f;
+            float nz = 1.0f;
+            // Normalize.
+            float len = std::sqrt(nx*nx + ny*ny + nz*nz);
+            nx /= len; ny /= len; nz /= len;
+            // Encode to [0,255]: normal * 0.5 + 0.5 → [0,1] → [0,255]
+            int i = (y * size + x) * 4;
+            pixels[i]   = static_cast<unsigned char>((nx * 0.5f + 0.5f) * 255.0f);
+            pixels[i+1] = static_cast<unsigned char>((ny * 0.5f + 0.5f) * 255.0f);
+            pixels[i+2] = static_cast<unsigned char>((nz * 0.5f + 0.5f) * 255.0f);
+            pixels[i+3] = 255;
+        }
+    }
+
+    glGenTextures(1, &tex.id);
+    glBindTexture(GL_TEXTURE_2D, tex.id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     return tex;
 }
 
