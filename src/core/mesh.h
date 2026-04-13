@@ -19,6 +19,7 @@ struct VertexAttrib {
     GLint  components;
     GLenum type;
     size_t offset;
+    GLint  location = -1;  // -1 = use array index, >= 0 = explicit GL location
 };
 
 struct Mesh {

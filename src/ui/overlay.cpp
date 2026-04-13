@@ -77,6 +77,7 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
     if (ImGui::CollapsingHeader("Outlines", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Hull Width", &s.outlineWidth, 0.0f, 2.0f);
         ImGui::ColorEdit4("Hull Color", &s.outlineColor.x);
+        ImGui::Checkbox("Even Thickness", &s.outlineScreenSpace);
     }
 
     if (ImGui::CollapsingHeader("Edge Detection", ImGuiTreeNodeFlags_DefaultOpen)) {

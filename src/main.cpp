@@ -318,6 +318,10 @@ namespace {
             gSettings.outlineWidth);
         glUniform4fv(glGetUniformLocation(gOutlineShader.id, "uOutlineColor"),
             1, glm::value_ptr(gSettings.outlineColor));
+        glUniform1i(glGetUniformLocation(gOutlineShader.id, "uScreenSpace"),
+            gSettings.outlineScreenSpace ? 1 : 0);
+        glUniform2f(glGetUniformLocation(gOutlineShader.id, "uViewportSize"),
+            static_cast<float>(gFramebufferW), static_cast<float>(gFramebufferH));
         glUniform1i(glGetUniformLocation(gOutlineShader.id, "uSkinned"),
             doSkin ? 1 : 0);
         if (doSkin && !entity.animator.jointMatrices.empty()) {

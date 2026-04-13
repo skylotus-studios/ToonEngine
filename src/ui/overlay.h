@@ -32,6 +32,7 @@ struct RenderSettings {
     // Outlines (inverted hull).
     float     outlineWidth = 0.755f;
     glm::vec4 outlineColor{0.05f, 0.05f, 0.05f, 1.0f};
+    bool      outlineScreenSpace = false;
 
     // Sobel edge detection (post-process).
     bool      edgeEnabled   = true;

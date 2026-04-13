@@ -42,33 +42,87 @@
 // Vertex layouts.
 // ---------------------------------------------------------------------------
 
-// Non-skinned: pos(3) + norm(3) + uv(2) = 8 floats, stride 32.
-static constexpr int kStride     = 8 * static_cast<int>(sizeof(float));
-static constexpr int kFloatsPerV = 8;
+// Non-skinned: pos(3) + norm(3) + uv(2) + smoothNorm(3) = 11 floats, stride 44.
+// Smooth normal at location 5 (skipping bone locations 3,4).
+static constexpr int kStride     = 11 * static_cast<int>(sizeof(float));
+static constexpr int kFloatsPerV = 11;
+static constexpr int kSmoothNormOffset = 8;   // float index within vertex
 static const VertexAttrib kAttribs[] = {
     {3, GL_FLOAT, 0},
-    {3, GL_FLOAT, 3 * sizeof(float)},
-    {2, GL_FLOAT, 6 * sizeof(float)},
+    {3, GL_FLOAT, 3  * sizeof(float)},
+    {2, GL_FLOAT, 6  * sizeof(float)},
+    {3, GL_FLOAT, 8  * sizeof(float), /*location=*/5},  // smooth normal
 };
-static constexpr int kAttribCount = 3;
+static constexpr int kAttribCount = 4;
 
-// Skinned: pos(3) + norm(3) + uv(2) + boneIds(4) + weights(4) = 16 floats, stride 64.
-static constexpr int kSkinStride     = 16 * static_cast<int>(sizeof(float));
-static constexpr int kSkinFloatsPerV = 16;
+// Skinned: pos(3) + norm(3) + uv(2) + boneIds(4) + weights(4) + smoothNorm(3) = 19 floats, stride 76.
+static constexpr int kSkinStride     = 19 * static_cast<int>(sizeof(float));
+static constexpr int kSkinFloatsPerV = 19;
+static constexpr int kSkinSmoothNormOffset = 16;
 static const VertexAttrib kSkinAttribs[] = {
     {3, GL_FLOAT, 0},
     {3, GL_FLOAT, 3  * sizeof(float)},
     {2, GL_FLOAT, 6  * sizeof(float)},
-    {4, GL_FLOAT, 8  * sizeof(float)},   // bone IDs (as float, cast in shader)
-    {4, GL_FLOAT, 12 * sizeof(float)},   // bone weights
+    {4, GL_FLOAT, 8  * sizeof(float)},                   // bone IDs
+    {4, GL_FLOAT, 12 * sizeof(float)},                   // bone weights
+    {3, GL_FLOAT, 16 * sizeof(float), /*location=*/5},   // smooth normal
 };
-static constexpr int kSkinAttribCount = 5;
+static constexpr int kSkinAttribCount = 6;
 
 static constexpr float kFloatMax = std::numeric_limits<float>::max();
 
 static void ExpandBounds(glm::vec3& bmin, glm::vec3& bmax, float x, float y, float z) {
     bmin.x = std::min(bmin.x, x); bmin.y = std::min(bmin.y, y); bmin.z = std::min(bmin.z, z);
     bmax.x = std::max(bmax.x, x); bmax.y = std::max(bmax.y, y); bmax.z = std::max(bmax.z, z);
+}
+
+// Compute smooth (averaged-per-position) normals for outline extrusion.
+// At hard edges, adjacent faces have different shading normals — extruding
+// along those creates gaps.  Smooth normals average all shading normals
+// that share the same vertex position, giving a continuous extrusion.
+static void ComputeSmoothNormals(float* verts, size_t vertCount, int stride,
+                                  int smoothOffset) {
+    // Group vertex indices by quantized position.
+    struct PosKey {
+        int64_t x, y, z;
+        bool operator==(const PosKey& o) const { return x==o.x && y==o.y && z==o.z; }
+    };
+    struct PosHash {
+        size_t operator()(const PosKey& k) const {
+            size_t h = 0;
+            h ^= std::hash<int64_t>()(k.x) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int64_t>()(k.y) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int64_t>()(k.z) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    std::unordered_map<PosKey, std::vector<size_t>, PosHash> groups;
+    for (size_t i = 0; i < vertCount; ++i) {
+        float* v = &verts[i * stride];
+        PosKey key{
+            static_cast<int64_t>(std::round(static_cast<double>(v[0]) * 10000.0)),
+            static_cast<int64_t>(std::round(static_cast<double>(v[1]) * 10000.0)),
+            static_cast<int64_t>(std::round(static_cast<double>(v[2]) * 10000.0))
+        };
+        groups[key].push_back(i);
+    }
+
+    for (auto& [key, indices] : groups) {
+        glm::vec3 avg(0.0f);
+        for (size_t idx : indices) {
+            float* n = &verts[idx * stride + 3];  // shading normal at offset 3
+            avg += glm::vec3(n[0], n[1], n[2]);
+        }
+        float len = glm::length(avg);
+        if (len > 1e-6f) avg /= len;
+        else avg = glm::vec3(0.0f, 1.0f, 0.0f);
+
+        for (size_t idx : indices) {
+            float* sn = &verts[idx * stride + smoothOffset];
+            sn[0] = avg.x; sn[1] = avg.y; sn[2] = avg.z;
+        }
+    }
 }
 
 // Generate smooth normals by accumulating face normals per-vertex.
@@ -415,6 +469,9 @@ static LoadedModel LoadGltf(const char* path) {
                                 indices.empty() ? nullptr : indices.data(), indices.size());
             }
 
+            int snOff = skinned ? kSkinSmoothNormOffset : kSmoothNormOffset;
+            ComputeSmoothNormals(verts.data(), vertCount, fpv, snOff);
+
             SubMesh sm;
             sm.mesh = CreateMesh(
                 verts.data(), verts.size() * sizeof(float),
@@ -620,7 +677,6 @@ static LoadedModel LoadFbx(const char* path) {
                 verts.push_back(static_cast<float>(uv.y));
 
                 if (skinned) {
-                    // Gather bone indices and weights for this vertex.
                     float ids[4]  = {0, 0, 0, 0};
                     float wts[4]  = {1, 0, 0, 0};
                     uint32_t vertIdx = mesh->vertex_indices.data[idx];
@@ -630,13 +686,11 @@ static LoadedModel LoadFbx(const char* path) {
                         float wSum = 0.0f;
                         for (int w = 0; w < count; ++w) {
                             const ufbx_skin_weight& sw = meshSkin->weights.data[sv.weight_begin + w];
-                            // Map cluster index to our joint index.
                             auto it = boneMap.find(meshSkin->clusters.data[sw.cluster_index]->bone_node);
                             ids[w] = (it != boneMap.end()) ? static_cast<float>(it->second) : 0.0f;
                             wts[w] = static_cast<float>(sw.weight);
                             wSum += wts[w];
                         }
-                        // Normalize weights.
                         if (wSum > 0.0f) {
                             for (int w = 0; w < 4; ++w) wts[w] /= wSum;
                         } else {
@@ -646,6 +700,9 @@ static LoadedModel LoadFbx(const char* path) {
                     for (int w = 0; w < 4; ++w) verts.push_back(ids[w]);
                     for (int w = 0; w < 4; ++w) verts.push_back(wts[w]);
                 }
+
+                // Placeholder for smooth normal (computed after all verts are in).
+                verts.push_back(0.0f); verts.push_back(0.0f); verts.push_back(0.0f);
             }
         };
 
@@ -656,6 +713,8 @@ static LoadedModel LoadFbx(const char* path) {
                 triangulateFace(mesh->faces.data[fi], verts);
             auto vertCount = static_cast<GLsizei>(verts.size() / fpv);
             if (vertCount == 0) continue;
+            int snOff = skinned ? kSkinSmoothNormOffset : kSmoothNormOffset;
+            ComputeSmoothNormals(verts.data(), vertCount, fpv, snOff);
             SubMesh sm;
             sm.mesh = CreateMesh(verts.data(), verts.size() * sizeof(float),
                                  skinned ? kSkinStride : kStride,
@@ -673,6 +732,8 @@ static LoadedModel LoadFbx(const char* path) {
                     triangulateFace(mesh->faces.data[part.face_indices.data[fi]], verts);
                 auto vertCount = static_cast<GLsizei>(verts.size() / fpv);
                 if (vertCount == 0) continue;
+                int snOff2 = skinned ? kSkinSmoothNormOffset : kSmoothNormOffset;
+                ComputeSmoothNormals(verts.data(), vertCount, fpv, snOff2);
                 SubMesh sm;
                 sm.mesh = CreateMesh(verts.data(), verts.size() * sizeof(float),
                                      skinned ? kSkinStride : kStride,

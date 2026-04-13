@@ -21,12 +21,14 @@ Mesh CreateMesh(const void* vertices, size_t verticesSize, GLsizei stride,
     glBufferData(GL_ARRAY_BUFFER,
                  static_cast<GLsizeiptr>(verticesSize), vertices, GL_STATIC_DRAW);
 
-    // Configure each attribute: location i maps to attribs[i].
+    // Configure each attribute. Uses explicit location if set, else array index.
     for (GLuint i = 0; i < static_cast<GLuint>(attribCount); ++i) {
-        glVertexAttribPointer(i, attribs[i].components, attribs[i].type,
+        GLuint loc = (attribs[i].location >= 0)
+            ? static_cast<GLuint>(attribs[i].location) : i;
+        glVertexAttribPointer(loc, attribs[i].components, attribs[i].type,
                               GL_FALSE, stride,
                               reinterpret_cast<const void*>(attribs[i].offset));
-        glEnableVertexAttribArray(i);
+        glEnableVertexAttribArray(loc);
     }
 
     // Optional index buffer — stays bound to this VAO.
