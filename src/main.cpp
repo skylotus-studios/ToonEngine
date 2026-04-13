@@ -18,13 +18,16 @@
 #include "scene/scene.h"
 #include "ui/overlay.h"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -32,6 +35,7 @@
 // ---------------------------------------------------------------------------
 namespace {
 
+    constexpr float  kFloatMax = std::numeric_limits<float>::max();
     constexpr int    kWindowWidth = 3840;
     constexpr int    kWindowHeight = 2160;
     constexpr char   kWindowTitle[] = "ToonEngine";
@@ -52,6 +56,15 @@ namespace {
     GLuint gFullscreenVAO = 0;
     int    gFBOWidth   = 0;
     int    gFBOHeight  = 0;
+
+    // Cascaded shadow mapping.
+    ShaderProgram gShadowShader{};
+    GLuint gShadowFBO    = 0;
+    GLuint gShadowMap    = 0;  // GL_TEXTURE_2D_ARRAY (one layer per cascade)
+    constexpr int kShadowMapSize = 2048;
+    constexpr int kCascadeCount  = 4;
+    glm::mat4 gCascadeMatrices[kCascadeCount]{};
+    float     gCascadeSplits[kCascadeCount]{};
 
     Scene          gScene{};
     RenderSettings gSettings{};
@@ -109,6 +122,37 @@ namespace {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         gFBOWidth  = w;
         gFBOHeight = h;
+    }
+
+    void CreateShadowFBO() {
+        if (gShadowFBO) return;
+
+        glGenTextures(1, &gShadowMap);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, gShadowMap);
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT32F,
+                     kShadowMapSize, kShadowMapSize, kCascadeCount,
+                     0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        float borderColor[] = {1.0f, 1.0f, 1.0f, 1.0f};
+        glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+
+        glGenFramebuffers(1, &gShadowFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, gShadowFBO);
+        // Attach layer 0 initially; we re-attach per-cascade in the render loop.
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                  gShadowMap, 0, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::fprintf(stderr, "Shadow FBO incomplete\n");
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
     // -----------------------------------------------------------------------
@@ -278,6 +322,27 @@ namespace {
         }
 
         UploadLights(gToonShader.id);
+
+        // Cascaded shadow maps.
+        bool shadowOn = gSettings.shadowEnabled && gShadowMap;
+        glUniform1i(glGetUniformLocation(gToonShader.id, "uShadowEnabled"),
+            shadowOn ? 1 : 0);
+        if (shadowOn) {
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, gShadowMap);
+            glUniform1i(glGetUniformLocation(gToonShader.id, "uShadowMap"), 2);
+            glUniform1i(glGetUniformLocation(gToonShader.id, "uCascadeCount"), kCascadeCount);
+            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uLightSpaceMatrices"),
+                kCascadeCount, GL_FALSE, glm::value_ptr(gCascadeMatrices[0]));
+            glUniform1fv(glGetUniformLocation(gToonShader.id, "uCascadeSplits"),
+                kCascadeCount, gCascadeSplits);
+            glUniform1f(glGetUniformLocation(gToonShader.id, "uShadowBias"),
+                gSettings.shadowBias);
+            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uViewMatrix"),
+                1, GL_FALSE, glm::value_ptr(CameraViewMatrix(gCamera)));
+            glActiveTexture(GL_TEXTURE0);
+        }
+
         glUniform1f(glGetUniformLocation(gToonShader.id, "uBandHigh"),
             gSettings.bandThresholdHigh);
         glUniform1f(glGetUniformLocation(gToonShader.id, "uBandLow"),
@@ -338,7 +403,145 @@ namespace {
         glDisable(GL_CULL_FACE);
     }
 
+    // Compute cascade frustum splits and per-cascade light-space matrices.
+    void ComputeCascades(const glm::vec3& lightDir, float aspect) {
+        float near = gCamera.nearPlane;
+        float far  = std::min(gCamera.farPlane, gSettings.shadowDistance);
+        constexpr float kLambda = 0.5f;  // log-linear blend
+
+        // Split distances (practical split scheme).
+        float splits[kCascadeCount + 1];
+        splits[0] = near;
+        for (int i = 1; i <= kCascadeCount; ++i) {
+            float f = static_cast<float>(i) / kCascadeCount;
+            float logS = near * std::pow(far / near, f);
+            float linS = near + f * (far - near);
+            splits[i] = kLambda * logS + (1.0f - kLambda) * linS;
+        }
+        for (int i = 0; i < kCascadeCount; ++i)
+            gCascadeSplits[i] = splits[i + 1];
+
+        glm::mat4 camView = CameraViewMatrix(gCamera);
+        glm::vec3 up = (std::abs(lightDir.y) > 0.99f)
+            ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+
+        for (int c = 0; c < kCascadeCount; ++c) {
+            // Build a projection for this cascade's sub-frustum.
+            glm::mat4 proj = glm::perspective(
+                glm::radians(gCamera.fovY), aspect, splits[c], splits[c + 1]);
+            glm::mat4 invVP = glm::inverse(proj * camView);
+
+            // Unproject 8 NDC corners to world space.
+            glm::vec3 corners[8];
+            int idx = 0;
+            for (int x = 0; x <= 1; ++x)
+                for (int y = 0; y <= 1; ++y)
+                    for (int z = 0; z <= 1; ++z) {
+                        glm::vec4 ndc(x*2.0f-1.0f, y*2.0f-1.0f, z*2.0f-1.0f, 1.0f);
+                        glm::vec4 w = invVP * ndc;
+                        corners[idx++] = glm::vec3(w) / w.w;
+                    }
+
+            // Frustum center.
+            glm::vec3 center(0.0f);
+            for (int i = 0; i < 8; ++i) center += corners[i];
+            center /= 8.0f;
+
+            // Light view matrix looking at center from the light direction.
+            glm::mat4 lightView = glm::lookAt(
+                center + glm::normalize(lightDir) * 10.0f, center, up);
+
+            // AABB of frustum in light space -> ortho bounds.
+            float minX = kFloatMax, maxX = -kFloatMax;
+            float minY = kFloatMax, maxY = -kFloatMax;
+            float minZ = kFloatMax, maxZ = -kFloatMax;
+            for (int i = 0; i < 8; ++i) {
+                glm::vec4 lc = lightView * glm::vec4(corners[i], 1.0f);
+                minX = std::min(minX, lc.x); maxX = std::max(maxX, lc.x);
+                minY = std::min(minY, lc.y); maxY = std::max(maxY, lc.y);
+                minZ = std::min(minZ, lc.z); maxZ = std::max(maxZ, lc.z);
+            }
+
+            // In light view space, objects in front of the light are at
+            // negative Z.  glm::ortho(l,r,b,t,near,far) clips to the range
+            // [-far, -near], so we negate and expand to catch shadow casters
+            // that are outside the camera frustum but between it and the light.
+            float nearClip = -maxZ;
+            float farClip  = -minZ;
+            // Expand far to capture casters behind the frustum.
+            farClip = std::max(farClip, nearClip + 1.0f);
+            farClip += 20.0f;
+            if (nearClip > 0.1f) nearClip = 0.1f;
+
+            gCascadeMatrices[c] = glm::ortho(minX, maxX, minY, maxY, nearClip, farClip)
+                                * lightView;
+        }
+    }
+
+    void RenderShadowPass(float aspect) {
+        glm::vec3 lightDir{0.3f, 1.0f, 0.5f};
+        for (auto& e : gScene.entities) {
+            if (e.light && e.light->type == LightType::Directional) {
+                lightDir = e.light->direction;
+                break;
+            }
+        }
+        lightDir = glm::normalize(lightDir);
+
+        ComputeCascades(lightDir, aspect);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, gShadowFBO);
+        glViewport(0, 0, kShadowMapSize, kShadowMapSize);
+        glUseProgram(gShadowShader.id);
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_FRONT);
+
+        for (int c = 0; c < kCascadeCount; ++c) {
+            // Attach this cascade's layer.
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                      gShadowMap, 0, c);
+            glClear(GL_DEPTH_BUFFER_BIT);
+
+            for (auto& entity : gScene.entities) {
+                if (entity.light || entity.subMeshes.empty()) continue;
+                if (entity.shading != ShadingMode::Toon) continue;
+
+                glm::mat4 model = TransformMatrix(entity.transform);
+                glm::mat4 lightMVP = gCascadeMatrices[c] * model;
+                glUniformMatrix4fv(glGetUniformLocation(gShadowShader.id, "uLightMVP"),
+                    1, GL_FALSE, glm::value_ptr(lightMVP));
+
+                bool doSkin = entity.skinned && !gSettings.debugDisableSkinning;
+                glUniform1i(glGetUniformLocation(gShadowShader.id, "uSkinned"),
+                    doSkin ? 1 : 0);
+                if (doSkin && !entity.animator.jointMatrices.empty()) {
+                    int count = std::min(static_cast<int>(entity.animator.jointMatrices.size()),
+                                         kMaxJoints);
+                    glUniformMatrix4fv(glGetUniformLocation(gShadowShader.id, "uJoints"),
+                        count, GL_FALSE,
+                        glm::value_ptr(entity.animator.jointMatrices[0]));
+                }
+
+                for (auto& sm : entity.subMeshes)
+                    DrawMesh(sm.mesh);
+            }
+        }
+
+        glCullFace(GL_BACK);
+        glDisable(GL_CULL_FACE);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, gFramebufferW, gFramebufferH);
+    }
+
     void Render(double /*alpha*/) {
+        float aspect = (gFramebufferH > 0)
+            ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
+            : 1.0f;
+
+        // Shadow pass (before scene).
+        if (gSettings.shadowEnabled && gShadowShader.id && gShadowFBO)
+            RenderShadowPass(aspect);
+
         bool postProcess = gSettings.edgeEnabled && gEdgeShader.id && gFBO;
 
         if (postProcess)
@@ -348,9 +551,6 @@ namespace {
                      gSettings.clearColor.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        float aspect = (gFramebufferH > 0)
-            ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
-            : 1.0f;
         glm::mat4 vp = CameraProjectionMatrix(gCamera, aspect)
             * CameraViewMatrix(gCamera);
 
@@ -545,6 +745,12 @@ int main(int argc, char* argv[]) {
         "assets/shaders/edge.frag")) {
         std::fprintf(stderr, "Failed to load edge shaders\n");
     }
+    if (!LoadShader(gShadowShader, "assets/shaders/shadow.vert",
+        "assets/shaders/shadow.frag")) {
+        std::fprintf(stderr, "Failed to load shadow shaders\n");
+    }
+
+    CreateShadowFBO();
 
     // Fullscreen triangle VAO (attributeless — positions from gl_VertexID).
     glGenVertexArrays(1, &gFullscreenVAO);
@@ -624,6 +830,7 @@ int main(int argc, char* argv[]) {
         ReloadIfChanged(gToonShader);
         ReloadIfChanged(gOutlineShader);
         ReloadIfChanged(gEdgeShader);
+        ReloadIfChanged(gShadowShader);
 
         const double alpha = accumulator / kFixedTimestep;
         Render(alpha);
@@ -650,6 +857,9 @@ int main(int argc, char* argv[]) {
     if (gColorTex)      glDeleteTextures(1, &gColorTex);
     if (gDepthTex)      glDeleteTextures(1, &gDepthTex);
     if (gFullscreenVAO) glDeleteVertexArrays(1, &gFullscreenVAO);
+    if (gShadowFBO) glDeleteFramebuffers(1, &gShadowFBO);
+    if (gShadowMap) glDeleteTextures(1, &gShadowMap);
+    DestroyShader(gShadowShader);
     DestroyShader(gEdgeShader);
     DestroyShader(gOutlineShader);
     DestroyShader(gToonShader);

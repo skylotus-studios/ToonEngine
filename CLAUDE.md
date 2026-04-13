@@ -16,9 +16,9 @@ cmake --build --preset windows-debug
 
 ```
 src/
-  main.cpp                  Entry point, GLFW window, game loop, FBO, render dispatch
+  main.cpp                  Entry point, GLFW window, game loop, FBO, shadow pass, render dispatch
   core/                     Low-level GPU abstractions
-    mesh.h/.cpp             VAO/VBO/EBO, flexible vertex layouts
+    mesh.h/.cpp             VAO/VBO/EBO, flexible vertex layouts (explicit location support)
     shader.h/.cpp           Compile/link from files, hot-reload via timestamps
     texture.h/.cpp          stb_image loading (file + memory), GL texture management
     material.h              Base color (vec4) + optional texture per sub-mesh
@@ -26,18 +26,18 @@ src/
     animation.h             Joint, Skeleton, AnimationClip, keyframe types
     animator.h/.cpp         Playback, keyframe interpolation, joint matrix computation
   scene/                    Scene graph and asset loading
-    scene.h                 Entity (transform, meshes, skeleton, animator, light), Scene
+    scene.h                 Entity (meshes, skeleton, light, animator), Scene, Light types
     camera.h/.cpp           FPS fly camera (right-click + WASD)
-    model_loader.h/.cpp     glTF (cgltf) + FBX (ufbx), skinning, skeleton, animations
+    model_loader.h/.cpp     glTF + FBX: meshes, materials, skinning, skeleton, animations
   ui/                       Debug tooling
-    overlay.h/.cpp          ImGui panels: render settings + entity list/inspector + anim controls
+    overlay.h/.cpp          ImGui panels: render settings + entity inspector + anim controls
 assets/shaders/
-  model.vert                Shared vertex shader (MVP + GPU skinning via uJoints[128])
-  toon.frag                 Multi-light cel shading + shadow tint + rim lighting
-  outline.*                 Inverted hull outlines (with skinning support)
+  model.vert                Shared vertex shader (MVP + GPU skinning)
+  toon.frag                 Multi-light cel shading + shadow map + shadow tint + rim
+  outline.*                 Inverted hull outlines (smooth normals, screen-space option)
+  shadow.*                  Depth-only shadow map pass (with skinning)
   edge.*                    Sobel edge detection post-process (depth-based)
   triangle.*                Vertex-colored demo geometry
-  model.frag                Plain diffuse fallback
 libs/
   cgltf/                    Single-header glTF 2.0 loader
   ufbx/                     Single-file FBX loader
@@ -45,25 +45,26 @@ libs/
 
 ## Render pipeline
 
-Scene renders to an FBO when Sobel edge detection is on, otherwise straight to screen.
-
-1. **Scene pass** -- iterates `Scene::entities`, dispatches by `ShadingMode`:
+1. **Shadow pass** -- 4-cascade CSM from the first directional light. Each cascade renders depth into a layer of a `GL_TEXTURE_2D_ARRAY` (2048x2048 per layer). Frustum split uses log-linear blend. Front-face culling to reduce acne. Supports skinned meshes.
+2. **Scene pass** (to FBO if Sobel enabled, else to screen):
    - *VertexColor*: `triangle.*` shaders
-   - *Toon*: front faces with `toon.frag` (multi-light cel + rim + shadow tint), back faces with `outline.*`
-   - Light entities (directional/point) are gathered and uploaded as uniform arrays (max 8)
-   - Skinned entities upload `uJoints[]` and set `uSkinned=true` for GPU skinning
-2. **Post-process** (optional) -- fullscreen Sobel on linearized depth via `edge.*`
-3. **ImGui overlay** -- render settings, entity inspector, animation controls
+   - *Toon*: front faces with `toon.frag` (multi-light cel + CSM + rim), back faces with `outline.*`
+   - Light entities (directional/point, max 8) uploaded as uniform arrays
+   - Skinned entities upload `uJoints[]` for GPU skinning
+3. **Post-process** (optional) -- Sobel on linearized depth via `edge.*`
+4. **ImGui overlay**
 
 ## Conventions
 
 - Target-based CMake only. Dependencies via vcpkg manifest; single-header libs in `libs/`.
-- `src/` is the include root. Cross-directory includes use `"core/mesh.h"`, `"scene/scene.h"`, etc.
+- `src/` is the include root. Cross-directory includes: `"core/mesh.h"`, `"scene/scene.h"`, etc.
 - Shader hot-reload: edit `.vert`/`.frag` while running, changes apply next frame.
 - Model loading via argv[1]. Auto-fit normalizes to 1 unit at origin.
 - Per-mesh materials: glTF per-primitive PBR; FBX split by `material_parts`.
-- Vertex layout: non-skinned = pos+norm+uv (stride 32), skinned = +boneIds+weights (stride 64).
-- Skeletal animation: max 128 joints (uniform array). Keyframe interpolation (lerp/slerp) with hierarchy walk. glTF reads JOINTS_0/WEIGHTS_0 accessors; FBX uses ufbx bake API.
+- Vertex layout: non-skinned = pos+norm+uv+smoothNorm (stride 44), skinned = +boneIds+weights (stride 76). Smooth normals at location 5 for gap-free outlines.
+- Skeletal animation: max 128 joints. Keyframe interpolation with hierarchy walk. Bind-pose local TRS as defaults for un-animated joints.
+- Cascaded shadow maps: 4 cascades, 2048x2048 per cascade (`GL_TEXTURE_2D_ARRAY`), log-linear frustum split, `sampler2DArrayShadow` with 3x3 PCF, per-cascade bias scaling. Cascade selected by view-space depth. Shadowed fragments forced to shadow band.
+- glTF textures loaded with flipY=false (matches glTF UV convention).
 - Fixed timestep (60 Hz) for simulation, variable-rate rendering.
 
 ## Constraints
@@ -74,8 +75,11 @@ Scene renders to an FBO when Sobel edge detection is on, otherwise straight to s
 
 ## What's next
 
-- Shadow mapping
-- Normal-based edge detection (Sobel on normals, complementing depth edges)
 - Specular highlight band (toon-style specular lobe)
 - Normal map support (sample normal texture in toon.frag)
+- Normal-based edge detection (Sobel on normals, complementing depth edges)
 - Animation blending / crossfade between clips
+- Scene serialization (save/load entity hierarchy)
+- Ground plane / environment (sky, grid)
+- Audio system
+- Physics / collision detection

@@ -34,6 +34,11 @@ struct RenderSettings {
     glm::vec4 outlineColor{0.05f, 0.05f, 0.05f, 1.0f};
     bool      outlineScreenSpace = false;
 
+    // Cascaded shadow mapping.
+    bool  shadowEnabled  = true;
+    float shadowBias     = 0.002f;
+    float shadowDistance  = 20.0f;
+
     // Sobel edge detection (post-process).
     bool      edgeEnabled   = true;
     glm::vec3 edgeColor{0.0f, 0.0f, 0.0f};

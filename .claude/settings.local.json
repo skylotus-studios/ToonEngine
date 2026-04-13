@@ -8,7 +8,8 @@
       "Bash(curl -L -o assets/models/fox.glb \"https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Fox/glTF-Binary/Fox.glb\")",
       "Bash(taskkill //F //IM ToonEngine.exe)",
       "Bash(timeout 3 ./build/windows-debug/ToonEngine.exe assets/models/fox.glb)",
-      "Bash(timeout 3 ./build/windows-debug/ToonEngine.exe assets/models/dragon.gltf)"
+      "Bash(timeout 3 ./build/windows-debug/ToonEngine.exe assets/models/dragon.gltf)",
+      "WebFetch(domain:learnopengl.com)"
     ]
   }
 }

@@ -80,6 +80,13 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
         ImGui::Checkbox("Even Thickness", &s.outlineScreenSpace);
     }
 
+    if (ImGui::CollapsingHeader("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Enabled##shadow", &s.shadowEnabled);
+        ImGui::SliderFloat("Bias", &s.shadowBias, 0.0f, 0.01f, "%.4f");
+        ImGui::SliderFloat("Distance", &s.shadowDistance, 1.0f, 100.0f);
+        ImGui::Text("4 cascades, 2048x2048");
+    }
+
     if (ImGui::CollapsingHeader("Edge Detection", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Enabled", &s.edgeEnabled);
         ImGui::ColorEdit3("Edge Color", &s.edgeColor.x);
