@@ -68,6 +68,13 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
         ImGui::ColorEdit3("Shadow Tint", &s.shadowTint.x);
     }
 
+    if (ImGui::CollapsingHeader("Specular", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::ColorEdit3("Spec Color", &s.specColor.x);
+        ImGui::SliderFloat("Threshold", &s.specThreshold, 0.5f, 1.0f);
+        ImGui::SliderFloat("Strength", &s.specStrength, 0.0f, 2.0f);
+        ImGui::SliderFloat("Shininess", &s.specShininess, 2.0f, 128.0f);
+    }
+
     if (ImGui::CollapsingHeader("Rim Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::ColorEdit3("Rim Color", &s.rimColor.x);
         ImGui::SliderFloat("Rim Power", &s.rimPower, 0.5f, 10.0f);
@@ -156,7 +163,7 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
             ImGui::Text("Shading: %s", ShadingModeLabel(e.shading));
 
             int meshCount = 0;
-            int triCount  = 0;
+            int triCount = 0;
             for (auto& sm : e.subMeshes) {
                 ++meshCount;
                 int n = sm.mesh.indexCount > 0 ? sm.mesh.indexCount : sm.mesh.vertexCount;
@@ -174,8 +181,8 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
         if (e.skinned && !e.clips.empty()) {
             ImGui::Separator();
             ImGui::Text("Joints: %d  |  Clips: %d",
-                        static_cast<int>(e.skeleton.joints.size()),
-                        static_cast<int>(e.clips.size()));
+                static_cast<int>(e.skeleton.joints.size()),
+                static_cast<int>(e.clips.size()));
 
             // Clip selector.
             const char* currentName = (e.animator.clipIndex >= 0 &&

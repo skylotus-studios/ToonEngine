@@ -356,6 +356,16 @@ namespace {
         glUniform3fv(glGetUniformLocation(gToonShader.id, "uShadowTint"),
             1, glm::value_ptr(gSettings.shadowTint));
 
+        // Specular highlight band.
+        glUniform3fv(glGetUniformLocation(gToonShader.id, "uSpecColor"),
+            1, glm::value_ptr(gSettings.specColor));
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uSpecThreshold"),
+            gSettings.specThreshold);
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uSpecStrength"),
+            gSettings.specStrength);
+        glUniform1f(glGetUniformLocation(gToonShader.id, "uSpecShininess"),
+            gSettings.specShininess);
+
         // Rim lighting.
         glUniform3fv(glGetUniformLocation(gToonShader.id, "uViewPos"),
             1, glm::value_ptr(gCamera.position));

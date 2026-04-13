@@ -39,6 +39,12 @@ uniform float                uCascadeSplits[MAX_CASCADES];
 uniform float                uShadowBias;
 uniform mat4                 uViewMatrix;
 
+// Specular highlight band (toon-style Blinn-Phong).
+uniform vec3  uSpecColor;
+uniform float uSpecThreshold;  // NdotH^shininess cutoff for hard step
+uniform float uSpecStrength;
+uniform float uSpecShininess;
+
 // Rim lighting.
 uniform vec3  uViewPos;
 uniform vec3  uRimColor;
@@ -123,6 +129,17 @@ void main() {
 
         lit += albedo.rgb * tint * band * uLightColor[i]
              * uLightIntensity[i] * atten;
+
+        // Toon specular: Blinn-Phong half-vector, hard-stepped.
+        if (uSpecStrength > 0.0 && NdotL > uBandLow) {
+            vec3 viewDir = normalize(uViewPos - vWorldPos);
+            vec3 halfDir = normalize(lightDir + viewDir);
+            float NdotH  = max(dot(normal, halfDir), 0.0);
+            float spec   = pow(NdotH, uSpecShininess);
+            float mask   = smoothstep(uSpecThreshold - 0.02, uSpecThreshold, spec);
+            lit += uSpecColor * mask * uSpecStrength
+                 * uLightColor[i] * uLightIntensity[i] * atten;
+        }
     }
 
     // Fallback: no lights.

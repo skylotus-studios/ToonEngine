@@ -24,6 +24,12 @@ struct RenderSettings {
     // Shadow color ramp — multiplied into shadow/mid bands.
     glm::vec3 shadowTint{1.0f, 1.0f, 1.0f};
 
+    // Specular highlight band.
+    glm::vec3 specColor{1.0f, 1.0f, 1.0f};
+    float     specThreshold = 0.9f;   // NdotH cutoff for the hard highlight
+    float     specStrength  = 0.5f;
+    float     specShininess = 32.0f;  // Blinn-Phong exponent (controls blob size)
+
     // Rim lighting.
     glm::vec3 rimColor{1.0f, 1.0f, 1.0f};
     float     rimPower    = 3.0f;

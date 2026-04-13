@@ -33,7 +33,7 @@ src/
     overlay.h/.cpp          ImGui panels: render settings + entity inspector + anim controls
 assets/shaders/
   model.vert                Shared vertex shader (MVP + GPU skinning)
-  toon.frag                 Multi-light cel shading + shadow map + shadow tint + rim
+  toon.frag                 Multi-light cel shading + CSM + specular band + shadow tint + rim
   outline.*                 Inverted hull outlines (smooth normals, screen-space option)
   shadow.*                  Depth-only shadow map pass (with skinning)
   edge.*                    Sobel edge detection post-process (depth-based)
@@ -75,9 +75,7 @@ libs/
 
 ## What's next
 
-- Specular highlight band (toon-style specular lobe)
 - Normal map support (sample normal texture in toon.frag)
-- Normal-based edge detection (Sobel on normals, complementing depth edges)
 - Animation blending / crossfade between clips
 - Scene serialization (save/load entity hierarchy)
 - Ground plane / environment (sky, grid)
