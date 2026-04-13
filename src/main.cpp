@@ -73,14 +73,10 @@ namespace {
     RenderSettings gSettings{};
     bool           gOverlayCapturing = false;
 
-    Camera gCamera{};
+    Camera     gCamera{};
+    InputState gInput{};
     int    gFramebufferW = kWindowWidth;
     int    gFramebufferH = kWindowHeight;
-
-    // Mouse state for right-click look mode.
-    double gLastMouseX = 0.0;
-    double gLastMouseY = 0.0;
-    bool   gRightMouseHeld = false;
 
 
     // -----------------------------------------------------------------------
@@ -173,30 +169,56 @@ namespace {
         CreateOrResizeFBO(width, height);
     }
 
-    // Right-click toggles cursor capture for camera look mode.
-    // Ignored when ImGui wants the mouse (interacting with overlay widgets).
     void MouseButtonCallback(GLFWwindow* window, int button, int action, int /*mods*/) {
         if (gOverlayCapturing && action == GLFW_PRESS) return;
+
         if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-            gRightMouseHeld = (action == GLFW_PRESS);
-            if (gRightMouseHeld) {
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                glfwGetCursorPos(window, &gLastMouseX, &gLastMouseY);
-            } else {
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            gInput.rightHeld = (action == GLFW_PRESS);
+            if (gInput.rightHeld) {
+                gInput.firstRight = true;
+                glfwGetCursorPos(window, &gInput.lastX, &gInput.lastY);
+            }
+        }
+        if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+            gInput.middleHeld = (action == GLFW_PRESS);
+            if (gInput.middleHeld) {
+                gInput.firstMiddle = true;
+                glfwGetCursorPos(window, &gInput.lastX, &gInput.lastY);
             }
         }
     }
 
-    // Feed mouse deltas into the camera. Y is inverted because screen Y
-    // increases downward but pitch-up should be positive.
     void CursorPosCallback(GLFWwindow*, double x, double y) {
-        if (!gRightMouseHeld) return;
-        auto dx = static_cast<float>(x - gLastMouseX);
-        auto dy = static_cast<float>(gLastMouseY - y);
-        gLastMouseX = x;
-        gLastMouseY = y;
-        CameraProcessMouse(gCamera, dx, dy);
+        if (!gInput.rightHeld && !gInput.middleHeld) return;
+
+        // On the first frame of a hold, just record position — no delta.
+        // This prevents the jump when the cursor was far from where it was
+        // when the button was pressed.
+        if (gInput.firstRight || gInput.firstMiddle) {
+            gInput.lastX = x;
+            gInput.lastY = y;
+            gInput.firstRight  = false;
+            gInput.firstMiddle = false;
+            return;
+        }
+
+        auto dx = static_cast<float>(x - gInput.lastX);
+        auto dy = static_cast<float>(gInput.lastY - y);  // Y inverted
+        gInput.lastX = x;
+        gInput.lastY = y;
+
+        // Clamp delta to prevent massive jumps (e.g. alt-tab back).
+        constexpr float kMaxDelta = 50.0f;
+        dx = std::clamp(dx, -kMaxDelta, kMaxDelta);
+        dy = std::clamp(dy, -kMaxDelta, kMaxDelta);
+
+        if (gInput.rightHeld)  CameraOrbit(gCamera, dx, dy);
+        if (gInput.middleHeld) CameraPan(gCamera, dx, dy);
+    }
+
+    void ScrollCallback(GLFWwindow*, double /*xoffset*/, double yoffset) {
+        if (gOverlayCapturing) return;
+        gInput.scrollY += static_cast<float>(yoffset);
     }
 
     // -----------------------------------------------------------------------
@@ -710,6 +732,7 @@ int main(int argc, char* argv[]) {
     glfwSetFramebufferSizeCallback(window, FramebufferSizeCallback);
     glfwSetMouseButtonCallback(window, MouseButtonCallback);
     glfwSetCursorPosCallback(window, CursorPosCallback);
+    glfwSetScrollCallback(window, ScrollCallback);
 
     // Sync framebuffer dimensions (may differ from window size on HiDPI).
     {
@@ -884,6 +907,7 @@ int main(int argc, char* argv[]) {
 
             // Camera frames the 1-unit model: 3 units back, slightly above
             // center, looking slightly down. Works for any normalized model.
+            gCamera.pivot    = glm::vec3(0.0f);
             gCamera.position = glm::vec3(0.0f, 0.4f, 2.5f);
             gCamera.pitch    = -5.0f;
             gCamera.moveSpeed = 2.0f;
@@ -914,11 +938,23 @@ int main(int argc, char* argv[]) {
             accumulator -= kFixedTimestep;
         }
 
-        // Camera input runs at frame rate (not fixed timestep) for responsiveness.
-        // Skip when ImGui is capturing input so widgets work without fighting
-        // the camera.
-        if (gRightMouseHeld && !gOverlayCapturing)
-            CameraProcessKeyboard(gCamera, window, static_cast<float>(frame));
+        // Camera input: scroll zoom, fly-through (WASD when right-held), focus.
+        if (!gOverlayCapturing) {
+            if (gInput.scrollY != 0.0f) {
+                CameraZoom(gCamera, gInput.scrollY);
+                gInput.scrollY = 0.0f;
+            }
+            if (gInput.rightHeld)
+                CameraFly(gCamera, window, static_cast<float>(frame));
+            if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS) {
+                // Focus on selected entity's position, or origin.
+                glm::vec3 target{0.0f};
+                if (gScene.selected >= 0 &&
+                    gScene.selected < static_cast<int>(gScene.entities.size()))
+                    target = gScene.entities[gScene.selected].transform.position;
+                CameraFocus(gCamera, target);
+            }
+        }
 
         ReloadIfChanged(gShader);
         ReloadIfChanged(gToonShader);

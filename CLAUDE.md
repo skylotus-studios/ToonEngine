@@ -27,7 +27,7 @@ src/
     animator.h/.cpp         Playback, keyframe interpolation, joint matrix computation
   scene/                    Scene graph and asset loading
     scene.h                 Entity (meshes, skeleton, light, animator, modelPath), Scene
-    camera.h/.cpp           FPS fly camera (right-click + WASD)
+    camera.h/.cpp           Editor camera (orbit, pan, zoom, fly, focus)
     model_loader.h/.cpp     glTF + FBX: meshes, materials, skinning, skeleton, animations
     serializer.h/.cpp       Save/load scene to .scene text files
   ui/                       Debug tooling
