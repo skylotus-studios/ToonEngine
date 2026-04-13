@@ -41,6 +41,7 @@ struct Entity {
     Transform            transform;
     std::vector<SubMesh> subMeshes;
     ShadingMode          shading = ShadingMode::Toon;
+    std::string          modelPath;  // source file (for serialization)
 
     // Skeletal animation (empty skeleton = not skinned).
     Skeleton                   skeleton;

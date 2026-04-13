@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "scene/camera.h"
 #include "scene/scene.h"
 
 #include <glm/glm.hpp>
@@ -51,6 +52,14 @@ struct RenderSettings {
     float     edgeThreshold = 0.02f;
     float     edgeWidth     = 1.0f;
 
+    // Environment.
+    bool      gridEnabled = true;
+    glm::vec3 skyTop{0.35f, 0.55f, 0.80f};
+    glm::vec3 skyBottom{0.15f, 0.15f, 0.20f};
+    glm::vec3 gridColor{0.4f, 0.4f, 0.4f};
+    float     gridScale = 1.0f;
+    float     gridFade  = 15.0f;
+
     // Scene.
     glm::vec3 clearColor{0.08f, 0.09f, 0.11f};
 
@@ -68,7 +77,8 @@ void OverlayNewFrame();
 // Draw the debug panel and submit ImGui draw data. Returns true if
 // ImGui wants to capture mouse/keyboard input (i.e. the user is
 // interacting with a widget — the camera should ignore input).
-bool OverlayRender(RenderSettings& settings, Scene& scene, float fps);
+bool OverlayRender(RenderSettings& settings, Scene& scene, Camera& camera,
+                   Texture& defaultTexture, float fps);
 
 // Shutdown ImGui. Call once before destroying the GL context.
 void OverlayShutdown();

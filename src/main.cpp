@@ -57,6 +57,9 @@ namespace {
     int    gFBOWidth   = 0;
     int    gFBOHeight  = 0;
 
+    // Grid / sky environment.
+    ShaderProgram gGridShader{};
+
     // Cascaded shadow mapping.
     ShaderProgram gShadowShader{};
     GLuint gShadowFBO    = 0;
@@ -574,6 +577,34 @@ namespace {
         glm::mat4 vp = CameraProjectionMatrix(gCamera, aspect)
             * CameraViewMatrix(gCamera);
 
+        // Grid + sky background pass (writes color + depth, scene draws on top).
+        if (gSettings.gridEnabled && gGridShader.id) {
+            glUseProgram(gGridShader.id);
+            glUniformMatrix4fv(glGetUniformLocation(gGridShader.id, "uInvViewProj"),
+                1, GL_FALSE, glm::value_ptr(glm::inverse(vp)));
+            glUniform3fv(glGetUniformLocation(gGridShader.id, "uCameraPos"),
+                1, glm::value_ptr(gCamera.position));
+            glUniform3fv(glGetUniformLocation(gGridShader.id, "uSkyTop"),
+                1, glm::value_ptr(gSettings.skyTop));
+            glUniform3fv(glGetUniformLocation(gGridShader.id, "uSkyBottom"),
+                1, glm::value_ptr(gSettings.skyBottom));
+            glUniform3fv(glGetUniformLocation(gGridShader.id, "uGridColor"),
+                1, glm::value_ptr(gSettings.gridColor));
+            glUniform1f(glGetUniformLocation(gGridShader.id, "uGridScale"),
+                gSettings.gridScale);
+            glUniform1f(glGetUniformLocation(gGridShader.id, "uGridFade"),
+                gSettings.gridFade);
+            glUniform1f(glGetUniformLocation(gGridShader.id, "uNear"),
+                gCamera.nearPlane);
+            glUniform1f(glGetUniformLocation(gGridShader.id, "uFar"),
+                gCamera.farPlane);
+
+            glDepthFunc(GL_ALWAYS);  // overwrite clear depth
+            glBindVertexArray(gFullscreenVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glDepthFunc(GL_LESS);    // restore for scene
+        }
+
         for (auto& entity : gScene.entities) {
             if (entity.light) continue;  // lights have no geometry
             switch (entity.shading) {
@@ -807,6 +838,10 @@ int main(int argc, char* argv[]) {
         "assets/shaders/shadow.frag")) {
         std::fprintf(stderr, "Failed to load shadow shaders\n");
     }
+    if (!LoadShader(gGridShader, "assets/shaders/edge.vert",
+        "assets/shaders/grid.frag")) {
+        std::fprintf(stderr, "Failed to load grid shaders\n");
+    }
 
     CreateShadowFBO();
 
@@ -833,6 +868,7 @@ int main(int argc, char* argv[]) {
 
             Entity e;
             e.name      = std::filesystem::path(argv[1]).filename().string();
+            e.modelPath = argv[1];
             e.shading   = ShadingMode::Toon;
             e.transform.scale    = glm::vec3(s);
             e.transform.position = -center * s;
@@ -889,6 +925,7 @@ int main(int argc, char* argv[]) {
         ReloadIfChanged(gOutlineShader);
         ReloadIfChanged(gEdgeShader);
         ReloadIfChanged(gShadowShader);
+        ReloadIfChanged(gGridShader);
 
         const double alpha = accumulator / kFixedTimestep;
         Render(alpha);
@@ -896,7 +933,7 @@ int main(int argc, char* argv[]) {
         // ImGui overlay (rendered after the scene, on top).
         OverlayNewFrame();
         float fps = (frame > 0.0) ? static_cast<float>(1.0 / frame) : 0.0f;
-        gOverlayCapturing = OverlayRender(gSettings, gScene, fps);
+        gOverlayCapturing = OverlayRender(gSettings, gScene, gCamera, gDefaultTexture, fps);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -917,6 +954,7 @@ int main(int argc, char* argv[]) {
     if (gFullscreenVAO) glDeleteVertexArrays(1, &gFullscreenVAO);
     if (gShadowFBO) glDeleteFramebuffers(1, &gShadowFBO);
     if (gShadowMap) glDeleteTextures(1, &gShadowMap);
+    DestroyShader(gGridShader);
     DestroyShader(gShadowShader);
     DestroyShader(gEdgeShader);
     DestroyShader(gOutlineShader);

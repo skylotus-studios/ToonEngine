@@ -71,6 +71,8 @@ add_executable(ToonEngine
     src/scene/model_loader.h
     src/scene/model_loader.cpp
     src/scene/scene.h
+    src/scene/serializer.h
+    src/scene/serializer.cpp
     src/ui/overlay.h
     src/ui/overlay.cpp
 )

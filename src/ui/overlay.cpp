@@ -3,6 +3,7 @@
 #include "overlay.h"
 
 #include "core/animator.h"
+#include "scene/serializer.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -49,7 +50,8 @@ static const char* LightTypeLabel(LightType t) {
     return "?";
 }
 
-bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
+bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
+                   Texture& defaultTexture, float fps) {
     // -- Render settings panel ------------------------------------------------
     ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
@@ -101,8 +103,22 @@ bool OverlayRender(RenderSettings& s, Scene& scene, float fps) {
         ImGui::SliderFloat("Edge Width", &s.edgeWidth, 0.5f, 5.0f);
     }
 
-    if (ImGui::CollapsingHeader("Scene")) {
-        ImGui::ColorEdit3("Background", &s.clearColor.x);
+    if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Grid", &s.gridEnabled);
+        ImGui::ColorEdit3("Sky Top", &s.skyTop.x);
+        ImGui::ColorEdit3("Sky Bottom", &s.skyBottom.x);
+        if (s.gridEnabled) {
+            ImGui::ColorEdit3("Grid Color", &s.gridColor.x);
+            ImGui::SliderFloat("Grid Scale", &s.gridScale, 0.1f, 10.0f);
+            ImGui::SliderFloat("Grid Fade", &s.gridFade, 1.0f, 100.0f);
+        }
+        ImGui::ColorEdit3("Fallback BG", &s.clearColor.x);
+        ImGui::Separator();
+        if (ImGui::Button("Save Scene"))
+            SaveScene("scene.scene", scene, camera, s);
+        ImGui::SameLine();
+        if (ImGui::Button("Load Scene"))
+            LoadScene("scene.scene", scene, camera, s, defaultTexture);
     }
 
     if (ImGui::CollapsingHeader("Debug")) {
