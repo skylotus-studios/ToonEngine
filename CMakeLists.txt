@@ -75,6 +75,10 @@ add_executable(ToonEngine
     src/scene/serializer.cpp
     src/ui/overlay.h
     src/ui/overlay.cpp
+    src/ui/themes.h
+    src/ui/themes.cpp
+    libs/imguizmo/ImGuizmo.h
+    libs/imguizmo/ImGuizmo.cpp
 )
 
 target_compile_features(ToonEngine PRIVATE cxx_std_20)
@@ -88,6 +92,7 @@ target_include_directories(ToonEngine PRIVATE
     src
     ${Stb_INCLUDE_DIR}
     libs/cgltf
+    libs/imguizmo
 )
 
 target_link_libraries(ToonEngine
@@ -97,6 +102,7 @@ target_link_libraries(ToonEngine
         glm::glm
         imgui::imgui
         ufbx
+        $<$<PLATFORM_ID:Windows>:dwmapi>
 )
 
 if(MSVC)

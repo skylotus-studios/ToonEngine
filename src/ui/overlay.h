@@ -63,6 +63,12 @@ struct RenderSettings {
     // Scene.
     glm::vec3 clearColor{0.08f, 0.09f, 0.11f};
 
+    // Gizmo.
+    int  gizmoOp   = 0;  // 0=translate, 1=rotate, 2=scale (maps to ImGuizmo::OPERATION)
+    bool gizmoLocal = false;
+    bool gizmoSnap  = false;
+    float gizmoSnapValue = 0.5f;
+
     // Debug.
     bool debugDisableSkinning = false;
 };

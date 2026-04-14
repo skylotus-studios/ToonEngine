@@ -6,6 +6,13 @@
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <dwmapi.h>
+#undef near
+#undef far
+#endif
 
 #include "core/animation.h"
 #include "core/animator.h"
@@ -20,6 +27,8 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+#include <stb_image.h>
 
 #include <algorithm>
 #include <chrono>
@@ -694,13 +703,33 @@ int main(int argc, char* argv[]) {
     #ifndef NDEBUG
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
     #endif
-
     GLFWwindow* window = glfwCreateWindow(
         kWindowWidth, kWindowHeight, kWindowTitle, nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "glfwCreateWindow failed\n");
         glfwTerminate();
         return EXIT_FAILURE;
+    }
+
+    // Dark title bar (Windows 10 1809+ / Windows 11).
+#ifdef _WIN32
+    {
+        HWND hwnd = glfwGetWin32Window(window);
+        BOOL useDark = TRUE;
+        // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        DwmSetWindowAttribute(hwnd, 20, &useDark, sizeof(useDark));
+    }
+#endif
+
+    // Set window icon (taskbar / alt-tab).
+    {
+        int w, h, ch;
+        unsigned char* px = stbi_load("assets/icon.png", &w, &h, &ch, 4);
+        if (px) {
+            GLFWimage img{w, h, px};
+            glfwSetWindowIcon(window, 1, &img);
+            stbi_image_free(px);
+        }
     }
 
     glfwMakeContextCurrent(window);
@@ -947,13 +976,20 @@ int main(int argc, char* argv[]) {
             if (gInput.rightHeld)
                 CameraFly(gCamera, window, static_cast<float>(frame));
             if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS) {
-                // Focus on selected entity's position, or origin.
                 glm::vec3 target{0.0f};
                 if (gScene.selected >= 0 &&
                     gScene.selected < static_cast<int>(gScene.entities.size()))
                     target = gScene.entities[gScene.selected].transform.position;
                 CameraFocus(gCamera, target);
             }
+
+            // Gizmo shortcuts (W/E/R like Unity).
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS && !gInput.rightHeld)
+                gSettings.gizmoOp = 0;  // translate
+            if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS && !gInput.rightHeld)
+                gSettings.gizmoOp = 1;  // rotate
+            if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !gInput.rightHeld)
+                gSettings.gizmoOp = 2;  // scale
         }
 
         ReloadIfChanged(gShader);

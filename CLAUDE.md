@@ -31,7 +31,7 @@ src/
     model_loader.h/.cpp     glTF + FBX: meshes, materials, skinning, skeleton, animations
     serializer.h/.cpp       Save/load scene to .scene text files
   ui/                       Debug tooling
-    overlay.h/.cpp          ImGui panels: render settings, entity inspector, save/load buttons
+    overlay.h/.cpp          ImGui docking + panels + ImGuizmo transform gizmo
 assets/shaders/
   model.vert                Shared vertex shader (MVP + GPU skinning)
   toon.frag                 Multi-light cel + CSM + specular + normal map + shadow tint + rim
@@ -43,6 +43,7 @@ assets/shaders/
 libs/
   cgltf/                    Single-header glTF 2.0 loader
   ufbx/                     Single-file FBX loader
+  imguizmo/                 Transform gizmo (translate/rotate/scale) for ImGui
 ```
 
 ## Render pipeline
@@ -76,7 +77,7 @@ libs/
 - **glTF + FBX only** -- no OBJ or other formats.
 - Clang everywhere. MSVC and GCC are not tested.
 
-## What's next
+## Engine Roadmap TODO Features
 
 - Animation blending / crossfade between clips
 - Audio system
@@ -84,3 +85,22 @@ libs/
 - Particle system (toon-style)
 - Multi-object scene editing (add/remove entities from overlay)
 - Morph target / blend shape animation
+
+## ImGUI TODO Features
+- Theming
+- Undo/redo stack for property changes
+- Tree view instead of flat list (parent/child relationships)
+- Drag-to-reorder, drag-to-reparent
+- Add/remove entities from the UI (right-click context menu: "Add Empty", "Add Light", "Add Model...")
+- Duplicate entity
+- Material editor
+- Per-entity material override panel
+- Texture preview thumbnails in the inspector
+- Drag-drop image files onto material slots
+- File browser panel that shows assets/ contents
+- Drag-drop models into the scene to create entities
+- Texture/model preview on hover
+- Render stats panel (draw calls, triangle count, shadow pass time, FBO switches)
+- GPU timer queries for per-pass profiling
+- Status bar (camera position, FPS, selected entity name)
+- Keyboard shortcuts overlay (F1 or ?)

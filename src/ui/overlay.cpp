@@ -1,15 +1,21 @@
 // ImGui debug overlay implementation.
 
 #include "overlay.h"
+#include "ui/themes.h"
 
 #include "core/animator.h"
+#include "core/transform.h"
 #include "scene/serializer.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <ImGuizmo.h>
 
 #include <GLFW/glfw3.h>
+#include <glm/gtc/type_ptr.hpp>
+
+static Theme sCurrentTheme = Theme::GrayStone;
 
 void OverlayInit(GLFWwindow* window) {
     IMGUI_CHECKVERSION();
@@ -17,12 +23,10 @@ void OverlayInit(GLFWwindow* window) {
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    ImGui::StyleColorsDark();
-
-    // Slightly transparent background so the scene shows through.
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.Alpha = 0.92f;
+    io.Fonts->AddFontFromFileTTF("assets/fonts/BaiJamjuree-Medium.ttf", 25.0f);
+    ApplyTheme(sCurrentTheme);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 410");
@@ -52,13 +56,58 @@ static const char* LightTypeLabel(LightType t) {
 
 bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
                    Texture& defaultTexture, float fps) {
+    // -- Main menu bar --------------------------------------------------------
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::BeginMenu("Preferences")) {
+                if (ImGui::BeginMenu("Theme")) {
+                    for (int i = 0; i < static_cast<int>(Theme::Count); ++i) {
+                        Theme t = static_cast<Theme>(i);
+                        if (ImGui::MenuItem(ThemeName(t), nullptr, t == sCurrentTheme)) {
+                            sCurrentTheme = t;
+                            ApplyTheme(t);
+                        }
+                    }
+                    ImGui::EndMenu();
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+
+    // Fullscreen DockSpace — invisible background target for snapping panels.
+    ImGuiDockNodeFlags dockFlags = ImGuiDockNodeFlags_PassthruCentralNode;
+    ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), dockFlags);
+
     // -- Render settings panel ------------------------------------------------
-    ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(16, 36), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
 
     ImGui::Begin("ToonEngine");
 
     ImGui::Text("%.1f FPS (%.2f ms)", fps, (fps > 0.0f) ? 1000.0f / fps : 0.0f);
+    ImGui::Separator();
+
+    // Gizmo toolbar: W=Translate, E=Rotate, R=Scale.
+    {
+        bool t = (s.gizmoOp == 0), r = (s.gizmoOp == 1), sc = (s.gizmoOp == 2);
+        if (ImGui::RadioButton("W Move", t))  s.gizmoOp = 0;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("E Rot", r))   s.gizmoOp = 1;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("R Scl", sc))  s.gizmoOp = 2;
+        ImGui::SameLine();
+        ImGui::Checkbox("Local", &s.gizmoLocal);
+        ImGui::SameLine();
+        ImGui::Checkbox("Snap", &s.gizmoSnap);
+        if (s.gizmoSnap) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(60);
+            ImGui::DragFloat("##snap", &s.gizmoSnapValue, 0.1f, 0.1f, 10.0f);
+        }
+    }
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Toon Shading", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -227,11 +276,55 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
 
     ImGui::End();
 
+    // -- Gizmo on selected entity ---------------------------------------------
+    bool gizmoUsing = false;
+    {
+        int count = static_cast<int>(scene.entities.size());
+        if (scene.selected >= 0 && scene.selected < count &&
+            !scene.entities[scene.selected].light) {
+            Entity& e = scene.entities[scene.selected];
+
+            ImGuizmo::BeginFrame();
+            ImGuiIO& gio = ImGui::GetIO();
+            ImGuizmo::SetRect(0, 0, gio.DisplaySize.x, gio.DisplaySize.y);
+            ImGuizmo::SetOrthographic(false);
+
+            glm::mat4 view = CameraViewMatrix(camera);
+            glm::mat4 proj = CameraProjectionMatrix(camera,
+                gio.DisplaySize.x / std::max(gio.DisplaySize.y, 1.0f));
+            glm::mat4 model = TransformMatrix(e.transform);
+
+            ImGuizmo::OPERATION op;
+            switch (s.gizmoOp) {
+            case 1:  op = ImGuizmo::ROTATE;    break;
+            case 2:  op = ImGuizmo::SCALE;     break;
+            default: op = ImGuizmo::TRANSLATE;  break;
+            }
+            ImGuizmo::MODE mode = s.gizmoLocal ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+
+            float snapVals[3] = { s.gizmoSnapValue, s.gizmoSnapValue, s.gizmoSnapValue };
+            float* snap = s.gizmoSnap ? snapVals : nullptr;
+
+            if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj),
+                                     op, mode, glm::value_ptr(model),
+                                     nullptr, snap)) {
+                // Decompose back to entity transform.
+                float t[3], r[3], sc[3];
+                ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(model), t, r, sc);
+                e.transform.position = {t[0], t[1], t[2]};
+                e.transform.rotation = {r[0], r[1], r[2]};
+                e.transform.scale    = {sc[0], sc[1], sc[2]};
+            }
+
+            gizmoUsing = ImGuizmo::IsUsing();
+        }
+    }
+
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     ImGuiIO& io = ImGui::GetIO();
-    return io.WantCaptureMouse || io.WantCaptureKeyboard;
+    return io.WantCaptureMouse || io.WantCaptureKeyboard || gizmoUsing;
 }
 
 void OverlayShutdown() {

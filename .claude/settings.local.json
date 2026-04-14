@@ -9,7 +9,8 @@
       "Bash(taskkill //F //IM ToonEngine.exe)",
       "Bash(timeout 3 ./build/windows-debug/ToonEngine.exe assets/models/fox.glb)",
       "Bash(timeout 3 ./build/windows-debug/ToonEngine.exe assets/models/dragon.gltf)",
-      "WebFetch(domain:learnopengl.com)"
+      "WebFetch(domain:learnopengl.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }
