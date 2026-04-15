@@ -1,8 +1,8 @@
 # ToonEngine scene
 
-camera.position 3.790824 4.251529 2.785132
-camera.yaw -140.401962
-camera.pitch -28.200415
+camera.position -0.585722 13.960012 18.357414
+camera.yaw 277.350250
+camera.pitch -36.649803
 camera.fov 45.000000
 
 settings.skyTop 0.350000 0.550000 0.800000
@@ -10,17 +10,17 @@ settings.skyBottom 0.150000 0.150000 0.200000
 settings.clearColor 0.080000 0.090000 0.110000
 
 entity "Triangle 1"
-  position 0.100000 1.200000 -1.800000
+  position 0.000000 0.000000 0.000000
   rotation 0.000000 0.000000 0.000000
   scale 1.000000 1.000000 1.000000
 
 entity "Triangle 2"
-  position 2.000000 0.450000 0.000000
-  rotation 0.000000 0.000000 17992.500000
+  position 2.000000 0.000000 0.000000
+  rotation 0.000000 0.000000 5499.000000
   scale 0.800000 0.800000 0.800000
 
 entity "Triangle 3"
-  position -2.750000 0.900000 0.000000
+  position -2.000000 0.500000 0.000000
   rotation 0.000000 0.000000 -30.000000
   scale 1.200000 1.200000 1.200000
 
@@ -35,13 +35,13 @@ entity "Sun"
   scale 1.000000 1.000000 1.000000
 
 entity "Test Quad"
-  position -0.100000 0.300000 -1.000000
+  position 0.000000 0.000000 -1.000000
   rotation 0.000000 0.000000 0.000000
   scale 1.000000 1.000000 1.000000
 
 entity "helmet.glb"
   model assets/models/helmet.glb
-  position 0.001241 1.194000 0.000005
-  rotation 45.000000 0.000000 0.000000
+  position 0.001241 0.093577 0.000005
+  rotation 0.000000 0.000000 0.000000
   scale 0.500000 0.500000 0.500000
 

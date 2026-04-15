@@ -3,7 +3,10 @@
 // Rendered as a fullscreen pass before the scene. Each pixel:
 //   1. Compute camera ray from inverse view-projection
 //   2. Intersect ray with Y=0 plane → draw grid lines + write correct depth
-//   3. No intersection (looking up) → draw sky gradient + write far depth
+//      only where a line is visible (keeps the plane transparent between
+//      lines so scene geometry isn't clipped and Sobel sees no bogus
+//      depth gradient across the whole plane)
+//   3. Otherwise → draw sky gradient + write far depth
 
 #version 410 core
 
@@ -64,11 +67,15 @@ void main() {
 
         // Blend: minor lines at 30% opacity, major lines at 60%.
         float alpha = (majorMask * 0.6 + gridMask * 0.3) * fade;
-        FragColor = vec4(mix(sky, uGridColor, alpha), 1.0);
 
-        // Write correct depth so scene objects occlude the grid.
-        float depthNDC = (uFar + uNear - 2.0 * uNear * uFar / hitT)
-                       / (uFar - uNear);
-        gl_FragDepth = depthNDC * 0.5 + 0.5;
+        // Only cover the pixel where a line is actually visible. Between
+        // lines the plane stays transparent (sky shows through and scene
+        // geometry below Y=0 is not occluded by an invisible depth layer).
+        if (alpha > 0.001) {
+            FragColor = vec4(mix(sky, uGridColor, alpha), 1.0);
+            float depthNDC = (uFar + uNear - 2.0 * uNear * uFar / hitT)
+                           / (uFar - uNear);
+            gl_FragDepth = depthNDC * 0.5 + 0.5;
+        }
     }
 }

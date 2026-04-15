@@ -47,14 +47,17 @@ void CameraOrbit(Camera& cam, float dx, float dy) {
 }
 
 void CameraPan(Camera& cam, float dx, float dy) {
+    // Pan on the ground plane regardless of pitch: right is already flat on
+    // XZ (cross(front, worldUp)); forward is the camera direction projected
+    // onto XZ. Keeps vertical drag from raising/lowering the camera.
     glm::vec3 right = CameraRight(cam);
-    glm::vec3 up = CameraUp(cam);
+    glm::vec3 groundForward = glm::cross(glm::vec3{ 0, 1, 0 }, right);
 
     // Scale pan speed by distance from pivot (feels natural at any zoom).
     float dist = glm::length(cam.position - cam.pivot);
     float scale = dist * cam.panSensitivity;
 
-    glm::vec3 offset = (-dx * right - dy * up) * scale;
+    glm::vec3 offset = (-dx * right - dy * groundForward) * scale;
     cam.position += offset;
     cam.pivot += offset;
 }
