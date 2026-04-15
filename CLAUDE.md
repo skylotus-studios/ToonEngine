@@ -87,10 +87,6 @@ libs/
 
 ## ImGUI TODO Features
 - Undo/redo stack for property changes
-- Tree view instead of flat list (parent/child relationships)
-- Drag-to-reorder, drag-to-reparent
-- Add/remove entities from the UI (right-click context menu: "Add Empty", "Add Light", "Add Model...")
-- Duplicate entity
 - Material editor
 - Per-entity material override panel
 - Texture preview thumbnails in the inspector
