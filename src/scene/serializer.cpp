@@ -58,9 +58,11 @@ bool SaveScene(const char* path, const Scene& scene,
     WriteVec3(f, "settings.clearColor", settings.clearColor);
     f << "\n";
 
-    // Entities.
+    // Entities. Written in vector order so parent indices always refer to
+    // an already-written entity on load.
     for (auto& e : scene.entities) {
         f << "entity \"" << e.name << "\"\n";
+        f << "  parent " << e.parent << "\n";
 
         if (e.light) {
             const Light& L = *e.light;
@@ -74,9 +76,12 @@ bool SaveScene(const char* path, const Scene& scene,
         if (!e.modelPath.empty())
             f << "  model " << e.modelPath << "\n";
 
-        WriteVec3(f, "  position", e.transform.position);
-        WriteVec3(f, "  rotation", e.transform.rotation);
-        WriteVec3(f, "  scale", e.transform.scale);
+        // Transform is an optional component (the scene root has none).
+        if (e.transform) {
+            WriteVec3(f, "  position", e.transform->position);
+            WriteVec3(f, "  rotation", e.transform->rotation);
+            WriteVec3(f, "  scale", e.transform->scale);
+        }
         f << "\n";
     }
 
@@ -123,6 +128,12 @@ bool LoadScene(const char* path, Scene& scene,
         if (key == "entity") {
             scene.entities.emplace_back();
             cur = &scene.entities.back();
+            // Start with no transform component; position/rotation/scale
+            // lines below will create one if present (root has none).
+            cur->transform.reset();
+            // parent defaults to -1 (orphan) so legacy files with no parent
+            // lines get re-parented to the synthesized root on load.
+            cur->parent = -1;
             // Parse quoted name.
             auto q1 = line.find('"');
             auto q2 = line.find('"', q1 + 1);
@@ -132,6 +143,8 @@ bool LoadScene(const char* path, Scene& scene,
         }
 
         if (!cur) continue;
+
+        if (key == "parent") { ss >> cur->parent; continue; }
 
         // Entity properties.
         if (key == "light") {
@@ -158,10 +171,23 @@ bool LoadScene(const char* path, Scene& scene,
                     AnimatorSetClip(cur->animator, cur->skeleton, 0);
             }
         }
-        else if (key == "position") cur->transform.position = ParseVec3(ss);
-        else if (key == "rotation") cur->transform.rotation = ParseVec3(ss);
-        else if (key == "scale")    cur->transform.scale = ParseVec3(ss);
+        else if (key == "position") {
+            if (!cur->transform) cur->transform.emplace();
+            cur->transform->position = ParseVec3(ss);
+        }
+        else if (key == "rotation") {
+            if (!cur->transform) cur->transform.emplace();
+            cur->transform->rotation = ParseVec3(ss);
+        }
+        else if (key == "scale") {
+            if (!cur->transform) cur->transform.emplace();
+            cur->transform->scale = ParseVec3(ss);
+        }
     }
+
+    // Backwards compatibility: files written before hierarchy support have
+    // no "parent" line and no root entity. Synthesize a root if needed.
+    EnsureSceneRoot(scene);
 
     std::printf("Scene loaded: %s (%zu entities)\n", path, scene.entities.size());
     return true;

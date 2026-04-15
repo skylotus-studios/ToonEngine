@@ -273,4 +273,8 @@ void ApplyTheme(Theme t) {
     case Theme::GrayStone:   ApplyGrayStone();   break;
     default: break;
     }
+
+    // Global style overrides that apply to every theme. Kept here (after
+    // the reset + Apply*) so they survive theme switches.
+    ImGui::GetStyle().WindowMenuButtonPosition = ImGuiDir_None;
 }

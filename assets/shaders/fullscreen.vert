@@ -1,4 +1,4 @@
-// Fullscreen triangle vertex shader for post-processing.
+// Fullscreen triangle vertex shader (used by the grid/sky background pass).
 // Generates a screen-covering triangle from gl_VertexID (no VBO needed).
 
 #version 410 core

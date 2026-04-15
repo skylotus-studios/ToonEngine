@@ -17,56 +17,50 @@ struct GLFWwindow;
 struct RenderSettings {
     // Toon shading (lights are now per-entity, not here).
     float bandThresholdHigh = 0.5f;
-    float bandThresholdLow  = 0.0f;
-    float brightIntensity   = 1.0f;
-    float midIntensity      = 0.55f;
-    float shadowIntensity   = 0.15f;
+    float bandThresholdLow = 0.0f;
+    float brightIntensity = 1.0f;
+    float midIntensity = 0.55f;
+    float shadowIntensity = 0.15f;
 
     // Shadow color ramp — multiplied into shadow/mid bands.
-    glm::vec3 shadowTint{1.0f, 1.0f, 1.0f};
+    glm::vec3 shadowTint{ 1.0f, 1.0f, 1.0f };
 
     // Specular highlight band.
-    glm::vec3 specColor{1.0f, 1.0f, 1.0f};
+    glm::vec3 specColor{ 1.0f, 1.0f, 1.0f };
     float     specThreshold = 0.9f;   // NdotH cutoff for the hard highlight
-    float     specStrength  = 0.5f;
+    float     specStrength = 0.5f;
     float     specShininess = 32.0f;  // Blinn-Phong exponent (controls blob size)
 
     // Rim lighting.
-    glm::vec3 rimColor{1.0f, 1.0f, 1.0f};
-    float     rimPower    = 3.0f;
+    glm::vec3 rimColor{ 1.0f, 1.0f, 1.0f };
+    float     rimPower = 3.0f;
     float     rimStrength = 0.4f;
 
     // Outlines (inverted hull).
-    float     outlineWidth = 0.755f;
-    glm::vec4 outlineColor{0.05f, 0.05f, 0.05f, 1.0f};
+    float     outlineWidth = 0.0f;
+    glm::vec4 outlineColor{ 0.05f, 0.05f, 0.05f, 1.0f };
     bool      outlineScreenSpace = false;
 
     // Cascaded shadow mapping.
-    bool  shadowEnabled  = true;
-    float shadowBias     = 0.002f;
-    float shadowDistance  = 20.0f;
-
-    // Sobel edge detection (post-process).
-    bool      edgeEnabled   = true;
-    glm::vec3 edgeColor{0.0f, 0.0f, 0.0f};
-    float     edgeThreshold = 0.02f;
-    float     edgeWidth     = 1.0f;
+    bool  shadowEnabled = true;
+    float shadowBias = 0.002f;
+    float shadowDistance = 20.0f;
 
     // Environment.
     bool      gridEnabled = true;
-    glm::vec3 skyTop{0.35f, 0.55f, 0.80f};
-    glm::vec3 skyBottom{0.15f, 0.15f, 0.20f};
-    glm::vec3 gridColor{0.4f, 0.4f, 0.4f};
+    glm::vec3 skyTop{ 0.35f, 0.55f, 0.80f };
+    glm::vec3 skyBottom{ 0.15f, 0.15f, 0.20f };
+    glm::vec3 gridColor{ 0.4f, 0.4f, 0.4f };
     float     gridScale = 1.0f;
-    float     gridFade  = 15.0f;
+    float     gridFade = 15.0f;
 
     // Scene.
-    glm::vec3 clearColor{0.08f, 0.09f, 0.11f};
+    glm::vec3 clearColor{ 0.08f, 0.09f, 0.11f };
 
     // Gizmo.
-    int  gizmoOp   = 0;  // 0=translate, 1=rotate, 2=scale (maps to ImGuizmo::OPERATION)
+    int  gizmoOp = 0;  // 0=translate, 1=rotate, 2=scale (maps to ImGuizmo::OPERATION)
     bool gizmoLocal = false;
-    bool gizmoSnap  = false;
+    bool gizmoSnap = false;
     float gizmoSnapValue = 0.5f;
 
     // Debug.
@@ -84,7 +78,7 @@ void OverlayNewFrame();
 // ImGui wants to capture mouse/keyboard input (i.e. the user is
 // interacting with a widget — the camera should ignore input).
 bool OverlayRender(RenderSettings& settings, Scene& scene, Camera& camera,
-                   Texture& defaultTexture, float fps);
+    Texture& defaultTexture, float fps);
 
 // Shutdown ImGui. Call once before destroying the GL context.
 void OverlayShutdown();

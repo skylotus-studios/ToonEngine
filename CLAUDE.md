@@ -38,7 +38,7 @@ assets/shaders/
   outline.*                 Inverted hull outlines (smooth normals, screen-space option)
   shadow.*                  Depth-only CSM pass (with skinning)
   grid.frag                 Sky gradient + infinite ground grid (ray-plane intersection)
-  edge.*                    Sobel edge detection post-process (depth-based)
+  fullscreen.vert           Attributeless fullscreen triangle (used by grid.frag)
   triangle.*                Vertex-colored demo geometry
 libs/
   cgltf/                    Single-header glTF 2.0 loader
@@ -50,12 +50,11 @@ libs/
 
 1. **Shadow pass** -- 4-cascade CSM from the first directional light into `GL_TEXTURE_2D_ARRAY`
 2. **Grid + sky pass** -- fullscreen ray-march: sky gradient above horizon, infinite grid at Y=0 with correct depth writes (major/minor lines, distance fade)
-3. **Scene pass** (to FBO if Sobel enabled, else to screen):
+3. **Scene pass** -- direct to the default framebuffer:
    - *Toon*: front faces with `toon.frag`, back faces with `outline.*`
    - Light entities (directional/point, max 8) uploaded as uniform arrays
    - Skinned entities upload `uJoints[]` for GPU skinning
-4. **Post-process** (optional) -- Sobel on linearized depth via `edge.*`
-5. **ImGui overlay**
+4. **ImGui overlay**
 
 ## Conventions
 
@@ -87,7 +86,6 @@ libs/
 - Morph target / blend shape animation
 
 ## ImGUI TODO Features
-- Theming
 - Undo/redo stack for property changes
 - Tree view instead of flat list (parent/child relationships)
 - Drag-to-reorder, drag-to-reparent

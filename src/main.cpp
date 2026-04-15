@@ -57,14 +57,9 @@ namespace {
     ShaderProgram gToonShader{};
     ShaderProgram gOutlineShader{};
 
-    // Sobel edge detection post-process.
-    ShaderProgram gEdgeShader{};
-    GLuint gFBO        = 0;
-    GLuint gColorTex   = 0;
-    GLuint gDepthTex   = 0;
+    // Attributeless fullscreen-triangle VAO for passes that synthesize
+    // vertices from gl_VertexID (grid/sky, etc.).
     GLuint gFullscreenVAO = 0;
-    int    gFBOWidth   = 0;
-    int    gFBOHeight  = 0;
 
     // Grid / sky environment.
     ShaderProgram gGridShader{};
@@ -87,50 +82,6 @@ namespace {
     int    gFramebufferW = kWindowWidth;
     int    gFramebufferH = kWindowHeight;
 
-
-    // -----------------------------------------------------------------------
-    // FBO for post-processing (Sobel edge detection).
-    // -----------------------------------------------------------------------
-    void CreateOrResizeFBO(int w, int h) {
-        if (w == gFBOWidth && h == gFBOHeight && gFBO) return;
-        if (w <= 0 || h <= 0) return;
-
-        if (gFBO)      { glDeleteFramebuffers(1, &gFBO);  gFBO = 0; }
-        if (gColorTex) { glDeleteTextures(1, &gColorTex);  gColorTex = 0; }
-        if (gDepthTex) { glDeleteTextures(1, &gDepthTex);  gDepthTex = 0; }
-
-        glGenFramebuffers(1, &gFBO);
-        glBindFramebuffer(GL_FRAMEBUFFER, gFBO);
-
-        glGenTextures(1, &gColorTex);
-        glBindTexture(GL_TEXTURE_2D, gColorTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, gColorTex, 0);
-
-        glGenTextures(1, &gDepthTex);
-        glBindTexture(GL_TEXTURE_2D, gDepthTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, w, h, 0,
-                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                               GL_TEXTURE_2D, gDepthTex, 0);
-
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-            std::fprintf(stderr, "FBO incomplete (%dx%d)\n", w, h);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        gFBOWidth  = w;
-        gFBOHeight = h;
-    }
 
     void CreateShadowFBO() {
         if (gShadowFBO) return;
@@ -175,7 +126,6 @@ namespace {
         gFramebufferW = width;
         gFramebufferH = height;
         glViewport(0, 0, width, height);
-        CreateOrResizeFBO(width, height);
     }
 
     void MouseButtonCallback(GLFWwindow* window, int button, int action, int /*mods*/) {
@@ -271,9 +221,13 @@ namespace {
     // -----------------------------------------------------------------------
 
     void Update(double dt) {
-        // Spin the second demo triangle (if it exists).
-        if (gScene.entities.size() > 1)
-            gScene.entities[1].transform.rotation.z += 45.0f * static_cast<float>(dt);
+        // Spin "Triangle 2" if present (demo content).
+        for (auto& e : gScene.entities) {
+            if (e.name == "Triangle 2" && e.transform) {
+                e.transform->rotation.z += 45.0f * static_cast<float>(dt);
+                break;
+            }
+        }
 
         // Tick skeletal animation for all entities.
         float fdt = static_cast<float>(dt);
@@ -288,7 +242,7 @@ namespace {
         BindTexture(gDefaultTexture, 0);
         glUniform1i(glGetUniformLocation(gShader.id, "uTexture"), 0);
 
-        glm::mat4 mvp = vp * TransformMatrix(entity.transform);
+        glm::mat4 mvp = vp * entity.worldMatrix;
         glUniformMatrix4fv(glGetUniformLocation(gShader.id, "uMVP"),
             1, GL_FALSE, glm::value_ptr(mvp));
 
@@ -309,7 +263,7 @@ namespace {
                 L.type == LightType::Directional ? 0 : 1);
 
             glm::vec3 posOrDir = (L.type == LightType::Directional)
-                ? L.direction : e.transform.position;
+                ? L.direction : glm::vec3(e.worldMatrix[3]);
             glUniform3fv(glGetUniformLocation(prog,
                 ("uLightPosOrDir[" + idx + "]").c_str()),
                 1, glm::value_ptr(posOrDir));
@@ -329,7 +283,7 @@ namespace {
     void RenderToon(const Entity& entity, const glm::mat4& vp) {
         if (!gToonShader.id || !gOutlineShader.id) return;
 
-        glm::mat4 model = TransformMatrix(entity.transform);
+        const glm::mat4& model = entity.worldMatrix;
         glm::mat4 mvp   = vp * model;
 
         glEnable(GL_CULL_FACE);
@@ -560,7 +514,7 @@ namespace {
                 if (entity.light || entity.subMeshes.empty()) continue;
                 if (entity.shading != ShadingMode::Toon) continue;
 
-                glm::mat4 model = TransformMatrix(entity.transform);
+                const glm::mat4& model = entity.worldMatrix;
                 glm::mat4 lightMVP = gCascadeMatrices[c] * model;
                 glUniformMatrix4fv(glGetUniformLocation(gShadowShader.id, "uLightMVP"),
                     1, GL_FALSE, glm::value_ptr(lightMVP));
@@ -592,14 +546,12 @@ namespace {
             ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
             : 1.0f;
 
+        // Refresh cached world matrices for the whole scene hierarchy.
+        UpdateSceneTransforms(gScene);
+
         // Shadow pass (before scene).
         if (gSettings.shadowEnabled && gShadowShader.id && gShadowFBO)
             RenderShadowPass(aspect);
-
-        bool postProcess = gSettings.edgeEnabled && gEdgeShader.id && gFBO;
-
-        if (postProcess)
-            glBindFramebuffer(GL_FRAMEBUFFER, gFBO);
 
         glClearColor(gSettings.clearColor.r, gSettings.clearColor.g,
                      gSettings.clearColor.b, 1.0f);
@@ -642,42 +594,6 @@ namespace {
             case ShadingMode::VertexColor: RenderVertexColor(entity, vp); break;
             case ShadingMode::Toon:        RenderToon(entity, vp);        break;
             }
-        }
-
-        // -- Sobel edge detection post-process --------------------------------
-        if (postProcess) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-            glDisable(GL_DEPTH_TEST);
-            glUseProgram(gEdgeShader.id);
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, gColorTex);
-            glUniform1i(glGetUniformLocation(gEdgeShader.id, "uSceneColor"), 0);
-
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, gDepthTex);
-            glUniform1i(glGetUniformLocation(gEdgeShader.id, "uSceneDepth"), 1);
-
-            glUniform3fv(glGetUniformLocation(gEdgeShader.id, "uEdgeColor"),
-                1, glm::value_ptr(gSettings.edgeColor));
-            glUniform1f(glGetUniformLocation(gEdgeShader.id, "uEdgeThreshold"),
-                gSettings.edgeThreshold);
-            glUniform1f(glGetUniformLocation(gEdgeShader.id, "uEdgeWidth"),
-                gSettings.edgeWidth);
-            glUniform2f(glGetUniformLocation(gEdgeShader.id, "uTexelSize"),
-                1.0f / static_cast<float>(gFramebufferW),
-                1.0f / static_cast<float>(gFramebufferH));
-            glUniform1f(glGetUniformLocation(gEdgeShader.id, "uNear"),
-                gCamera.nearPlane);
-            glUniform1f(glGetUniformLocation(gEdgeShader.id, "uFar"),
-                gCamera.farPlane);
-
-            glBindVertexArray(gFullscreenVAO);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-
-            glEnable(GL_DEPTH_TEST);
-            glActiveTexture(GL_TEXTURE0);
         }
     }
 
@@ -789,6 +705,10 @@ int main(int argc, char* argv[]) {
 
     gDefaultTexture = CreateWhiteTexture();
 
+    // Scene root must exist before any child entity is appended so parent
+    // indices (defaulting to 0) resolve correctly.
+    EnsureSceneRoot(gScene);
+
     // Demo triangle vertex data: position (vec3) + color (vec3) + texcoord (vec2).
     // clang-format off
     float triVerts[] = {
@@ -816,7 +736,7 @@ int main(int argc, char* argv[]) {
     for (auto& dt : demoTriangles) {
         Entity e;
         e.name      = dt.name;
-        e.transform = dt.transform;
+        e.transform.emplace(dt.transform);
         e.shading   = ShadingMode::VertexColor;
 
         SubMesh sm;
@@ -862,7 +782,8 @@ int main(int argc, char* argv[]) {
         Entity e;
         e.name    = "Test Quad";
         e.shading = ShadingMode::Toon;
-        e.transform.position = {0.0f, 0.0f, -1.0f};
+        e.transform.emplace();
+        e.transform->position = {0.0f, 0.0f, -1.0f};
 
         SubMesh sm;
         sm.mesh = CreateMesh(qv, sizeof(qv), 11 * sizeof(float), qAttribs, 4, 6);
@@ -882,15 +803,11 @@ int main(int argc, char* argv[]) {
         "assets/shaders/outline.frag")) {
         std::fprintf(stderr, "Failed to load outline shaders\n");
     }
-    if (!LoadShader(gEdgeShader, "assets/shaders/edge.vert",
-        "assets/shaders/edge.frag")) {
-        std::fprintf(stderr, "Failed to load edge shaders\n");
-    }
     if (!LoadShader(gShadowShader, "assets/shaders/shadow.vert",
         "assets/shaders/shadow.frag")) {
         std::fprintf(stderr, "Failed to load shadow shaders\n");
     }
-    if (!LoadShader(gGridShader, "assets/shaders/edge.vert",
+    if (!LoadShader(gGridShader, "assets/shaders/fullscreen.vert",
         "assets/shaders/grid.frag")) {
         std::fprintf(stderr, "Failed to load grid shaders\n");
     }
@@ -899,9 +816,6 @@ int main(int argc, char* argv[]) {
 
     // Fullscreen triangle VAO (attributeless — positions from gl_VertexID).
     glGenVertexArrays(1, &gFullscreenVAO);
-
-    // Off-screen FBO for the edge detection post-process.
-    CreateOrResizeFBO(gFramebufferW, gFramebufferH);
 
     // Load a model if a path was passed on the command line.
     // Normalize: scale so the model's largest axis fits in 1 unit, centered
@@ -922,8 +836,9 @@ int main(int argc, char* argv[]) {
             e.name      = std::filesystem::path(argv[1]).filename().string();
             e.modelPath = argv[1];
             e.shading   = ShadingMode::Toon;
-            e.transform.scale    = glm::vec3(s);
-            e.transform.position = -center * s;
+            e.transform.emplace();
+            e.transform->scale    = glm::vec3(s);
+            e.transform->position = -center * s;
             e.subMeshes = std::move(loaded.subMeshes);
             e.skeleton  = std::move(loaded.skeleton);
             e.clips     = std::move(loaded.clips);
@@ -978,8 +893,10 @@ int main(int argc, char* argv[]) {
             if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS) {
                 glm::vec3 target{0.0f};
                 if (gScene.selected >= 0 &&
-                    gScene.selected < static_cast<int>(gScene.entities.size()))
-                    target = gScene.entities[gScene.selected].transform.position;
+                    gScene.selected < static_cast<int>(gScene.entities.size())) {
+                    const Entity& sel = gScene.entities[gScene.selected];
+                    target = glm::vec3(sel.worldMatrix[3]);
+                }
                 CameraFocus(gCamera, target);
             }
 
@@ -995,7 +912,6 @@ int main(int argc, char* argv[]) {
         ReloadIfChanged(gShader);
         ReloadIfChanged(gToonShader);
         ReloadIfChanged(gOutlineShader);
-        ReloadIfChanged(gEdgeShader);
         ReloadIfChanged(gShadowShader);
         ReloadIfChanged(gGridShader);
 
@@ -1020,15 +936,11 @@ int main(int argc, char* argv[]) {
     // -----------------------------------------------------------------------
     OverlayShutdown();
     DestroyScene(gScene);
-    if (gFBO)           glDeleteFramebuffers(1, &gFBO);
-    if (gColorTex)      glDeleteTextures(1, &gColorTex);
-    if (gDepthTex)      glDeleteTextures(1, &gDepthTex);
     if (gFullscreenVAO) glDeleteVertexArrays(1, &gFullscreenVAO);
     if (gShadowFBO) glDeleteFramebuffers(1, &gShadowFBO);
     if (gShadowMap) glDeleteTextures(1, &gShadowMap);
     DestroyShader(gGridShader);
     DestroyShader(gShadowShader);
-    DestroyShader(gEdgeShader);
     DestroyShader(gOutlineShader);
     DestroyShader(gToonShader);
     DestroyTexture(gDefaultTexture);
