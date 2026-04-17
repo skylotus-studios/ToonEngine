@@ -11,8 +11,6 @@
 
 #include <glm/glm.hpp>
 
-struct GLFWwindow;
-
 struct Camera {
     glm::vec3 position{ 0.0f, 0.0f, 3.0f };
     glm::vec3 pivot{ 0.0f };           // orbit center
@@ -25,18 +23,6 @@ struct Camera {
     float lookSensitivity = 0.15f;    // degrees per pixel
     float panSensitivity = 0.001f;   // world units per pixel
     float zoomSpeed = 0.15f;          // world units per scroll tick
-};
-
-// Input state — tracks all mouse/scroll state for one frame.
-// Lives alongside the camera; updated by GLFW callbacks.
-struct InputState {
-    bool   rightHeld = false;
-    bool   middleHeld = false;
-    bool   firstRight = false;   // suppress first-frame delta
-    bool   firstMiddle = false;
-    double lastX = 0.0;
-    double lastY = 0.0;
-    float  scrollY = 0.0f;      // accumulated scroll delta this frame
 };
 
 glm::vec3 CameraFront(const Camera& cam);
@@ -59,4 +45,4 @@ void CameraZoom(Camera& cam, float scroll);
 void CameraFocus(Camera& cam, const glm::vec3& target, float distance = 0.0f);
 
 // Fly-through: WASD + Space/Shift while right-click is held.
-void CameraFly(Camera& cam, GLFWwindow* window, float dt);
+void CameraFly(Camera& cam, float dt);

@@ -25,6 +25,13 @@ src/
     transform.h/.cpp        Position/rotation/scale -> model matrix (TRS)
     animation.h             Joint, Skeleton, AnimationClip, keyframe types
     animator.h/.cpp         Playback, keyframe interpolation, joint matrix computation
+    input/                  Unified input system (keyboard, mouse, gamepad)
+      keycodes.h            Key/Button/Axis enums, GLFW ↔ engine conversion
+      input_device.h/.cpp   Per-device raw state (Keyboard, Mouse, Gamepad)
+      input_event.h         Tagged-union InputEvent for the per-frame event queue
+      input_system.h/.cpp   Init, BeginFrame, polling API, capture gate, event stream
+      action_map.h/.cpp     Named actions/axes, bindings, runtime rebind, context stack
+      binding_io.h/.cpp     JSON save/load for bindings (nlohmann-json)
   scene/                    Scene graph and asset loading
     scene.h                 Entity (meshes, skeleton, light, animator, modelPath), Scene
     camera.h/.cpp           Editor camera (orbit, pan, zoom, fly, focus)
@@ -55,6 +62,18 @@ libs/
    - Light entities (directional/point, max 8) uploaded as uniform arrays
    - Skinned entities upload `uJoints[]` for GPU skinning
 4. **ImGui overlay**
+
+## Input system
+
+All GLFW input callbacks live in `core/input/`. No other file calls `glfwGetKey` or `glfwSetMouseButtonCallback`.
+
+- **Device layer** (`Keyboard`, `Mouse`, `Gamepad`): raw per-frame state with `current`/`previous` arrays for edge detection (`WasPressed`, `WasReleased`).
+- **Polling API** (`Input::IsKeyDown`, `MouseDelta`, `ScrollDelta`, etc.): respects a capture gate so ImGui interaction suppresses engine input.
+- **Event queue** (`Input::Events()`, `EachEvent(fn)`): per-frame stream of typed events (key/mouse/scroll/gamepad). Cleared on `BeginFrame`.
+- **Action/axis layer**: named actions (`"camera.focus"`) and axes (`"camera.fly.forward"`) with arbitrary bindings (key, mouse button, gamepad button/axis). Queried via `IsActionDown`, `WasActionPressed`, `GetAxis`.
+- **Context stack** (`PushContext`/`PopContext`): named sets of action bindings; top-of-stack wins. Default context is `"editor"`.
+- **Persistence**: `assets/input.json` stores bindings per context. Loaded on startup; hardcoded defaults used as fallback.
+- **Frame order**: `Input::BeginFrame()` → `glfwPollEvents()` → consume. Gamepads polled in `BeginFrame`.
 
 ## Conventions
 

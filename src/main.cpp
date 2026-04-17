@@ -16,6 +16,9 @@
 
 #include "core/animation.h"
 #include "core/animator.h"
+#include "core/input/action_map.h"
+#include "core/input/binding_io.h"
+#include "core/input/input_system.h"
 #include "core/mesh.h"
 #include "core/shader.h"
 #include "core/texture.h"
@@ -75,10 +78,8 @@ namespace {
 
     Scene          gScene{};
     RenderSettings gSettings{};
-    bool           gOverlayCapturing = false;
 
     Camera     gCamera{};
-    InputState gInput{};
     int    gFramebufferW = kWindowWidth;
     int    gFramebufferH = kWindowHeight;
 
@@ -126,58 +127,6 @@ namespace {
         gFramebufferW = width;
         gFramebufferH = height;
         glViewport(0, 0, width, height);
-    }
-
-    void MouseButtonCallback(GLFWwindow* window, int button, int action, int /*mods*/) {
-        if (gOverlayCapturing && action == GLFW_PRESS) return;
-
-        if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-            gInput.rightHeld = (action == GLFW_PRESS);
-            if (gInput.rightHeld) {
-                gInput.firstRight = true;
-                glfwGetCursorPos(window, &gInput.lastX, &gInput.lastY);
-            }
-        }
-        if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
-            gInput.middleHeld = (action == GLFW_PRESS);
-            if (gInput.middleHeld) {
-                gInput.firstMiddle = true;
-                glfwGetCursorPos(window, &gInput.lastX, &gInput.lastY);
-            }
-        }
-    }
-
-    void CursorPosCallback(GLFWwindow*, double x, double y) {
-        if (!gInput.rightHeld && !gInput.middleHeld) return;
-
-        // On the first frame of a hold, just record position — no delta.
-        // This prevents the jump when the cursor was far from where it was
-        // when the button was pressed.
-        if (gInput.firstRight || gInput.firstMiddle) {
-            gInput.lastX = x;
-            gInput.lastY = y;
-            gInput.firstRight  = false;
-            gInput.firstMiddle = false;
-            return;
-        }
-
-        auto dx = static_cast<float>(x - gInput.lastX);
-        auto dy = static_cast<float>(gInput.lastY - y);  // Y inverted
-        gInput.lastX = x;
-        gInput.lastY = y;
-
-        // Clamp delta to prevent massive jumps (e.g. alt-tab back).
-        constexpr float kMaxDelta = 50.0f;
-        dx = std::clamp(dx, -kMaxDelta, kMaxDelta);
-        dy = std::clamp(dy, -kMaxDelta, kMaxDelta);
-
-        if (gInput.rightHeld)  CameraOrbit(gCamera, dx, dy);
-        if (gInput.middleHeld) CameraPan(gCamera, dx, dy);
-    }
-
-    void ScrollCallback(GLFWwindow*, double /*xoffset*/, double yoffset) {
-        if (gOverlayCapturing) return;
-        gInput.scrollY += static_cast<float>(yoffset);
     }
 
     // -----------------------------------------------------------------------
@@ -673,11 +622,21 @@ int main(int argc, char* argv[]) {
         glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
     }
 
-    // Register input callbacks.
+    // Register callbacks. Input::Init installs key/mouse/scroll/gamepad
+    // callbacks — call it BEFORE OverlayInit so ImGui can chain them.
     glfwSetFramebufferSizeCallback(window, FramebufferSizeCallback);
-    glfwSetMouseButtonCallback(window, MouseButtonCallback);
-    glfwSetCursorPosCallback(window, CursorPosCallback);
-    glfwSetScrollCallback(window, ScrollCallback);
+    Input::Init(window);
+
+    // Register hardcoded defaults, then try overriding from disk.
+    RegisterDefaultEditorBindings();
+    {
+        InputContext fileCtx;
+        fileCtx.name = "editor";
+        if (BindingIO::Load("assets/input.json", fileCtx)) {
+            PopContext("editor");
+            PushContext(std::move(fileCtx));
+        }
+    }
 
     // Sync framebuffer dimensions (may differ from window size on HiDPI).
     {
@@ -870,6 +829,12 @@ int main(int argc, char* argv[]) {
     double accumulator = 0.0;
 
     while (!glfwWindowShouldClose(window)) {
+        // Snapshot previous input state, then pump GLFW events so callbacks
+        // update current state. Order matters: BeginFrame before PollEvents
+        // so WasPressed detects the transition correctly.
+        Input::BeginFrame();
+        glfwPollEvents();
+
         const auto   now = Clock::now();
         const double frame = std::chrono::duration<double>(now - prev).count();
         prev = now;
@@ -882,15 +847,45 @@ int main(int argc, char* argv[]) {
             accumulator -= kFixedTimestep;
         }
 
-        // Camera input: scroll zoom, fly-through (WASD when right-held), focus.
-        if (!gOverlayCapturing) {
-            if (gInput.scrollY != 0.0f) {
-                CameraZoom(gCamera, gInput.scrollY);
-                gInput.scrollY = 0.0f;
+        // Camera input — polling API auto-gates when ImGui is capturing.
+        {
+            constexpr float kMaxDelta = 50.0f;
+
+            glm::dvec2 scroll = Input::ScrollDelta();
+            if (scroll.y != 0.0)
+                CameraZoom(gCamera, static_cast<float>(scroll.y));
+
+            bool rightDown  = Input::IsMouseDown(MouseButton::Right);
+            bool middleDown = Input::IsMouseDown(MouseButton::Middle);
+
+            // Skip delta on the first frame of a press to avoid a jump when
+            // the cursor was elsewhere before the button went down.
+            bool firstRight  = Input::WasMousePressed(MouseButton::Right);
+            bool firstMiddle = Input::WasMousePressed(MouseButton::Middle);
+
+            if (rightDown && !firstRight) {
+                glm::dvec2 d = Input::MouseDelta();
+                float dx = std::clamp(static_cast<float>( d.x), -kMaxDelta, kMaxDelta);
+                float dy = std::clamp(static_cast<float>(-d.y), -kMaxDelta, kMaxDelta);
+                CameraOrbit(gCamera, dx, dy);
             }
-            if (gInput.rightHeld)
-                CameraFly(gCamera, window, static_cast<float>(frame));
-            if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS) {
+            if (middleDown && !firstMiddle) {
+                glm::dvec2 d = Input::MouseDelta();
+                float dx = std::clamp(static_cast<float>( d.x), -kMaxDelta, kMaxDelta);
+                float dy = std::clamp(static_cast<float>(-d.y), -kMaxDelta, kMaxDelta);
+                CameraPan(gCamera, dx, dy);
+            }
+
+            if (rightDown)
+                CameraFly(gCamera, static_cast<float>(frame));
+
+            // Gamepad orbit via right stick.
+            float gpOrbitX = GetAxis("camera.orbit.x");
+            float gpOrbitY = GetAxis("camera.orbit.y");
+            if (gpOrbitX != 0.0f || gpOrbitY != 0.0f)
+                CameraOrbit(gCamera, gpOrbitX * 3.0f, -gpOrbitY * 3.0f);
+
+            if (WasActionPressed("camera.focus")) {
                 glm::vec3 target{0.0f};
                 if (gScene.selected >= 0 &&
                     gScene.selected < static_cast<int>(gScene.entities.size())) {
@@ -900,14 +895,15 @@ int main(int argc, char* argv[]) {
                 CameraFocus(gCamera, target);
             }
 
-            // Gizmo shortcuts (W/E/R like Unity).
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS && !gInput.rightHeld)
-                gSettings.gizmoOp = 0;  // translate
-            if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS && !gInput.rightHeld)
-                gSettings.gizmoOp = 1;  // rotate
-            if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !gInput.rightHeld)
-                gSettings.gizmoOp = 2;  // scale
+            if (!rightDown) {
+                if (WasActionPressed("gizmo.translate")) gSettings.gizmoOp = 0;
+                if (WasActionPressed("gizmo.rotate"))    gSettings.gizmoOp = 1;
+                if (WasActionPressed("gizmo.scale"))     gSettings.gizmoOp = 2;
+            }
         }
+
+        if (WasActionPressed("app.quit"))
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
 
         ReloadIfChanged(gShader);
         ReloadIfChanged(gToonShader);
@@ -921,20 +917,17 @@ int main(int argc, char* argv[]) {
         // ImGui overlay (rendered after the scene, on top).
         OverlayNewFrame();
         float fps = (frame > 0.0) ? static_cast<float>(1.0 / frame) : 0.0f;
-        gOverlayCapturing = OverlayRender(gSettings, gScene, gCamera, gDefaultTexture, fps);
+        bool captured = OverlayRender(gSettings, gScene, gCamera, gDefaultTexture, fps);
+        Input::SetCaptured(captured, captured);
 
         glfwSwapBuffers(window);
-        glfwPollEvents();
-
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
-        }
     }
 
     // -----------------------------------------------------------------------
     // Cleanup — reverse order of creation.
     // -----------------------------------------------------------------------
     OverlayShutdown();
+    Input::Shutdown();
     DestroyScene(gScene);
     if (gFullscreenVAO) glDeleteVertexArrays(1, &gFullscreenVAO);
     if (gShadowFBO) glDeleteFramebuffers(1, &gShadowFBO);

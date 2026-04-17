@@ -2,7 +2,9 @@
 
 #include "camera.h"
 
-#include <GLFW/glfw3.h>
+#include "core/input/action_map.h"
+#include "core/input/input_system.h"
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
@@ -84,22 +86,21 @@ void CameraFocus(Camera& cam, const glm::vec3& target, float distance) {
     cam.position = cam.pivot - CameraFront(cam) * distance;
 }
 
-void CameraFly(Camera& cam, GLFWwindow* window, float dt) {
+void CameraFly(Camera& cam, float dt) {
     float velocity = cam.moveSpeed * dt;
     glm::vec3 front = CameraFront(cam);
     glm::vec3 right = CameraRight(cam);
 
-    glm::vec3 move{ 0.0f };
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)          move += front;
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)          move -= front;
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)          move -= right;
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)          move += right;
-    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)      move.y += 1.0f;
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) move.y -= 1.0f;
+    float fwd = GetAxis("camera.fly.forward");
+    float rgt = GetAxis("camera.fly.right");
+    float up  = GetAxis("camera.fly.up");
+
+    glm::vec3 move = front * fwd + right * rgt;
+    move.y += up;
 
     if (glm::length(move) > 0.001f) {
         move = glm::normalize(move) * velocity;
         cam.position += move;
-        cam.pivot += move;  // keep orbit distance stable
+        cam.pivot += move;
     }
 }

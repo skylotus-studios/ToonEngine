@@ -40,6 +40,7 @@ find_package(glad  CONFIG REQUIRED)
 find_package(glm   CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 # --- Vendored libraries (single-header / single-file, committed in libs/) ---
 # ufbx: compiled as a static lib so its C code gets its own warning settings.
@@ -66,6 +67,16 @@ add_executable(ToonEngine
     src/core/animation.h
     src/core/animator.h
     src/core/animator.cpp
+    src/core/input/keycodes.h
+    src/core/input/input_device.h
+    src/core/input/input_device.cpp
+    src/core/input/input_event.h
+    src/core/input/input_system.h
+    src/core/input/input_system.cpp
+    src/core/input/action_map.h
+    src/core/input/action_map.cpp
+    src/core/input/binding_io.h
+    src/core/input/binding_io.cpp
     src/scene/camera.h
     src/scene/camera.cpp
     src/scene/model_loader.h
@@ -102,6 +113,7 @@ target_link_libraries(ToonEngine
         glad::glad
         glm::glm
         imgui::imgui
+        nlohmann_json::nlohmann_json
         ufbx
         $<$<PLATFORM_ID:Windows>:dwmapi>
 )
