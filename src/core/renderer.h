@@ -98,9 +98,10 @@ TextureHandle LoadTexture(const char* path, bool flipY = true);
 TextureHandle LoadTextureFromMemory(const unsigned char* data, int dataSize,
                                     bool flipY = true);
 
-int  GetTextureWidth(TextureHandle h);
-int  GetTextureHeight(TextureHandle h);
-void DestroyTexture(TextureHandle h);
+int       GetTextureWidth(TextureHandle h);
+int       GetTextureHeight(TextureHandle h);
+uintptr_t GetTextureNativeID(TextureHandle h);  // raw GL ID for ImGui::Image
+void      DestroyTexture(TextureHandle h);
 
 // ---------------------------------------------------------------------------
 // Framebuffer.

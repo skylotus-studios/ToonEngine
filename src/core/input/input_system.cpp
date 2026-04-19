@@ -2,6 +2,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <string>
 #include <vector>
 
 namespace {
@@ -86,6 +87,13 @@ void JoystickCallback(int jid, int event) {
     }
 }
 
+std::vector<std::string> gDroppedFiles;
+
+void DropCallback(GLFWwindow*, int count, const char** paths) {
+    for (int i = 0; i < count; ++i)
+        gDroppedFiles.emplace_back(paths[i]);
+}
+
 } // namespace
 
 namespace Input {
@@ -100,6 +108,7 @@ void Init(GLFWwindow* window) {
     glfwSetScrollCallback(window, ScrollCallback);
     glfwSetCursorEnterCallback(window, CursorEnterCallback);
     glfwSetJoystickCallback(JoystickCallback);
+    glfwSetDropCallback(window, DropCallback);
 
     // Detect gamepads already connected at startup.
     for (int jid = 0; jid < kMaxGamepads; ++jid) {
@@ -183,6 +192,12 @@ std::span<const InputEvent> Events() {
 
 void EachEvent(const std::function<void(const InputEvent&)>& fn) {
     for (auto& e : gEvents) fn(e);
+}
+
+std::vector<std::string> DroppedFiles() {
+    std::vector<std::string> result;
+    result.swap(gDroppedFiles);
+    return result;
 }
 
 } // namespace Input

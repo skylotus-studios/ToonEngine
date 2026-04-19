@@ -449,6 +449,11 @@ int GetTextureHeight(TextureHandle h) {
     return GetSlot(gTextures, h.id).height;
 }
 
+uintptr_t GetTextureNativeID(TextureHandle h) {
+    if (!h) return 0;
+    return static_cast<uintptr_t>(GetSlot(gTextures, h.id).id);
+}
+
 void DestroyTexture(TextureHandle h) {
     if (!h) return;
     TextureSlot& t = GetSlot(gTextures, h.id);

@@ -20,6 +20,7 @@
 #include "core/input/input_system.h"
 #include "core/renderer.h"
 #include "core/transform.h"
+#include "ui/file_browser.h"
 #include "scene/camera.h"
 #include "scene/model_loader.h"
 #include "scene/scene.h"
@@ -531,6 +532,7 @@ int main(int argc, char* argv[]) {
     }
 
     OverlayInit(window);
+    FileBrowserInit(std::filesystem::current_path());
 
     // -----------------------------------------------------------------------
     // Resource loading.
@@ -804,6 +806,39 @@ int main(int argc, char* argv[]) {
 
         if (WasActionPressed("app.quit"))
             glfwSetWindowShouldClose(window, GLFW_TRUE);
+
+        // Handle OS file drops.
+        {
+            auto dropped = Input::DroppedFiles();
+            for (auto& path : dropped) {
+                namespace fs = std::filesystem;
+                std::string ext = fs::path(path).extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+                    ext == ".bmp" || ext == ".tga") {
+                    fs::create_directories("assets/textures");
+                    fs::path dest = fs::path("assets/textures") / fs::path(path).filename();
+                    std::error_code ec;
+                    fs::copy_file(path, dest, fs::copy_options::overwrite_existing, ec);
+                    if (!ec) {
+                        std::printf("Imported: %s\n", dest.string().c_str());
+                        TextureHandle h = LoadTexture(dest.string().c_str());
+                        if (h && gScene.selected >= 0 &&
+                            gScene.selected < static_cast<int>(gScene.entities.size())) {
+                            auto& sel = gScene.entities[gScene.selected];
+                            if (sel.parent != -1) {
+                                if (sel.subMeshes.empty()) {
+                                    SubMesh sm;
+                                    sel.subMeshes.push_back(std::move(sm));
+                                }
+                                sel.subMeshes[0].material.texture = h;
+                            }
+                        }
+                        FileBrowserRefresh();
+                    }
+                }
+            }
+        }
 
         ReloadIfChanged(gShader);
         ReloadIfChanged(gToonShader);

@@ -6,6 +6,7 @@
 #include "core/animator.h"
 #include "core/transform.h"
 #include "scene/serializer.h"
+#include "ui/file_browser.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -14,6 +15,10 @@
 
 #include <GLFW/glfw3.h>
 #include <glm/gtc/type_ptr.hpp>
+
+#include <algorithm>
+#include <filesystem>
+#include <string>
 
 static Theme sCurrentTheme = Theme::AmberYellow;
 
@@ -155,6 +160,68 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
                 ImGui::Checkbox("Flip X", &e.spriteFlipX);
                 ImGui::SameLine();
                 ImGui::Checkbox("Flip Y", &e.spriteFlipY);
+            }
+
+            // Material component.
+            if (!e.subMeshes.empty() && e.parent != -1 &&
+                ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+                for (int si = 0; si < static_cast<int>(e.subMeshes.size()); ++si) {
+                    auto& mat = e.subMeshes[si].material;
+                    ImGui::PushID(si);
+                    if (e.subMeshes.size() > 1)
+                        ImGui::Text("Sub-mesh %d", si);
+
+                    ImGui::ColorEdit4("Base Color", &mat.baseColor.x);
+
+                    // Texture slot with thumbnail + drag-drop.
+                    ImGui::Text("Texture:");
+                    ImGui::SameLine();
+                    if (mat.texture) {
+                        ImGui::Image(
+                            reinterpret_cast<ImTextureID>(GetTextureNativeID(mat.texture)),
+                            ImVec2(48, 48), ImVec2(0, 1), ImVec2(1, 0));
+                    } else {
+                        ImGui::Dummy(ImVec2(48, 48));
+                    }
+                    if (ImGui::BeginDragDropTarget()) {
+                        if (const ImGuiPayload* payload =
+                                ImGui::AcceptDragDropPayload("TOON_ASSET_PATH")) {
+                            const char* path = static_cast<const char*>(payload->Data);
+                            TextureHandle h = LoadTexture(path);
+                            if (h) mat.texture = h;
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+                    ImGui::SameLine();
+                    if (mat.texture && ImGui::SmallButton("X##tex"))
+                        mat.texture = {};
+
+                    // Normal map slot.
+                    ImGui::Text("Normal Map:");
+                    ImGui::SameLine();
+                    if (mat.normalMap) {
+                        ImGui::Image(
+                            reinterpret_cast<ImTextureID>(GetTextureNativeID(mat.normalMap)),
+                            ImVec2(48, 48), ImVec2(0, 1), ImVec2(1, 0));
+                    } else {
+                        ImGui::Dummy(ImVec2(48, 48));
+                    }
+                    if (ImGui::BeginDragDropTarget()) {
+                        if (const ImGuiPayload* payload =
+                                ImGui::AcceptDragDropPayload("TOON_ASSET_PATH")) {
+                            const char* path = static_cast<const char*>(payload->Data);
+                            TextureHandle h = LoadTexture(path);
+                            if (h) mat.normalMap = h;
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+                    ImGui::SameLine();
+                    if (mat.normalMap && ImGui::SmallButton("X##nrm"))
+                        mat.normalMap = {};
+
+                    if (e.subMeshes.size() > 1) ImGui::Separator();
+                    ImGui::PopID();
+                }
             }
 
             // Animation component (skinned entities with clips).
@@ -331,6 +398,23 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
                 dropDst = i;
                 dropKind = kind;
             }
+            if (const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload("TOON_ASSET_PATH")) {
+                const char* path = static_cast<const char*>(payload->Data);
+                std::string ext = std::filesystem::path(path).extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+                    ext == ".bmp" || ext == ".tga") {
+                    TextureHandle h = LoadTexture(path);
+                    if (h && entities[i].parent != -1) {
+                        if (entities[i].subMeshes.empty()) {
+                            SubMesh sm;
+                            entities[i].subMeshes.push_back(std::move(sm));
+                        }
+                        entities[i].subMeshes[0].material.texture = h;
+                    }
+                }
+            }
             ImGui::EndDragDropTarget();
         }
 
@@ -406,6 +490,9 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
     count = static_cast<int>(entities.size());  // list size may have changed
 
     ImGui::End();
+
+    // -- File Browser panel ---------------------------------------------------
+    FileBrowserRender();
 
     // -- Gizmo on selected entity ---------------------------------------------
     bool gizmoUsing = false;

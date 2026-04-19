@@ -8,6 +8,8 @@
 
 #include <functional>
 #include <span>
+#include <string>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -49,5 +51,8 @@ const Mouse&    RawMouse();
 // Per-frame event stream — consumed between BeginFrame and next BeginFrame.
 std::span<const InputEvent> Events();
 void EachEvent(const std::function<void(const InputEvent&)>& fn);
+
+// OS file drops — returns and clears the list of paths dropped this frame.
+std::vector<std::string> DroppedFiles();
 
 } // namespace Input

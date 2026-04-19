@@ -84,6 +84,11 @@ add_executable(ToonEngine
     src/scene/scene.cpp
     src/scene/serializer.h
     src/scene/serializer.cpp
+    src/ui/file_filter.h
+    src/ui/file_browser.h
+    src/ui/file_browser.cpp
+    src/ui/thumbnail_cache.h
+    src/ui/thumbnail_cache.cpp
     src/ui/overlay.h
     src/ui/overlay.cpp
     src/ui/themes.h
