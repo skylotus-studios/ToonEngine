@@ -78,7 +78,7 @@ void OverlayNewFrame();
 // ImGui wants to capture mouse/keyboard input (i.e. the user is
 // interacting with a widget — the camera should ignore input).
 bool OverlayRender(RenderSettings& settings, Scene& scene, Camera& camera,
-    Texture& defaultTexture, float fps);
+    TextureHandle& defaultTexture, float fps);
 
 // Shutdown ImGui. Call once before destroying the GL context.
 void OverlayShutdown();

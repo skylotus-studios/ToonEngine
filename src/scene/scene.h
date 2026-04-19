@@ -14,8 +14,7 @@
 #include "core/animation.h"
 #include "core/animator.h"
 #include "core/material.h"
-#include "core/mesh.h"
-#include "core/texture.h"
+#include "core/renderer.h"
 #include "core/transform.h"
 #include "scene/model_loader.h"
 

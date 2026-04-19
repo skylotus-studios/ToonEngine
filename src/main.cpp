@@ -4,7 +4,6 @@
 // and demo geometry, and runs a fixed-timestep game loop with camera
 // input, shader hot-reload, and toon shading with outlines.
 
-#include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #ifdef _WIN32
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -19,9 +18,7 @@
 #include "core/input/action_map.h"
 #include "core/input/binding_io.h"
 #include "core/input/input_system.h"
-#include "core/mesh.h"
-#include "core/shader.h"
-#include "core/texture.h"
+#include "core/renderer.h"
 #include "core/transform.h"
 #include "scene/camera.h"
 #include "scene/model_loader.h"
@@ -53,24 +50,19 @@ namespace {
     constexpr char   kWindowTitle[] = "ToonEngine";
     constexpr double kFixedTimestep = 1.0 / 60.0;
 
-    ShaderProgram gShader{};
-    Texture       gDefaultTexture{};
+    ShaderHandle  gShader{};
+    TextureHandle gDefaultTexture{};
 
-    // Toon rendering shaders.
-    ShaderProgram gToonShader{};
-    ShaderProgram gOutlineShader{};
+    ShaderHandle gToonShader{};
+    ShaderHandle gOutlineShader{};
 
-    // Attributeless fullscreen-triangle VAO for passes that synthesize
-    // vertices from gl_VertexID (grid/sky, etc.).
-    GLuint gFullscreenVAO = 0;
+    MeshHandle   gFullscreenVAO{};
 
-    // Grid / sky environment.
-    ShaderProgram gGridShader{};
+    ShaderHandle gGridShader{};
 
-    // Cascaded shadow mapping.
-    ShaderProgram gShadowShader{};
-    GLuint gShadowFBO    = 0;
-    GLuint gShadowMap    = 0;  // GL_TEXTURE_2D_ARRAY (one layer per cascade)
+    ShaderHandle      gShadowShader{};
+    FramebufferHandle gShadowFB{};
+    TextureHandle     gShadowMap{};
     constexpr int kShadowMapSize = 2048;
     constexpr int kCascadeCount  = 4;
     glm::mat4 gCascadeMatrices[kCascadeCount]{};
@@ -84,37 +76,6 @@ namespace {
     int    gFramebufferH = kWindowHeight;
 
 
-    void CreateShadowFBO() {
-        if (gShadowFBO) return;
-
-        glGenTextures(1, &gShadowMap);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, gShadowMap);
-        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT32F,
-                     kShadowMapSize, kShadowMapSize, kCascadeCount,
-                     0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-        float borderColor[] = {1.0f, 1.0f, 1.0f, 1.0f};
-        glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-
-        glGenFramebuffers(1, &gShadowFBO);
-        glBindFramebuffer(GL_FRAMEBUFFER, gShadowFBO);
-        // Attach layer 0 initially; we re-attach per-cascade in the render loop.
-        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                  gShadowMap, 0, 0);
-        glDrawBuffer(GL_NONE);
-        glReadBuffer(GL_NONE);
-
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-            std::fprintf(stderr, "Shadow FBO incomplete\n");
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    }
-
     // -----------------------------------------------------------------------
     // GLFW callbacks.
     // -----------------------------------------------------------------------
@@ -126,43 +87,7 @@ namespace {
     void FramebufferSizeCallback(GLFWwindow*, int width, int height) {
         gFramebufferW = width;
         gFramebufferH = height;
-        glViewport(0, 0, width, height);
-    }
-
-    // -----------------------------------------------------------------------
-    // GL debug callback (only active when KHR_debug is available; not on macOS).
-    // -----------------------------------------------------------------------
-    void APIENTRY GlDebugCallback(GLenum source, GLenum type, GLuint id,
-        GLenum severity, GLsizei /*length*/,
-        const GLchar* message, const void* /*user*/) {
-        if (severity == GL_DEBUG_SEVERITY_NOTIFICATION) return;
-
-        const char* src = "?";
-        switch (source) {
-        case GL_DEBUG_SOURCE_API:             src = "API";        break;
-        case GL_DEBUG_SOURCE_WINDOW_SYSTEM:   src = "WINDOW";     break;
-        case GL_DEBUG_SOURCE_SHADER_COMPILER: src = "SHADER";     break;
-        case GL_DEBUG_SOURCE_THIRD_PARTY:     src = "THIRDPARTY"; break;
-        case GL_DEBUG_SOURCE_APPLICATION:     src = "APP";        break;
-        case GL_DEBUG_SOURCE_OTHER:           src = "OTHER";      break;
-        }
-        const char* typ = "?";
-        switch (type) {
-        case GL_DEBUG_TYPE_ERROR:               typ = "ERROR";       break;
-        case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: typ = "DEPRECATED";  break;
-        case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:  typ = "UB";          break;
-        case GL_DEBUG_TYPE_PORTABILITY:         typ = "PORTABILITY"; break;
-        case GL_DEBUG_TYPE_PERFORMANCE:         typ = "PERF";        break;
-        case GL_DEBUG_TYPE_MARKER:              typ = "MARKER";      break;
-        case GL_DEBUG_TYPE_OTHER:               typ = "OTHER";       break;
-        }
-        const char* sev = "?";
-        switch (severity) {
-        case GL_DEBUG_SEVERITY_HIGH:   sev = "HIGH";   break;
-        case GL_DEBUG_SEVERITY_MEDIUM: sev = "MEDIUM"; break;
-        case GL_DEBUG_SEVERITY_LOW:    sev = "LOW";    break;
-        }
-        std::fprintf(stderr, "[GL %s/%s/%s #%u] %s\n", sev, typ, src, id, message);
+        SetViewport(0, 0, width, height);
     }
 
     // -----------------------------------------------------------------------
@@ -187,177 +112,123 @@ namespace {
     }
 
     void RenderVertexColor(const Entity& entity, const glm::mat4& vp) {
-        glUseProgram(gShader.id);
+        BindShader(gShader);
         BindTexture(gDefaultTexture, 0);
-        glUniform1i(glGetUniformLocation(gShader.id, "uTexture"), 0);
-
-        glm::mat4 mvp = vp * entity.worldMatrix;
-        glUniformMatrix4fv(glGetUniformLocation(gShader.id, "uMVP"),
-            1, GL_FALSE, glm::value_ptr(mvp));
+        SetUniform("uTexture", 0);
+        SetUniform("uMVP", vp * entity.worldMatrix);
 
         for (auto& sm : entity.subMeshes)
             DrawMesh(sm.mesh);
     }
 
-    // Upload all scene lights to a shader program.
-    void UploadLights(GLuint prog) {
+    void UploadLights() {
         int count = 0;
         for (auto& e : gScene.entities) {
             if (!e.light || count >= kMaxLights) continue;
             const Light& L = *e.light;
             std::string idx = std::to_string(count);
 
-            glUniform1i(glGetUniformLocation(prog,
-                ("uLightType[" + idx + "]").c_str()),
+            SetUniform(("uLightType[" + idx + "]").c_str(),
                 L.type == LightType::Directional ? 0 : 1);
 
             glm::vec3 posOrDir = (L.type == LightType::Directional)
                 ? L.direction : glm::vec3(e.worldMatrix[3]);
-            glUniform3fv(glGetUniformLocation(prog,
-                ("uLightPosOrDir[" + idx + "]").c_str()),
-                1, glm::value_ptr(posOrDir));
-
-            glUniform3fv(glGetUniformLocation(prog,
-                ("uLightColor[" + idx + "]").c_str()),
-                1, glm::value_ptr(L.color));
-            glUniform1f(glGetUniformLocation(prog,
-                ("uLightIntensity[" + idx + "]").c_str()), L.intensity);
-            glUniform1f(glGetUniformLocation(prog,
-                ("uLightRadius[" + idx + "]").c_str()), L.radius);
+            SetUniform(("uLightPosOrDir[" + idx + "]").c_str(), posOrDir);
+            SetUniform(("uLightColor[" + idx + "]").c_str(), L.color);
+            SetUniform(("uLightIntensity[" + idx + "]").c_str(), L.intensity);
+            SetUniform(("uLightRadius[" + idx + "]").c_str(), L.radius);
             ++count;
         }
-        glUniform1i(glGetUniformLocation(prog, "uLightCount"), count);
+        SetUniform("uLightCount", count);
     }
 
     void RenderToon(const Entity& entity, const glm::mat4& vp) {
-        if (!gToonShader.id || !gOutlineShader.id) return;
+        if (!gToonShader || !gOutlineShader) return;
 
         const glm::mat4& model = entity.worldMatrix;
-        glm::mat4 mvp   = vp * model;
-
-        glEnable(GL_CULL_FACE);
+        glm::mat4 mvp = vp * model;
 
         // Pass 1: toon shading (front faces).
-        glCullFace(GL_BACK);
-        glUseProgram(gToonShader.id);
-        glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uMVP"),
-            1, GL_FALSE, glm::value_ptr(mvp));
-        glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uModel"),
-            1, GL_FALSE, glm::value_ptr(model));
-        glUniform1i(glGetUniformLocation(gToonShader.id, "uTexture"), 0);
+        SetRenderState({CullMode::Back, DepthFunc::Less});
+        BindShader(gToonShader);
+        SetUniform("uMVP", mvp);
+        SetUniform("uModel", model);
+        SetUniform("uTexture", 0);
 
-        // Skeletal animation (DEBUG: override via gSettings.debugDisableSkinning).
         bool doSkin = entity.skinned && !gSettings.debugDisableSkinning;
-        glUniform1i(glGetUniformLocation(gToonShader.id, "uSkinned"),
-            doSkin ? 1 : 0);
+        SetUniform("uSkinned", doSkin ? 1 : 0);
         if (doSkin && !entity.animator.jointMatrices.empty()) {
             int count = std::min(static_cast<int>(entity.animator.jointMatrices.size()),
                                  kMaxJoints);
-            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uJoints"),
-                count, GL_FALSE,
-                glm::value_ptr(entity.animator.jointMatrices[0]));
+            SetUniformArray("uJoints", entity.animator.jointMatrices.data(), count);
         }
 
-        UploadLights(gToonShader.id);
+        UploadLights();
 
-        // Cascaded shadow maps.
         bool shadowOn = gSettings.shadowEnabled && gShadowMap;
-        glUniform1i(glGetUniformLocation(gToonShader.id, "uShadowEnabled"),
-            shadowOn ? 1 : 0);
+        SetUniform("uShadowEnabled", shadowOn ? 1 : 0);
         if (shadowOn) {
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, gShadowMap);
-            glUniform1i(glGetUniformLocation(gToonShader.id, "uShadowMap"), 2);
-            glUniform1i(glGetUniformLocation(gToonShader.id, "uCascadeCount"), kCascadeCount);
-            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uLightSpaceMatrices"),
-                kCascadeCount, GL_FALSE, glm::value_ptr(gCascadeMatrices[0]));
-            glUniform1fv(glGetUniformLocation(gToonShader.id, "uCascadeSplits"),
-                kCascadeCount, gCascadeSplits);
-            glUniform1f(glGetUniformLocation(gToonShader.id, "uShadowBias"),
-                gSettings.shadowBias);
-            glUniformMatrix4fv(glGetUniformLocation(gToonShader.id, "uViewMatrix"),
-                1, GL_FALSE, glm::value_ptr(CameraViewMatrix(gCamera)));
-            glActiveTexture(GL_TEXTURE0);
+            BindTextureArray(gShadowMap, 2);
+            SetUniform("uShadowMap", 2);
+            SetUniform("uCascadeCount", kCascadeCount);
+            SetUniformArray("uLightSpaceMatrices", gCascadeMatrices, kCascadeCount);
+            SetUniformArray("uCascadeSplits", gCascadeSplits, kCascadeCount);
+            SetUniform("uShadowBias", gSettings.shadowBias);
+            SetUniform("uViewMatrix", CameraViewMatrix(gCamera));
         }
 
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uBandHigh"),
-            gSettings.bandThresholdHigh);
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uBandLow"),
-            gSettings.bandThresholdLow);
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uBrightness"),
-            gSettings.brightIntensity);
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uMid"),
-            gSettings.midIntensity);
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uShadow"),
-            gSettings.shadowIntensity);
-        glUniform3fv(glGetUniformLocation(gToonShader.id, "uShadowTint"),
-            1, glm::value_ptr(gSettings.shadowTint));
+        SetUniform("uBandHigh",    gSettings.bandThresholdHigh);
+        SetUniform("uBandLow",     gSettings.bandThresholdLow);
+        SetUniform("uBrightness",  gSettings.brightIntensity);
+        SetUniform("uMid",         gSettings.midIntensity);
+        SetUniform("uShadow",      gSettings.shadowIntensity);
+        SetUniform("uShadowTint",  gSettings.shadowTint);
 
-        // Specular highlight band.
-        glUniform3fv(glGetUniformLocation(gToonShader.id, "uSpecColor"),
-            1, glm::value_ptr(gSettings.specColor));
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uSpecThreshold"),
-            gSettings.specThreshold);
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uSpecStrength"),
-            gSettings.specStrength);
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uSpecShininess"),
-            gSettings.specShininess);
+        SetUniform("uSpecColor",     gSettings.specColor);
+        SetUniform("uSpecThreshold", gSettings.specThreshold);
+        SetUniform("uSpecStrength",  gSettings.specStrength);
+        SetUniform("uSpecShininess", gSettings.specShininess);
 
-        // Rim lighting.
-        glUniform3fv(glGetUniformLocation(gToonShader.id, "uViewPos"),
-            1, glm::value_ptr(gCamera.position));
-        glUniform3fv(glGetUniformLocation(gToonShader.id, "uRimColor"),
-            1, glm::value_ptr(gSettings.rimColor));
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uRimPower"),
-            gSettings.rimPower);
-        glUniform1f(glGetUniformLocation(gToonShader.id, "uRimStrength"),
-            gSettings.rimStrength);
+        SetUniform("uViewPos",     gCamera.position);
+        SetUniform("uRimColor",    gSettings.rimColor);
+        SetUniform("uRimPower",    gSettings.rimPower);
+        SetUniform("uRimStrength", gSettings.rimStrength);
 
-        GLint baseColorLoc  = glGetUniformLocation(gToonShader.id, "uBaseColor");
-        GLint hasNormalLoc  = glGetUniformLocation(gToonShader.id, "uHasNormalMap");
-        GLint normalMapLoc  = glGetUniformLocation(gToonShader.id, "uNormalMap");
         for (auto& sm : entity.subMeshes) {
-            BindTexture(sm.material.texture.id ? sm.material.texture
+            BindTexture(sm.material.texture ? sm.material.texture
                 : gDefaultTexture, 0);
 
-            bool hasNM = sm.material.normalMap.id != 0;
-            glUniform1i(hasNormalLoc, hasNM ? 1 : 0);
+            bool hasNM = static_cast<bool>(sm.material.normalMap);
+            SetUniform("uHasNormalMap", hasNM ? 1 : 0);
             if (hasNM) {
                 BindTexture(sm.material.normalMap, 3);
-                glUniform1i(normalMapLoc, 3);
+                SetUniform("uNormalMap", 3);
             }
 
-            glUniform4fv(baseColorLoc, 1, glm::value_ptr(sm.material.baseColor));
+            SetUniform("uBaseColor", sm.material.baseColor);
             DrawMesh(sm.mesh);
         }
 
         // Pass 2: outlines (back faces extruded along normals).
-        glCullFace(GL_FRONT);
-        glUseProgram(gOutlineShader.id);
-        glUniformMatrix4fv(glGetUniformLocation(gOutlineShader.id, "uMVP"),
-            1, GL_FALSE, glm::value_ptr(mvp));
-        glUniform1f(glGetUniformLocation(gOutlineShader.id, "uOutlineWidth"),
-            gSettings.outlineWidth);
-        glUniform4fv(glGetUniformLocation(gOutlineShader.id, "uOutlineColor"),
-            1, glm::value_ptr(gSettings.outlineColor));
-        glUniform1i(glGetUniformLocation(gOutlineShader.id, "uScreenSpace"),
-            gSettings.outlineScreenSpace ? 1 : 0);
-        glUniform2f(glGetUniformLocation(gOutlineShader.id, "uViewportSize"),
-            static_cast<float>(gFramebufferW), static_cast<float>(gFramebufferH));
-        glUniform1i(glGetUniformLocation(gOutlineShader.id, "uSkinned"),
-            doSkin ? 1 : 0);
+        SetRenderState({CullMode::Front, DepthFunc::Less});
+        BindShader(gOutlineShader);
+        SetUniform("uMVP", mvp);
+        SetUniform("uOutlineWidth", gSettings.outlineWidth);
+        SetUniform("uOutlineColor", gSettings.outlineColor);
+        SetUniform("uScreenSpace", gSettings.outlineScreenSpace ? 1 : 0);
+        SetUniform("uViewportSize", glm::vec2(
+            static_cast<float>(gFramebufferW), static_cast<float>(gFramebufferH)));
+        SetUniform("uSkinned", doSkin ? 1 : 0);
         if (doSkin && !entity.animator.jointMatrices.empty()) {
             int count = std::min(static_cast<int>(entity.animator.jointMatrices.size()),
                                  kMaxJoints);
-            glUniformMatrix4fv(glGetUniformLocation(gOutlineShader.id, "uJoints"),
-                count, GL_FALSE,
-                glm::value_ptr(entity.animator.jointMatrices[0]));
+            SetUniformArray("uJoints", entity.animator.jointMatrices.data(), count);
         }
 
         for (auto& sm : entity.subMeshes)
             DrawMesh(sm.mesh);
 
-        glDisable(GL_CULL_FACE);
+        SetRenderState({CullMode::None, DepthFunc::Less});
     }
 
     // Compute cascade frustum splits and per-cascade light-space matrices.
@@ -447,36 +318,27 @@ namespace {
 
         ComputeCascades(lightDir, aspect);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, gShadowFBO);
-        glViewport(0, 0, kShadowMapSize, kShadowMapSize);
-        glUseProgram(gShadowShader.id);
-        glEnable(GL_CULL_FACE);
-        glCullFace(GL_FRONT);
+        BindFramebuffer(gShadowFB);
+        SetViewport(0, 0, kShadowMapSize, kShadowMapSize);
+        BindShader(gShadowShader);
+        SetRenderState({CullMode::Front, DepthFunc::Less});
 
         for (int c = 0; c < kCascadeCount; ++c) {
-            // Attach this cascade's layer.
-            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                      gShadowMap, 0, c);
-            glClear(GL_DEPTH_BUFFER_BIT);
+            SetFramebufferLayer(gShadowFB, c);
+            Clear(false, true);
 
             for (auto& entity : gScene.entities) {
                 if (entity.light || entity.subMeshes.empty()) continue;
                 if (entity.shading != ShadingMode::Toon) continue;
 
-                const glm::mat4& model = entity.worldMatrix;
-                glm::mat4 lightMVP = gCascadeMatrices[c] * model;
-                glUniformMatrix4fv(glGetUniformLocation(gShadowShader.id, "uLightMVP"),
-                    1, GL_FALSE, glm::value_ptr(lightMVP));
+                SetUniform("uLightMVP", gCascadeMatrices[c] * entity.worldMatrix);
 
                 bool doSkin = entity.skinned && !gSettings.debugDisableSkinning;
-                glUniform1i(glGetUniformLocation(gShadowShader.id, "uSkinned"),
-                    doSkin ? 1 : 0);
+                SetUniform("uSkinned", doSkin ? 1 : 0);
                 if (doSkin && !entity.animator.jointMatrices.empty()) {
                     int count = std::min(static_cast<int>(entity.animator.jointMatrices.size()),
                                          kMaxJoints);
-                    glUniformMatrix4fv(glGetUniformLocation(gShadowShader.id, "uJoints"),
-                        count, GL_FALSE,
-                        glm::value_ptr(entity.animator.jointMatrices[0]));
+                    SetUniformArray("uJoints", entity.animator.jointMatrices.data(), count);
                 }
 
                 for (auto& sm : entity.subMeshes)
@@ -484,10 +346,9 @@ namespace {
             }
         }
 
-        glCullFace(GL_BACK);
-        glDisable(GL_CULL_FACE);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, gFramebufferW, gFramebufferH);
+        SetRenderState({CullMode::None, DepthFunc::Less});
+        BindFramebuffer({});
+        SetViewport(0, 0, gFramebufferW, gFramebufferH);
     }
 
     void Render(double /*alpha*/) {
@@ -495,50 +356,38 @@ namespace {
             ? static_cast<float>(gFramebufferW) / static_cast<float>(gFramebufferH)
             : 1.0f;
 
-        // Refresh cached world matrices for the whole scene hierarchy.
         UpdateSceneTransforms(gScene);
 
-        // Shadow pass (before scene).
-        if (gSettings.shadowEnabled && gShadowShader.id && gShadowFBO)
+        if (gSettings.shadowEnabled && gShadowShader && gShadowFB)
             RenderShadowPass(aspect);
 
-        glClearColor(gSettings.clearColor.r, gSettings.clearColor.g,
-                     gSettings.clearColor.b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        SetClearColor(gSettings.clearColor.r, gSettings.clearColor.g,
+                      gSettings.clearColor.b);
+        Clear(true, true);
 
         glm::mat4 vp = CameraProjectionMatrix(gCamera, aspect)
             * CameraViewMatrix(gCamera);
 
-        // Grid + sky background pass (writes color + depth, scene draws on top).
-        if (gSettings.gridEnabled && gGridShader.id) {
-            glUseProgram(gGridShader.id);
-            glUniformMatrix4fv(glGetUniformLocation(gGridShader.id, "uInvViewProj"),
-                1, GL_FALSE, glm::value_ptr(glm::inverse(vp)));
-            glUniform3fv(glGetUniformLocation(gGridShader.id, "uCameraPos"),
-                1, glm::value_ptr(gCamera.position));
-            glUniform3fv(glGetUniformLocation(gGridShader.id, "uSkyTop"),
-                1, glm::value_ptr(gSettings.skyTop));
-            glUniform3fv(glGetUniformLocation(gGridShader.id, "uSkyBottom"),
-                1, glm::value_ptr(gSettings.skyBottom));
-            glUniform3fv(glGetUniformLocation(gGridShader.id, "uGridColor"),
-                1, glm::value_ptr(gSettings.gridColor));
-            glUniform1f(glGetUniformLocation(gGridShader.id, "uGridScale"),
-                gSettings.gridScale);
-            glUniform1f(glGetUniformLocation(gGridShader.id, "uGridFade"),
-                gSettings.gridFade);
-            glUniform1f(glGetUniformLocation(gGridShader.id, "uNear"),
-                gCamera.nearPlane);
-            glUniform1f(glGetUniformLocation(gGridShader.id, "uFar"),
-                gCamera.farPlane);
+        // Grid + sky background.
+        if (gSettings.gridEnabled && gGridShader) {
+            BindShader(gGridShader);
+            SetUniform("uInvViewProj", glm::inverse(vp));
+            SetUniform("uCameraPos",   gCamera.position);
+            SetUniform("uSkyTop",      gSettings.skyTop);
+            SetUniform("uSkyBottom",   gSettings.skyBottom);
+            SetUniform("uGridColor",   gSettings.gridColor);
+            SetUniform("uGridScale",   gSettings.gridScale);
+            SetUniform("uGridFade",    gSettings.gridFade);
+            SetUniform("uNear",        gCamera.nearPlane);
+            SetUniform("uFar",         gCamera.farPlane);
 
-            glDepthFunc(GL_ALWAYS);  // overwrite clear depth
-            glBindVertexArray(gFullscreenVAO);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-            glDepthFunc(GL_LESS);    // restore for scene
+            SetRenderState({CullMode::None, DepthFunc::Always});
+            DrawMesh(gFullscreenVAO);
+            SetRenderState({CullMode::None, DepthFunc::Less});
         }
 
         for (auto& entity : gScene.entities) {
-            if (entity.light) continue;  // lights have no geometry
+            if (entity.light) continue;
             switch (entity.shading) {
             case ShadingMode::VertexColor: RenderVertexColor(entity, vp); break;
             case ShadingMode::Toon:        RenderToon(entity, vp);        break;
@@ -600,26 +449,11 @@ int main(int argc, char* argv[]) {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
-    // Load GL function pointers via GLAD.
-    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
-        std::fprintf(stderr, "gladLoadGLLoader failed\n");
+    if (!RendererInit(reinterpret_cast<void*(*)(const char*)>(glfwGetProcAddress))) {
+        std::fprintf(stderr, "RendererInit failed\n");
         glfwDestroyWindow(window);
         glfwTerminate();
         return EXIT_FAILURE;
-    }
-
-    std::printf("GL vendor:   %s\n", reinterpret_cast<const char*>(glGetString(GL_VENDOR)));
-    std::printf("GL renderer: %s\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
-    std::printf("GL version:  %s\n", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
-    std::printf("GLSL:        %s\n", reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION)));
-
-    // GL debug output — core in 4.3+, available as KHR_debug extension on
-    // some 4.1 drivers. Not present on macOS; the null check skips it there.
-    if (glDebugMessageCallback) {
-        glEnable(GL_DEBUG_OUTPUT);
-        glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
-        glDebugMessageCallback(GlDebugCallback, nullptr);
-        glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
     }
 
     // Register callbacks. Input::Init installs key/mouse/scroll/gamepad
@@ -627,7 +461,6 @@ int main(int argc, char* argv[]) {
     glfwSetFramebufferSizeCallback(window, FramebufferSizeCallback);
     Input::Init(window);
 
-    // Register hardcoded defaults, then try overriding from disk.
     RegisterDefaultEditorBindings();
     {
         InputContext fileCtx;
@@ -644,18 +477,17 @@ int main(int argc, char* argv[]) {
         glfwGetFramebufferSize(window, &fbw, &fbh);
         gFramebufferW = fbw;
         gFramebufferH = fbh;
-        glViewport(0, 0, fbw, fbh);
+        SetViewport(0, 0, fbw, fbh);
     }
-
-    glEnable(GL_DEPTH_TEST);
 
     OverlayInit(window);
 
     // -----------------------------------------------------------------------
     // Resource loading.
     // -----------------------------------------------------------------------
-    if (!LoadShader(gShader, "assets/shaders/triangle.vert",
-        "assets/shaders/triangle.frag")) {
+    gShader = LoadShader("assets/shaders/triangle.vert",
+        "assets/shaders/triangle.frag");
+    if (!gShader) {
         std::fprintf(stderr, "Failed to load triangle shaders\n");
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -676,9 +508,9 @@ int main(int argc, char* argv[]) {
          0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f,
     };
     VertexAttrib triAttribs[] = {
-        {3, GL_FLOAT, 0},                  // location 0: position
-        {3, GL_FLOAT, 3 * sizeof(float)},  // location 1: color
-        {2, GL_FLOAT, 6 * sizeof(float)},  // location 2: texcoord
+        {3, AttribType::Float, 0},
+        {3, AttribType::Float, 3 * sizeof(float)},
+        {2, AttribType::Float, 6 * sizeof(float)},
     };
     // clang-format on
 
@@ -731,10 +563,10 @@ int main(int argc, char* argv[]) {
             -0.5f,  0.5f, 0.0f,  0,0,1,  0,1,  0,0,1,
         };
         VertexAttrib qAttribs[] = {
-            {3, GL_FLOAT, 0},
-            {3, GL_FLOAT, 3  * sizeof(float)},
-            {2, GL_FLOAT, 6  * sizeof(float)},
-            {3, GL_FLOAT, 8  * sizeof(float), /*location=*/5},
+            {3, AttribType::Float, 0},
+            {3, AttribType::Float, 3  * sizeof(float)},
+            {2, AttribType::Float, 6  * sizeof(float)},
+            {3, AttribType::Float, 8  * sizeof(float), /*location=*/5},
         };
         // clang-format on
 
@@ -754,27 +586,23 @@ int main(int argc, char* argv[]) {
 
     // Toon + outline shaders. model.vert is reused for the toon pass since
     // it already transforms normals to world space.
-    if (!LoadShader(gToonShader, "assets/shaders/model.vert",
-        "assets/shaders/toon.frag")) {
-        std::fprintf(stderr, "Failed to load toon shaders\n");
-    }
-    if (!LoadShader(gOutlineShader, "assets/shaders/outline.vert",
-        "assets/shaders/outline.frag")) {
-        std::fprintf(stderr, "Failed to load outline shaders\n");
-    }
-    if (!LoadShader(gShadowShader, "assets/shaders/shadow.vert",
-        "assets/shaders/shadow.frag")) {
-        std::fprintf(stderr, "Failed to load shadow shaders\n");
-    }
-    if (!LoadShader(gGridShader, "assets/shaders/fullscreen.vert",
-        "assets/shaders/grid.frag")) {
-        std::fprintf(stderr, "Failed to load grid shaders\n");
-    }
+    gToonShader = LoadShader("assets/shaders/model.vert", "assets/shaders/toon.frag");
+    if (!gToonShader) std::fprintf(stderr, "Failed to load toon shaders\n");
 
-    CreateShadowFBO();
+    gOutlineShader = LoadShader("assets/shaders/outline.vert", "assets/shaders/outline.frag");
+    if (!gOutlineShader) std::fprintf(stderr, "Failed to load outline shaders\n");
 
-    // Fullscreen triangle VAO (attributeless — positions from gl_VertexID).
-    glGenVertexArrays(1, &gFullscreenVAO);
+    gShadowShader = LoadShader("assets/shaders/shadow.vert", "assets/shaders/shadow.frag");
+    if (!gShadowShader) std::fprintf(stderr, "Failed to load shadow shaders\n");
+
+    gGridShader = LoadShader("assets/shaders/fullscreen.vert", "assets/shaders/grid.frag");
+    if (!gGridShader) std::fprintf(stderr, "Failed to load grid shaders\n");
+
+    gShadowFB = CreateFramebuffer({kShadowMapSize, kShadowMapSize,
+                                   FBAttachment::DepthArray, kCascadeCount});
+    gShadowMap = GetFramebufferTexture(gShadowFB);
+
+    gFullscreenVAO = CreateFullscreenTriangle();
 
     // Load a model if a path was passed on the command line.
     // Normalize: scale so the model's largest axis fits in 1 unit, centered
@@ -929,15 +757,15 @@ int main(int argc, char* argv[]) {
     OverlayShutdown();
     Input::Shutdown();
     DestroyScene(gScene);
-    if (gFullscreenVAO) glDeleteVertexArrays(1, &gFullscreenVAO);
-    if (gShadowFBO) glDeleteFramebuffers(1, &gShadowFBO);
-    if (gShadowMap) glDeleteTextures(1, &gShadowMap);
+    DestroyMesh(gFullscreenVAO);
+    DestroyFramebuffer(gShadowFB);
     DestroyShader(gGridShader);
     DestroyShader(gShadowShader);
     DestroyShader(gOutlineShader);
     DestroyShader(gToonShader);
     DestroyTexture(gDefaultTexture);
     DestroyShader(gShader);
+    RendererShutdown();
 
     glfwDestroyWindow(window);
     glfwTerminate();

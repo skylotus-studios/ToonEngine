@@ -55,7 +55,7 @@ static const char* LightTypeLabel(LightType t) {
 }
 
 bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
-    Texture& defaultTexture, float fps) {
+    TextureHandle& defaultTexture, float fps) {
     // -- Main menu bar --------------------------------------------------------
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -181,7 +181,8 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
                 int triCount  = 0;
                 for (auto& sm : e.subMeshes) {
                     ++meshCount;
-                    int n = sm.mesh.indexCount > 0 ? sm.mesh.indexCount : sm.mesh.vertexCount;
+                    int ic = GetMeshIndexCount(sm.mesh);
+                    int n = ic > 0 ? ic : GetMeshVertexCount(sm.mesh);
                     triCount += n / 3;
                 }
                 ImGui::Text("Shading: %s",  ShadingModeLabel(e.shading));

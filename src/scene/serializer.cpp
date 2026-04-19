@@ -94,7 +94,7 @@ bool SaveScene(const char* path, const Scene& scene,
 // ---------------------------------------------------------------------------
 bool LoadScene(const char* path, Scene& scene,
                Camera& camera, RenderSettings& settings,
-               Texture& /*defaultTexture*/) {
+               TextureHandle& /*defaultTexture*/) {
     std::ifstream f(path);
     if (!f.is_open()) {
         std::fprintf(stderr, "Failed to load scene: %s\n", path);

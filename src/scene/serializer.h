@@ -16,4 +16,4 @@ bool SaveScene(const char* path, const Scene& scene,
 
 bool LoadScene(const char* path, Scene& scene,
                Camera& camera, RenderSettings& settings,
-               Texture& defaultTexture);
+               TextureHandle& defaultTexture);

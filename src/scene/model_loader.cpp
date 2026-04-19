@@ -7,7 +7,7 @@
 
 #include "model_loader.h"
 
-#include "core/texture.h"
+#include "core/renderer.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -48,10 +48,10 @@ static constexpr int kStride     = 11 * static_cast<int>(sizeof(float));
 static constexpr int kFloatsPerV = 11;
 static constexpr int kSmoothNormOffset = 8;   // float index within vertex
 static const VertexAttrib kAttribs[] = {
-    {3, GL_FLOAT, 0},
-    {3, GL_FLOAT, 3  * sizeof(float)},
-    {2, GL_FLOAT, 6  * sizeof(float)},
-    {3, GL_FLOAT, 8  * sizeof(float), /*location=*/5},  // smooth normal
+    {3, AttribType::Float, 0},
+    {3, AttribType::Float, 3  * sizeof(float)},
+    {2, AttribType::Float, 6  * sizeof(float)},
+    {3, AttribType::Float, 8  * sizeof(float), /*location=*/5},  // smooth normal
 };
 static constexpr int kAttribCount = 4;
 
@@ -60,12 +60,12 @@ static constexpr int kSkinStride     = 19 * static_cast<int>(sizeof(float));
 static constexpr int kSkinFloatsPerV = 19;
 static constexpr int kSkinSmoothNormOffset = 16;
 static const VertexAttrib kSkinAttribs[] = {
-    {3, GL_FLOAT, 0},
-    {3, GL_FLOAT, 3  * sizeof(float)},
-    {2, GL_FLOAT, 6  * sizeof(float)},
-    {4, GL_FLOAT, 8  * sizeof(float)},                   // bone IDs
-    {4, GL_FLOAT, 12 * sizeof(float)},                   // bone weights
-    {3, GL_FLOAT, 16 * sizeof(float), /*location=*/5},   // smooth normal
+    {3, AttribType::Float, 0},
+    {3, AttribType::Float, 3  * sizeof(float)},
+    {2, AttribType::Float, 6  * sizeof(float)},
+    {4, AttribType::Float, 8  * sizeof(float)},                   // bone IDs
+    {4, AttribType::Float, 12 * sizeof(float)},                   // bone weights
+    {3, AttribType::Float, 16 * sizeof(float), /*location=*/5},   // smooth normal
 };
 static constexpr int kSkinAttribCount = 6;
 
@@ -156,34 +156,34 @@ static void GenerateNormals(float* verts, size_t vertCount, int stride,
 // ---------------------------------------------------------------------------
 // Texture helpers (shared by both loaders).
 // ---------------------------------------------------------------------------
-static Texture TryLoadTexture(const std::filesystem::path& modelDir, const char* relPath) {
-    Texture tex{};
-    if (!relPath || relPath[0] == '\0') return tex;
+static TextureHandle TryLoadTexture(const std::filesystem::path& modelDir, const char* relPath) {
+    if (!relPath || relPath[0] == '\0') return {};
     auto resolved = (modelDir / relPath).string();
-    if (LoadTexture(tex, resolved.c_str()))
-        std::printf("  Loaded texture: %s\n", resolved.c_str());
-    return tex;
+    TextureHandle h = LoadTexture(resolved.c_str());
+    if (h) std::printf("  Loaded texture: %s\n", resolved.c_str());
+    return h;
 }
 
-// glTF UV (0,0) = top-left of image, matching how images are stored in memory.
-// Do NOT flip vertically — flipping would invert the UV-to-texture mapping.
-static Texture LoadGltfImage(const cgltf_image* image, const std::filesystem::path& modelDir) {
-    Texture tex{};
-    if (!image) return tex;
+static TextureHandle LoadGltfImage(const cgltf_image* image, const std::filesystem::path& modelDir) {
+    if (!image) return {};
     if (image->buffer_view && image->buffer_view->buffer) {
         const auto* bv = image->buffer_view;
         const auto* bytes = static_cast<const unsigned char*>(bv->buffer->data);
-        if (bytes && LoadTextureFromMemory(tex, bytes + bv->offset,
-                                           static_cast<int>(bv->size), /*flipY=*/false))
-            std::printf("  Loaded embedded texture: %s\n", image->name ? image->name : "(unnamed)");
-        return tex;
+        if (bytes) {
+            TextureHandle h = LoadTextureFromMemory(bytes + bv->offset,
+                                                    static_cast<int>(bv->size), /*flipY=*/false);
+            if (h) std::printf("  Loaded embedded texture: %s\n", image->name ? image->name : "(unnamed)");
+            return h;
+        }
+        return {};
     }
     if (image->uri && std::strncmp(image->uri, "data:", 5) != 0) {
         auto resolved = (modelDir / image->uri).string();
-        if (LoadTexture(tex, resolved.c_str(), /*flipY=*/false))
-            std::printf("  Loaded texture: %s\n", resolved.c_str());
+        TextureHandle h = LoadTexture(resolved.c_str(), /*flipY=*/false);
+        if (h) std::printf("  Loaded texture: %s\n", resolved.c_str());
+        return h;
     }
-    return tex;
+    return {};
 }
 
 static Material ExtractGltfMaterial(const cgltf_primitive& prim,
@@ -497,9 +497,9 @@ static LoadedModel LoadGltf(const char* path) {
                 skinned ? kSkinStride : kStride,
                 skinned ? kSkinAttribs : kAttribs,
                 skinned ? kSkinAttribCount : kAttribCount,
-                static_cast<GLsizei>(vertCount),
+                static_cast<int>(vertCount),
                 indices.empty() ? nullptr : indices.data(),
-                static_cast<GLsizei>(indices.size()));
+                static_cast<int>(indices.size()));
             sm.material = ExtractGltfMaterial(prim, modelDir);
             result.subMeshes.push_back(std::move(sm));
         }
@@ -730,7 +730,7 @@ static LoadedModel LoadFbx(const char* path) {
             std::vector<float> verts;
             for (size_t fi = 0; fi < mesh->faces.count; ++fi)
                 triangulateFace(mesh->faces.data[fi], verts);
-            auto vertCount = static_cast<GLsizei>(verts.size() / fpv);
+            auto vertCount = static_cast<int>(verts.size() / fpv);
             if (vertCount == 0) continue;
             int snOff = skinned ? kSkinSmoothNormOffset : kSmoothNormOffset;
             ComputeSmoothNormals(verts.data(), vertCount, fpv, snOff);
@@ -749,7 +749,7 @@ static LoadedModel LoadFbx(const char* path) {
                 std::vector<float> verts;
                 for (size_t fi = 0; fi < part.face_indices.count; ++fi)
                     triangulateFace(mesh->faces.data[part.face_indices.data[fi]], verts);
-                auto vertCount = static_cast<GLsizei>(verts.size() / fpv);
+                auto vertCount = static_cast<int>(verts.size() / fpv);
                 if (vertCount == 0) continue;
                 int snOff2 = skinned ? kSkinSmoothNormOffset : kSmoothNormOffset;
                 ComputeSmoothNormals(verts.data(), vertCount, fpv, snOff2);

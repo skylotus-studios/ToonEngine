@@ -18,10 +18,13 @@ cmake --build --preset windows-debug
 src/
   main.cpp                  Entry point, game loop, FBO, shadow/grid passes, render dispatch
   core/                     Low-level GPU abstractions
-    mesh.h/.cpp             VAO/VBO/EBO, flexible vertex layouts (explicit location support)
-    shader.h/.cpp           Compile/link from files, hot-reload via timestamps
-    texture.h/.cpp          stb_image loading + programmatic test textures (checker, normal map)
-    material.h              Base color + texture + normal map per sub-mesh
+    renderer.h/.cpp         Renderer abstraction layer (ALL GL calls live here)
+                            Opaque handles: MeshHandle, ShaderHandle, TextureHandle, FramebufferHandle
+                            Polling/state API: BindShader, SetUniform, SetRenderState, DrawMesh, etc.
+    mesh.h                  Thin alias: using Mesh = MeshHandle (compat shim)
+    shader.h                Thin alias: using ShaderProgram = ShaderHandle (compat shim)
+    texture.h               Thin alias: using Texture = TextureHandle (compat shim)
+    material.h              Base color + TextureHandle per sub-mesh
     transform.h/.cpp        Position/rotation/scale -> model matrix (TRS)
     animation.h             Joint, Skeleton, AnimationClip, keyframe types
     animator.h/.cpp         Playback, keyframe interpolation, joint matrix computation
