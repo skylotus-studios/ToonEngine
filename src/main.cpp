@@ -59,6 +59,8 @@ namespace {
     MeshHandle   gFullscreenVAO{};
 
     ShaderHandle gGridShader{};
+    ShaderHandle gSpriteShader{};
+    MeshHandle   gSpriteQuad{};
 
     ShaderHandle      gShadowShader{};
     FramebufferHandle gShadowFB{};
@@ -109,6 +111,34 @@ namespace {
             if (e.skinned)
                 AnimatorUpdate(e.animator, e.skeleton, e.clips, fdt);
         }
+    }
+
+    void RenderSprite(const Entity& entity, const glm::mat4& vp) {
+        BindShader(gSpriteShader);
+        SetRenderState({CullMode::None, DepthFunc::Less, BlendMode::Alpha});
+
+        SetUniform("uMVP", vp * entity.worldMatrix);
+        SetUniform("uTintColor", entity.spriteTint);
+
+        glm::vec4 uvRect = entity.spriteUVRect;
+        if (entity.spriteFlipX) {
+            uvRect.x += uvRect.z;
+            uvRect.z = -uvRect.z;
+        }
+        if (entity.spriteFlipY) {
+            uvRect.y += uvRect.w;
+            uvRect.w = -uvRect.w;
+        }
+        SetUniform("uUVRect", uvRect);
+
+        TextureHandle tex = (!entity.subMeshes.empty() && entity.subMeshes[0].material.texture)
+            ? entity.subMeshes[0].material.texture : gDefaultTexture;
+        BindTexture(tex, 0);
+        SetUniform("uTexture", 0);
+
+        DrawMesh(gSpriteQuad);
+
+        SetRenderState({CullMode::None, DepthFunc::Less, BlendMode::None});
     }
 
     void RenderVertexColor(const Entity& entity, const glm::mat4& vp) {
@@ -386,12 +416,32 @@ namespace {
             SetRenderState({CullMode::None, DepthFunc::Less});
         }
 
+        // Opaque pass: vertex-colored + toon entities.
         for (auto& entity : gScene.entities) {
             if (entity.light) continue;
             switch (entity.shading) {
             case ShadingMode::VertexColor: RenderVertexColor(entity, vp); break;
             case ShadingMode::Toon:        RenderToon(entity, vp);        break;
+            case ShadingMode::Sprite:      break;  // deferred to sorted sprite pass
             }
+        }
+
+        // Transparent pass: sprites sorted back-to-front for correct alpha.
+        {
+            glm::vec3 camFront = CameraFront(gCamera);
+            std::vector<int> spriteIndices;
+            for (int i = 0; i < static_cast<int>(gScene.entities.size()); ++i) {
+                if (gScene.entities[i].shading == ShadingMode::Sprite && !gScene.entities[i].light)
+                    spriteIndices.push_back(i);
+            }
+            std::sort(spriteIndices.begin(), spriteIndices.end(),
+                [&](int a, int b) {
+                    float da = glm::dot(glm::vec3(gScene.entities[a].worldMatrix[3]) - gCamera.position, camFront);
+                    float db = glm::dot(glm::vec3(gScene.entities[b].worldMatrix[3]) - gCamera.position, camFront);
+                    return da > db;  // far to near
+                });
+            for (int i : spriteIndices)
+                RenderSprite(gScene.entities[i], vp);
         }
     }
 
@@ -598,11 +648,33 @@ int main(int argc, char* argv[]) {
     gGridShader = LoadShader("assets/shaders/fullscreen.vert", "assets/shaders/grid.frag");
     if (!gGridShader) std::fprintf(stderr, "Failed to load grid shaders\n");
 
+    gSpriteShader = LoadShader("assets/shaders/sprite.vert", "assets/shaders/sprite.frag");
+    if (!gSpriteShader) std::fprintf(stderr, "Failed to load sprite shaders\n");
+
     gShadowFB = CreateFramebuffer({kShadowMapSize, kShadowMapSize,
                                    FBAttachment::DepthArray, kCascadeCount});
     gShadowMap = GetFramebufferTexture(gShadowFB);
 
     gFullscreenVAO = CreateFullscreenTriangle();
+
+    // Shared unit quad for all sprites: pos(3) + uv(2), 6 vertices.
+    {
+        // clang-format off
+        float sv[] = {
+            -0.5f, -0.5f, 0.0f,  0.0f, 0.0f,
+             0.5f, -0.5f, 0.0f,  1.0f, 0.0f,
+             0.5f,  0.5f, 0.0f,  1.0f, 1.0f,
+            -0.5f, -0.5f, 0.0f,  0.0f, 0.0f,
+             0.5f,  0.5f, 0.0f,  1.0f, 1.0f,
+            -0.5f,  0.5f, 0.0f,  0.0f, 1.0f,
+        };
+        VertexAttrib sa[] = {
+            {3, AttribType::Float, 0},
+            {2, AttribType::Float, 3 * sizeof(float)},
+        };
+        // clang-format on
+        gSpriteQuad = CreateMesh(sv, sizeof(sv), 5 * sizeof(float), sa, 2, 6);
+    }
 
     // Load a model if a path was passed on the command line.
     // Normalize: scale so the model's largest axis fits in 1 unit, centered
@@ -738,6 +810,7 @@ int main(int argc, char* argv[]) {
         ReloadIfChanged(gOutlineShader);
         ReloadIfChanged(gShadowShader);
         ReloadIfChanged(gGridShader);
+        ReloadIfChanged(gSpriteShader);
 
         const double alpha = accumulator / kFixedTimestep;
         Render(alpha);
@@ -758,7 +831,9 @@ int main(int argc, char* argv[]) {
     Input::Shutdown();
     DestroyScene(gScene);
     DestroyMesh(gFullscreenVAO);
+    DestroyMesh(gSpriteQuad);
     DestroyFramebuffer(gShadowFB);
+    DestroyShader(gSpriteShader);
     DestroyShader(gGridShader);
     DestroyShader(gShadowShader);
     DestroyShader(gOutlineShader);

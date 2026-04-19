@@ -73,6 +73,9 @@ bool SaveScene(const char* path, const Scene& scene,
             WriteFloat(f, "  light.radius", L.radius);
         }
 
+        if (e.shading == ShadingMode::Sprite)
+            f << "  shading sprite\n";
+
         if (!e.modelPath.empty())
             f << "  model " << e.modelPath << "\n";
 
@@ -81,6 +84,20 @@ bool SaveScene(const char* path, const Scene& scene,
             WriteVec3(f, "  position", e.transform->position);
             WriteVec3(f, "  rotation", e.transform->rotation);
             WriteVec3(f, "  scale", e.transform->scale);
+        }
+
+        if (e.shading == ShadingMode::Sprite) {
+            char buf[256];
+            std::snprintf(buf, sizeof(buf),
+                "  spriteTint %.6f %.6f %.6f %.6f\n",
+                e.spriteTint.x, e.spriteTint.y, e.spriteTint.z, e.spriteTint.w);
+            f << buf;
+            std::snprintf(buf, sizeof(buf),
+                "  spriteUVRect %.6f %.6f %.6f %.6f\n",
+                e.spriteUVRect.x, e.spriteUVRect.y, e.spriteUVRect.z, e.spriteUVRect.w);
+            f << buf;
+            if (e.spriteFlipX) f << "  spriteFlipX\n";
+            if (e.spriteFlipY) f << "  spriteFlipY\n";
         }
         f << "\n";
     }
@@ -171,6 +188,10 @@ bool LoadScene(const char* path, Scene& scene,
                     AnimatorSetClip(cur->animator, cur->skeleton, 0);
             }
         }
+        else if (key == "shading") {
+            std::string mode; ss >> mode;
+            if (mode == "sprite") cur->shading = ShadingMode::Sprite;
+        }
         else if (key == "position") {
             if (!cur->transform) cur->transform.emplace();
             cur->transform->position = ParseVec3(ss);
@@ -183,6 +204,16 @@ bool LoadScene(const char* path, Scene& scene,
             if (!cur->transform) cur->transform.emplace();
             cur->transform->scale = ParseVec3(ss);
         }
+        else if (key == "spriteTint") {
+            ss >> cur->spriteTint.x >> cur->spriteTint.y
+               >> cur->spriteTint.z >> cur->spriteTint.w;
+        }
+        else if (key == "spriteUVRect") {
+            ss >> cur->spriteUVRect.x >> cur->spriteUVRect.y
+               >> cur->spriteUVRect.z >> cur->spriteUVRect.w;
+        }
+        else if (key == "spriteFlipX") { cur->spriteFlipX = true; }
+        else if (key == "spriteFlipY") { cur->spriteFlipY = true; }
     }
 
     // Backwards compatibility: files written before hierarchy support have

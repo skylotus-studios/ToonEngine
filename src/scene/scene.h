@@ -27,6 +27,7 @@
 enum class ShadingMode {
     VertexColor,  // triangle.vert + triangle.frag (vertex-colored demo geometry)
     Toon,         // model.vert + toon.frag + outline pass
+    Sprite,       // sprite.vert + sprite.frag (unlit, alpha-blended, atlas UV rect)
 };
 
 // Light entities have no geometry — they contribute to the toon shading pass.
@@ -66,6 +67,12 @@ struct Entity {
     std::vector<AnimationClip> clips;
     Animator                   animator;
     bool                       skinned = false;
+
+    // Sprite component (active when shading == Sprite).
+    glm::vec4 spriteTint{1.0f};
+    glm::vec4 spriteUVRect{0.0f, 0.0f, 1.0f, 1.0f};  // xy=offset, zw=scale
+    bool      spriteFlipX = false;
+    bool      spriteFlipY = false;
 
     // Light (nullopt = not a light entity).
     std::optional<Light> light;

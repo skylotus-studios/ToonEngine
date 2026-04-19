@@ -42,6 +42,7 @@ static const char* ShadingModeLabel(ShadingMode m) {
     switch (m) {
     case ShadingMode::VertexColor: return "Vertex Color";
     case ShadingMode::Toon:        return "Toon";
+    case ShadingMode::Sprite:      return "Sprite";
     }
     return "?";
 }
@@ -144,6 +145,16 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
                 } else {
                     ImGui::SliderFloat("Radius", &L.radius, 0.1f, 50.0f);
                 }
+            }
+
+            // Sprite component.
+            if (e.shading == ShadingMode::Sprite &&
+                ImGui::CollapsingHeader("Sprite", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::ColorEdit4("Tint", &e.spriteTint.x);
+                ImGui::DragFloat4("UV Rect", &e.spriteUVRect.x, 0.01f);
+                ImGui::Checkbox("Flip X", &e.spriteFlipX);
+                ImGui::SameLine();
+                ImGui::Checkbox("Flip Y", &e.spriteFlipY);
             }
 
             // Animation component (skinned entities with clips).
@@ -269,7 +280,7 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
     // Deferred mutations: applied after the loop so we don't invalidate the
     // indices we're iterating over. Only one action per frame is supported;
     // that's fine because each comes from a user gesture.
-    enum class PendingOp { None, AddEmpty, AddDirLight, AddPointLight, Delete, Duplicate };
+    enum class PendingOp { None, AddEmpty, AddDirLight, AddPointLight, AddSprite, Delete, Duplicate };
     PendingOp pendingOp = PendingOp::None;
     int       pendingTarget = -1;
 
@@ -337,6 +348,10 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
                 pendingOp = PendingOp::AddPointLight;
                 pendingTarget = i;
             }
+            if (ImGui::MenuItem("Add Sprite")) {
+                pendingOp = PendingOp::AddSprite;
+                pendingTarget = i;
+            }
             ImGui::Separator();
             bool isRoot = (entities[i].parent == -1);
             if (ImGui::MenuItem("Duplicate", nullptr, false, !isRoot)) {
@@ -372,6 +387,12 @@ bool OverlayRender(RenderSettings& s, Scene& scene, Camera& camera,
     case PendingOp::AddPointLight:
         scene.selected = AddLightEntity(scene, pendingTarget, LightType::Point);
         break;
+    case PendingOp::AddSprite: {
+        int idx = AddChildEntity(scene, pendingTarget, "Sprite");
+        scene.entities[idx].shading = ShadingMode::Sprite;
+        scene.selected = idx;
+        break;
+    }
     case PendingOp::Duplicate: {
         int dup = DuplicateEntity(scene, pendingTarget);
         if (dup >= 0) scene.selected = dup;
