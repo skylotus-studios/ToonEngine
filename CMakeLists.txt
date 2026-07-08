@@ -1,151 +1,68 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.20)
 
-project(ToonEngine
-    VERSION 0.1.0
-    DESCRIPTION "ToonEngine - game engine"
-    LANGUAGES C CXX
-)
+project(ToonEngine CXX)
 
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
-    message(FATAL_ERROR
-        "In-source builds are disabled. Use one of the CMake presets "
-        "(e.g. 'cmake --preset windows-debug').")
-endif()
+# ---------------------------------------------------------------------------
+#  ToonEngine — minimal Diligent Engine starting point
+#  Rendering-only (DiligentCore) + GLFW windowing, single Vulkan backend.
+# ---------------------------------------------------------------------------
 
-if(DEFINED VCPKG_TARGET_TRIPLET)
-    set(_toonengine_vcpkg_prefix_candidates)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-    if(DEFINED VCPKG_INSTALLED_DIR)
-        list(APPEND _toonengine_vcpkg_prefix_candidates
-            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
-        )
-    endif()
+# --- Diligent Engine (git submodules under external/) ------------------------
+# Core is self-contained and implements the D3D11/D3D12/OpenGL/Vulkan backends.
+# Uncomment Tools/FX later when you want Dear ImGui, texture/GLTF loading,
+# the PBR renderer, or the post-processing effects.
+add_subdirectory(external/DiligentCore)
+# add_subdirectory(external/DiligentTools)
+# add_subdirectory(external/DiligentFX)
 
-    list(APPEND _toonengine_vcpkg_prefix_candidates
-        "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}"
-    )
+# --- GLFW: cross-platform window + input (submodule under external/) ----------
+set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/glfw)
 
-    foreach(_toonengine_vcpkg_prefix IN LISTS _toonengine_vcpkg_prefix_candidates)
-        if(EXISTS "${_toonengine_vcpkg_prefix}")
-            list(PREPEND CMAKE_PREFIX_PATH "${_toonengine_vcpkg_prefix}")
-        endif()
-    endforeach()
-
-    list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
-endif()
-
-# --- Dependencies (vcpkg) ---------------------------------------------------
-find_package(glfw3 CONFIG REQUIRED)
-find_package(glad  CONFIG REQUIRED)
-find_package(glm   CONFIG REQUIRED)
-find_package(Stb REQUIRED)
-find_package(imgui CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
-
-# --- Vendored libraries (single-header / single-file, committed in libs/) ---
-# ufbx: compiled as a static lib so its C code gets its own warning settings.
-add_library(ufbx STATIC libs/ufbx/ufbx.c)
-target_include_directories(ufbx SYSTEM PUBLIC libs/ufbx)
-if(MSVC)
-    target_compile_options(ufbx PRIVATE /W0)
-else()
-    target_compile_options(ufbx PRIVATE -w)
-endif()
-
-# --- Engine executable -------------------------------------------------------
+# --- Application -------------------------------------------------------------
 add_executable(ToonEngine
     src/main.cpp
-    src/core/shader.h
-    src/core/mesh.h
-    src/core/transform.h
-    src/core/transform.cpp
-    src/core/texture.h
-    src/core/material.h
-    src/core/animation.h
-    src/core/animator.h
-    src/core/animator.cpp
-    src/core/renderer.h
     src/core/renderer.cpp
-    src/core/input/keycodes.h
-    src/core/input/input_device.h
-    src/core/input/input_device.cpp
-    src/core/input/input_event.h
-    src/core/input/input_system.h
-    src/core/input/input_system.cpp
-    src/core/input/action_map.h
-    src/core/input/action_map.cpp
-    src/core/input/binding_io.h
-    src/core/input/binding_io.cpp
-    src/scene/camera.h
-    src/scene/camera.cpp
-    src/scene/model_loader.h
-    src/scene/model_loader.cpp
-    src/scene/scene.h
-    src/scene/scene.cpp
-    src/scene/serializer.h
-    src/scene/serializer.cpp
-    src/ui/file_filter.h
-    src/ui/file_browser.h
-    src/ui/file_browser.cpp
-    src/ui/thumbnail_cache.h
-    src/ui/thumbnail_cache.cpp
-    src/ui/overlay.h
-    src/ui/overlay.cpp
-    src/ui/themes.h
-    src/ui/themes.cpp
-    libs/imguizmo/ImGuizmo.h
-    libs/imguizmo/ImGuizmo.cpp
 )
 
-target_compile_features(ToonEngine PRIVATE cxx_std_20)
+# src/ is the include root: cross-directory includes read "core/renderer.h".
+target_include_directories(ToonEngine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-set_target_properties(ToonEngine PROPERTIES
-    CXX_STANDARD_REQUIRED ON
-    CXX_EXTENSIONS        OFF
-)
-
-target_include_directories(ToonEngine PRIVATE
-    src
-    ${Stb_INCLUDE_DIR}
-    libs/cgltf
-    libs/imguizmo
-)
-
+# Diligent-BuildSettings is an INTERFACE target that propagates the platform
+# defines (PLATFORM_WIN32 / PLATFORM_LINUX / PLATFORM_MACOS) and compiler flags
+# the headers need. Link it first.
 target_link_libraries(ToonEngine
     PRIVATE
+        Diligent-BuildSettings
+        Diligent-GraphicsEngineVk-shared   # Vulkan: Windows, Linux, macOS (via MoltenVK)
+        Diligent-Common                    # RefCntAutoPtr.hpp + other Common/interface utilities
         glfw
-        glad::glad
-        glm::glm
-        imgui::imgui
-        nlohmann_json::nlohmann_json
-        ufbx
-        $<$<PLATFORM_ID:Windows>:dwmapi>
 )
 
-if(MSVC)
-    # clang-cl on Windows understands MSVC-style flags.
-    target_compile_options(ToonEngine PRIVATE /W4 /permissive-)
-else()
-    target_compile_options(ToonEngine PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wshadow
-        -Wnon-virtual-dtor
-        -Wold-style-cast
-        -Woverloaded-virtual
-        -Wnull-dereference
-        -Wdouble-promotion
-        -Wformat=2
-    )
+# We link the Vulkan engine as a SHARED library, which Diligent loads at runtime
+# via LoadGraphicsEngineVk() (see main.cpp's `#if ENGINE_DLL` path). This define
+# selects that dynamic-load path; copy_required_dlls (below) drops the engine
+# DLLs next to the executable so the loader finds them.
+target_compile_definitions(ToonEngine PRIVATE ENGINE_DLL=1)
+
+# Backend targets only exist on platforms where the backend is available, so
+# link the extra ones conditionally. (You don't need them for the Vulkan path,
+# but they're handy if you later want D3D12 on Windows, etc.)
+if(WIN32)
+    target_link_libraries(ToonEngine PRIVATE
+        Diligent-GraphicsEngineD3D12-shared
+        Diligent-GraphicsEngineD3D11-shared
+        Diligent-GraphicsEngineOpenGL-shared)
+elseif(UNIX AND NOT APPLE)
+    target_link_libraries(ToonEngine PRIVATE
+        Diligent-GraphicsEngineOpenGL-shared)
 endif()
 
-if(APPLE)
-    target_link_libraries(ToonEngine PRIVATE
-        "-framework OpenGL"
-        "-framework Cocoa"
-        "-framework IOKit"
-        "-framework CoreVideo"
-        "-framework CoreFoundation"
-    )
-endif()
+# Convenience function from DiligentCore: copies the engine shared libraries
+# next to the executable so the OS can find and load them at runtime.
+copy_required_dlls(ToonEngine)

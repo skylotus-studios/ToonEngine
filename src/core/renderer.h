@@ -1,144 +1,60 @@
-// Renderer abstraction layer.
+//============================================================================
+//  core/renderer.h — ToonEngine's rendering seam.
 //
-// All OpenGL (glad) calls are confined to renderer.cpp. The rest of the
-// engine interacts with opaque handle types and backend-agnostic enums.
-// Adding a Vulkan backend means creating a new renderer.cpp that
-// implements the same functions — no other engine code changes.
-
+//  This is the ONE header the rest of the engine talks to for GPU work. Every
+//  backend detail (currently Diligent Engine on Vulkan) lives behind it in
+//  renderer.cpp via PIMPL, so no Diligent type — and no Diligent header —
+//  escapes into engine or game code. Swapping the backend (or porting to a
+//  console) becomes "write another renderer_*.cpp", not a rewrite.
+//============================================================================
 #pragma once
 
-#include <glm/glm.hpp>
-
-#include <cstddef>
 #include <cstdint>
 
-// ---------------------------------------------------------------------------
-// Opaque resource handles (0 = invalid).
-// ---------------------------------------------------------------------------
+// Forward-declared so this header pulls in neither GLFW nor any Diligent header.
+struct GLFWwindow;
 
-struct MeshHandle        { uint32_t id = 0; explicit operator bool() const { return id != 0; } };
-struct ShaderHandle      { uint32_t id = 0; explicit operator bool() const { return id != 0; } };
-struct TextureHandle     { uint32_t id = 0; explicit operator bool() const { return id != 0; } };
-struct FramebufferHandle { uint32_t id = 0; explicit operator bool() const { return id != 0; } };
+namespace toon {
 
-// ---------------------------------------------------------------------------
-// Enums (replace GL constants in public interfaces).
-// ---------------------------------------------------------------------------
+// --- Opaque GPU resource handles -------------------------------------------
+// The engine's vocabulary for GPU resources: plain 32-bit ids (0 is always the
+// null/invalid handle). The mapping from id to the underlying backend resource
+// lives entirely inside the renderer. Resource-creation APIs land with the
+// shader/pipeline work on the roadmap; the types are defined now so the seam's
+// contract — "the engine names resources, never Diligent objects" — is explicit.
+enum class TextureHandle  : uint32_t { Invalid = 0 };
+enum class BufferHandle   : uint32_t { Invalid = 0 };
+enum class ShaderHandle   : uint32_t { Invalid = 0 };
+enum class PipelineHandle : uint32_t { Invalid = 0 };
 
-enum class AttribType { Float, Int, UByte };
+struct Color { float r = 0.0f, g = 0.0f, b = 0.0f, a = 1.0f; };
 
-struct VertexAttrib {
-    int        components;
-    AttribType type;
-    size_t     offset;
-    int        location = -1;  // -1 = use array index
+// --- Renderer ---------------------------------------------------------------
+// Owns the graphics device, immediate context, and swap chain, and drives the
+// per-frame lifecycle. Backend-agnostic by construction (see file header).
+class Renderer {
+public:
+    Renderer();
+    ~Renderer();
+
+    Renderer(const Renderer&)            = delete;
+    Renderer& operator=(const Renderer&) = delete;
+
+    // Create the device + swap chain for `window` (a GLFW window created with
+    // the GLFW_NO_API hint). Returns false on failure (details go to stderr).
+    bool Init(GLFWwindow* window);
+    void Shutdown();
+
+    // Per-frame: bind the back buffer and clear it, then present.
+    void BeginFrame(const Color& clearColor);
+    void EndFrame();
+
+    // Keep the swap chain matched to the window's framebuffer size.
+    void Resize(uint32_t width, uint32_t height);
+
+private:
+    struct Impl;         // defined in renderer.cpp — hides all Diligent types
+    Impl* m_impl = nullptr;
 };
 
-enum class CullMode  { None, Front, Back };
-enum class DepthFunc { Less, LEqual, Always, Disabled };
-enum class BlendMode { None, Alpha, Additive };
-
-struct RenderState {
-    CullMode  cull  = CullMode::Back;
-    DepthFunc depth = DepthFunc::Less;
-    BlendMode blend = BlendMode::None;
-};
-
-enum class FBAttachment { DepthArray, Depth, Color0 };
-
-struct FramebufferDesc {
-    int          width  = 0;
-    int          height = 0;
-    FBAttachment attachment = FBAttachment::Depth;
-    int          layers = 1;  // >1 for texture arrays (CSM)
-};
-
-// ---------------------------------------------------------------------------
-// Lifecycle.
-// ---------------------------------------------------------------------------
-
-// Load GL function pointers (via GLAD) and initialize default state.
-// Must be called after making the GL context current. Returns false on failure.
-bool RendererInit(void* (*glLoadProc)(const char*));
-void RendererShutdown();
-
-// ---------------------------------------------------------------------------
-// Mesh.
-// ---------------------------------------------------------------------------
-
-MeshHandle CreateMesh(const void* vertices, size_t verticesSize, int stride,
-                      const VertexAttrib* attribs, int attribCount,
-                      int vertexCount,
-                      const uint32_t* indices = nullptr, int indexCount = 0);
-
-MeshHandle CreateFullscreenTriangle();
-
-void DestroyMesh(MeshHandle h);
-void DrawMesh(MeshHandle h);
-int  GetMeshVertexCount(MeshHandle h);
-int  GetMeshIndexCount(MeshHandle h);
-
-// ---------------------------------------------------------------------------
-// Shader.
-// ---------------------------------------------------------------------------
-
-ShaderHandle LoadShader(const char* vertPath, const char* fragPath);
-bool         ReloadIfChanged(ShaderHandle h);
-void         DestroyShader(ShaderHandle h);
-
-// ---------------------------------------------------------------------------
-// Texture.
-// ---------------------------------------------------------------------------
-
-TextureHandle CreateWhiteTexture();
-TextureHandle CreateCheckerTexture(int size = 256, int cells = 8);
-TextureHandle CreateTestNormalMap(int size = 256);
-TextureHandle UploadTexture(const unsigned char* pixels, int w, int h);
-TextureHandle LoadTexture(const char* path, bool flipY = true);
-TextureHandle LoadTextureFromMemory(const unsigned char* data, int dataSize,
-                                    bool flipY = true);
-
-int       GetTextureWidth(TextureHandle h);
-int       GetTextureHeight(TextureHandle h);
-uintptr_t GetTextureNativeID(TextureHandle h);  // raw GL ID for ImGui::Image
-void      DestroyTexture(TextureHandle h);
-
-// ---------------------------------------------------------------------------
-// Framebuffer.
-// ---------------------------------------------------------------------------
-
-FramebufferHandle CreateFramebuffer(const FramebufferDesc& desc);
-TextureHandle     GetFramebufferTexture(FramebufferHandle h);
-void              SetFramebufferLayer(FramebufferHandle h, int layer);
-void              DestroyFramebuffer(FramebufferHandle h);
-
-// ---------------------------------------------------------------------------
-// State.
-// ---------------------------------------------------------------------------
-
-void SetRenderState(const RenderState& state);
-void SetViewport(int x, int y, int w, int h);
-void SetClearColor(float r, float g, float b, float a = 1.0f);
-void Clear(bool color, bool depth);
-
-// ---------------------------------------------------------------------------
-// Bind + Draw.
-// ---------------------------------------------------------------------------
-
-void BindShader(ShaderHandle h);
-void BindTexture(TextureHandle h, int unit);
-void BindTextureArray(TextureHandle h, int unit);
-void BindFramebuffer(FramebufferHandle h);  // 0-handle = default/screen
-
-// ---------------------------------------------------------------------------
-// Uniforms (apply to the currently-bound shader).
-// ---------------------------------------------------------------------------
-
-void SetUniform(const char* name, int value);
-void SetUniform(const char* name, float value);
-void SetUniform(const char* name, const glm::vec2& value);
-void SetUniform(const char* name, const glm::vec3& value);
-void SetUniform(const char* name, const glm::vec4& value);
-void SetUniform(const char* name, const glm::mat4& value);
-void SetUniformArray(const char* name, const glm::mat4* values, int count);
-void SetUniformArray(const char* name, const float* values, int count);
+} // namespace toon

@@ -1,0 +1,56 @@
+{
+    // ToonEngine builds with Ninja + clang-cl, which need the Windows SDK on
+    // PATH (mt.exe, rc.exe) and the MSVC CRT/import libs. A plain shell doesn't
+    // have those, so every task first dot-sources scripts/vsenv.ps1 to import
+    // the VS Developer environment (portable via vswhere + VsDevCmd.bat), then
+    // runs cmake. See CLAUDE.md > Build.
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Configure (Debug)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                "$ErrorActionPreference='Stop'; . '${workspaceFolder}\\scripts\\vsenv.ps1'; cmake --preset windows-debug"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build (Debug)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                "$ErrorActionPreference='Stop'; . '${workspaceFolder}\\scripts\\vsenv.ps1'; cmake --build --preset windows-debug"
+            ],
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": "$msCompile",
+            "dependsOn": "Configure (Debug)"
+        },
+        {
+            "label": "Configure (Release)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                "$ErrorActionPreference='Stop'; . '${workspaceFolder}\\scripts\\vsenv.ps1'; cmake --preset windows-release"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build (Release)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                "$ErrorActionPreference='Stop'; . '${workspaceFolder}\\scripts\\vsenv.ps1'; cmake --build --preset windows-release"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "dependsOn": "Configure (Release)"
+        }
+    ]
+}
