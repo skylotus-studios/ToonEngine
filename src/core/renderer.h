@@ -52,6 +52,17 @@ public:
     // Keep the swap chain matched to the window's framebuffer size.
     void Resize(uint32_t width, uint32_t height);
 
+    // --- Debug/editor UI (Dear ImGui) ---------------------------------------
+    // Diligent's ImGui renderer backend (ImGuiImplDiligent) is confined to
+    // renderer.cpp same as everything else — main.cpp only sees these four
+    // calls. Dear ImGui itself is a plain UI library, not a Diligent type, so
+    // engine/game code is free to include <imgui.h> and call ImGui:: directly
+    // between BeginUI() and EndUI() to build UI.
+    bool InitUI(GLFWwindow* window);
+    void ShutdownUI();
+    void BeginUI();
+    void EndUI();
+
 private:
     struct Impl;         // defined in renderer.cpp — hides all Diligent types
     Impl* m_impl = nullptr;

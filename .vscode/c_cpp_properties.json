@@ -11,6 +11,9 @@
             "includePath": [
                 "${workspaceFolder}/src",
                 "${workspaceFolder}/external/DiligentCore/**",
+                "${workspaceFolder}/external/DiligentTools/Imgui/interface",
+                "${workspaceFolder}/external/DiligentTools/ThirdParty/imgui",
+                "${workspaceFolder}/external/DiligentTools/ThirdParty/imgui/backends",
                 "${workspaceFolder}/external/glfw/include"
             ],
             "defines": [

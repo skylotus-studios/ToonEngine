@@ -26,7 +26,15 @@
 #include "GraphicsTypes.h"
 #include "RefCntAutoPtr.hpp"
 
+// Dear ImGui + Diligent's ImGui renderer backend (DiligentTools). The GLFW
+// platform backend (imgui_impl_glfw.cpp) is compiled directly into ToonEngine
+// by CMakeLists.txt, since DiligentTools doesn't ship a GLFW backend itself.
+#include "imgui.h"
+#include "ImGuiImplDiligent.hpp"
+#include "backends/imgui_impl_glfw.h"
+
 #include <cstdio>
+#include <memory>
 
 using namespace Diligent;
 
@@ -37,6 +45,7 @@ struct Renderer::Impl {
     RefCntAutoPtr<IRenderDevice>  device;
     RefCntAutoPtr<IDeviceContext> context;
     RefCntAutoPtr<ISwapChain>     swapChain;
+    std::unique_ptr<ImGuiImplDiligent> imgui;
 };
 
 // Fill Diligent's NativeWindow from a GLFW window, per platform.
@@ -85,6 +94,7 @@ bool Renderer::Init(GLFWwindow* window) {
 void Renderer::Shutdown() {
     if (!m_impl) return;
     if (m_impl->context) m_impl->context->Flush();
+    ShutdownUI(); // must release ImGui's GPU resources before the device
     m_impl->swapChain.Release();
     m_impl->context.Release();
     m_impl->device.Release();
@@ -107,6 +117,37 @@ void Renderer::EndFrame() {
 void Renderer::Resize(uint32_t width, uint32_t height) {
     if (m_impl->swapChain && width > 0 && height > 0)
         m_impl->swapChain->Resize(width, height);
+}
+
+bool Renderer::InitUI(GLFWwindow* window) {
+    // ImGuiImplDiligent's constructor calls ImGui::CreateContext() — it must
+    // run before ImGui_ImplGlfw_InitForVulkan(), which itself calls
+    // ImGui::GetIO() and asserts if no context exists yet.
+    ImGuiDiligentCreateInfo imguiCI{ m_impl->device, m_impl->swapChain->GetDesc() };
+    m_impl->imgui = std::make_unique<ImGuiImplDiligent>(imguiCI);
+
+    if (!ImGui_ImplGlfw_InitForVulkan(window, /*install_callbacks=*/true)) {
+        std::fprintf(stderr, "Renderer: ImGui GLFW backend init failed\n");
+        m_impl->imgui.reset();
+        return false;
+    }
+    return true;
+}
+
+void Renderer::ShutdownUI() {
+    if (!m_impl->imgui) return;
+    m_impl->imgui.reset(); // destructor invalidates GPU objects + destroys the ImGui context
+    ImGui_ImplGlfw_Shutdown();
+}
+
+void Renderer::BeginUI() {
+    ImGui_ImplGlfw_NewFrame();
+    const SwapChainDesc& scDesc = m_impl->swapChain->GetDesc();
+    m_impl->imgui->NewFrame(scDesc.Width, scDesc.Height, scDesc.PreTransform);
+}
+
+void Renderer::EndUI() {
+    m_impl->imgui->Render(m_impl->context);
 }
 
 } // namespace toon

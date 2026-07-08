@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(ToonEngine CXX)
+# C is needed too: DiligentTools pulls in zlib/libpng (plain-C libraries) for
+# its texture loaders, which need a configured C toolchain even though
+# ToonEngine's own code is C++ only.
+project(ToonEngine CXX C)
 
 # ---------------------------------------------------------------------------
 #  ToonEngine — minimal Diligent Engine starting point
@@ -11,11 +14,19 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --- Diligent Engine (git submodules under external/) ------------------------
-# Core is self-contained and implements the D3D11/D3D12/OpenGL/Vulkan backends.
-# Uncomment Tools/FX later when you want Dear ImGui, texture/GLTF loading,
-# the PBR renderer, or the post-processing effects.
+# Core defaults to building every backend the platform can support (on
+# Windows: D3D11, D3D12, OpenGL, Vulkan) regardless of which ones we actually
+# link — that's most of the compile time. ToonEngine is Vulkan-first (see
+# CLAUDE.md roadmap), so disable the others; re-enable individually later if a
+# specific backend is needed (e.g. D3D12 for RenderDoc/PIX debugging).
+set(DILIGENT_NO_DIRECT3D11 ON CACHE BOOL "" FORCE)
+set(DILIGENT_NO_DIRECT3D12 ON CACHE BOOL "" FORCE)
+set(DILIGENT_NO_OPENGL     ON CACHE BOOL "" FORCE)
+
+# Tools adds Dear ImGui (debug/editor UI) + texture/glTF loaders. Uncomment FX
+# later for the PBR renderer / post-processing effects.
 add_subdirectory(external/DiligentCore)
-# add_subdirectory(external/DiligentTools)
+add_subdirectory(external/DiligentTools)
 # add_subdirectory(external/DiligentFX)
 
 # --- GLFW: cross-platform window + input (submodule under external/) ----------
@@ -25,9 +36,15 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/glfw)
 
 # --- Application -------------------------------------------------------------
+# imgui_impl_glfw.cpp is Dear ImGui's GLFW platform backend. DiligentTools'
+# Imgui module only auto-compiles the Win32/Linux/macOS-native/SDL backends
+# (it doesn't know we use GLFW), so we compile this one file ourselves.
+# DILIGENT_DEAR_IMGUI_PATH is set by DiligentTools' ThirdParty/CMakeLists.txt
+# above to point at the vendored imgui submodule.
 add_executable(ToonEngine
     src/main.cpp
     src/core/renderer.cpp
+    ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
 )
 
 # src/ is the include root: cross-directory includes read "core/renderer.h".
@@ -41,6 +58,7 @@ target_link_libraries(ToonEngine
         Diligent-BuildSettings
         Diligent-GraphicsEngineVk-shared   # Vulkan: Windows, Linux, macOS (via MoltenVK)
         Diligent-Common                    # RefCntAutoPtr.hpp + other Common/interface utilities
+        Diligent-Imgui                     # ImGuiImplDiligent renderer backend + vendored Dear ImGui
         glfw
 )
 
@@ -49,19 +67,6 @@ target_link_libraries(ToonEngine
 # selects that dynamic-load path; copy_required_dlls (below) drops the engine
 # DLLs next to the executable so the loader finds them.
 target_compile_definitions(ToonEngine PRIVATE ENGINE_DLL=1)
-
-# Backend targets only exist on platforms where the backend is available, so
-# link the extra ones conditionally. (You don't need them for the Vulkan path,
-# but they're handy if you later want D3D12 on Windows, etc.)
-if(WIN32)
-    target_link_libraries(ToonEngine PRIVATE
-        Diligent-GraphicsEngineD3D12-shared
-        Diligent-GraphicsEngineD3D11-shared
-        Diligent-GraphicsEngineOpenGL-shared)
-elseif(UNIX AND NOT APPLE)
-    target_link_libraries(ToonEngine PRIVATE
-        Diligent-GraphicsEngineOpenGL-shared)
-endif()
 
 # Convenience function from DiligentCore: copies the engine shared libraries
 # next to the executable so the OS can find and load them at runtime.

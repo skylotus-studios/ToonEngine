@@ -13,6 +13,11 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+// Dear ImGui is a plain UI library, not a Diligent type, so engine/game code
+// is free to include it directly and call ImGui:: between Renderer::BeginUI()
+// and EndUI(). Diligent's ImGui *renderer* glue stays behind the seam.
+#include "imgui.h"
+
 int main() {
     if (!glfwInit()) {
         std::fprintf(stderr, "GLFW init failed\n");
@@ -37,6 +42,14 @@ int main() {
         return 1;
     }
 
+    if (!renderer.InitUI(window)) {
+        std::fprintf(stderr, "Renderer UI init failed\n");
+        renderer.Shutdown();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return 1;
+    }
+
     // Route framebuffer resizes to the renderer's swap chain.
     glfwSetWindowUserPointer(window, &renderer);
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int width, int height) {
@@ -48,6 +61,18 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         renderer.BeginFrame(clearColor);
+
+        renderer.BeginUI();
+        // TODO: grow this into the real editor/debug UI (roadmap: render stats,
+        // status bar, etc.); for now it proves the ImGui path end to end.
+        if (ImGui::Begin("ToonEngine Debug")) {
+            ImGui::Text("Renderer seam + Dear ImGui OK");
+            ImGui::Text("%.1f FPS (%.3f ms/frame)", ImGui::GetIO().Framerate,
+                        1000.0f / ImGui::GetIO().Framerate);
+        }
+        ImGui::End();
+        renderer.EndUI();
+
         // TODO: scene draw calls go here.
         renderer.EndFrame();
     }
