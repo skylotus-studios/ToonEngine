@@ -234,6 +234,13 @@ int main() {
                 ImGui::SliderFloat("AO radius", &post.ssaoRadius, 0.1f, 3.0f);
                 ImGui::Checkbox("AO temporal (motion-vector denoise)", &post.ssaoTemporal);
             }
+
+            ImGui::Checkbox("Depth of field", &post.dof);
+            if (post.dof) {
+                ImGui::SliderFloat("Focus distance", &post.dofFocusDist, 3.0f, 25.0f);
+                ImGui::SliderFloat("Aperture (f-stop)", &post.dofFStop, 1.0f, 16.0f);
+                ImGui::SliderFloat("Max blur (CoC)", &post.dofMaxCoC, 0.0f, 0.05f, "%.3f");
+            }
         }
         ImGui::End();
         renderer.EndUI();

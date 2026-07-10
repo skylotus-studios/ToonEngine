@@ -105,6 +105,14 @@ struct PostParams {
     float ssaoRadius   = 1.5f;    // world-space occlusion radius
     bool  ssaoTemporal = true;    // temporal accumulation — denoises the AO; safe now
                                   // that the scene writes real motion vectors
+
+    // Depth of field (DiligentFX's DepthOfField via PostFXContext). Blurs by depth-
+    // based circle of confusion; uses the motion vectors for temporal CoC smoothing.
+    // Focus/aperture live in the camera attribs (see FillCameraAttribs).
+    bool  dof            = false;   // off by default (it's a strong look)
+    float dofFocusDist   = 10.5f;   // world-space distance in sharp focus (~the objects)
+    float dofFStop       = 6.0f;    // aperture — smaller = shallower focus = more blur
+    float dofMaxCoC      = 0.015f;  // max circle-of-confusion (blur size), texture-UV units
 };
 
 // --- Renderer ---------------------------------------------------------------

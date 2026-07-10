@@ -39,6 +39,7 @@
 #include "PostFXContext.hpp"
 #include "Bloom.hpp"
 #include "ScreenSpaceAmbientOcclusion.hpp"
+#include "DepthOfField.hpp"
 
 // Dear ImGui + Diligent's ImGui renderer backend (DiligentTools). The GLFW
 // platform backend (imgui_impl_glfw.cpp) is compiled directly into ToonEngine
@@ -71,6 +72,7 @@ namespace Diligent { namespace HLSL {
 #include "Shaders/Common/public/BasicStructures.fxh"
 #include "Shaders/PostProcess/Bloom/public/BloomStructures.fxh"
 #include "Shaders/PostProcess/ScreenSpaceAmbientOcclusion/public/ScreenSpaceAmbientOcclusionStructures.fxh"
+#include "Shaders/PostProcess/DepthOfField/public/DepthOfFieldStructures.fxh"
 }} // namespace Diligent::HLSL
 
 namespace toon {
@@ -146,15 +148,17 @@ struct Renderer::Impl {
     std::unique_ptr<PostFXContext>               postFX;
     std::unique_ptr<Bloom>                       bloom;
     std::unique_ptr<ScreenSpaceAmbientOcclusion> ssao;
-    RefCntAutoPtr<ITexture>        motionVectors;   // RG16F, zero (no real motion)
+    std::unique_ptr<DepthOfField>                dof;
+    RefCntAutoPtr<ITexture>        motionVectors;   // RG16F NDC velocity (scene-written)
     RefCntAutoPtr<ITexture>        aoWhite;         // 1x1 white = "fully visible" default
     HLSL::CameraAttribs            postCamera{};
     Uint32                         frameIndex = 0;
 
-    // Run the shared PostFXContext plus whichever effects are enabled. Outputs the
-    // composited scene+bloom SRV (or null -> resolve the raw scene) and the AO SRV
-    // (or null -> bind the white default). No-op if neither effect is enabled.
-    void RunPostFX(const PostParams& p, ITextureView*& bloomOut, ITextureView*& aoOut);
+    // Run the shared PostFXContext plus whichever effects are enabled. The color
+    // effects chain in order scene -> DoF -> Bloom; `colorOut` is the last stage's
+    // output (or null -> resolve the raw scene). `aoOut` is SSAO's visibility (or
+    // null -> the white default). No-op if no effect is enabled.
+    void RunPostFX(const PostParams& p, ITextureView*& colorOut, ITextureView*& aoOut);
 
     // Fill postCamera from the stored view/proj so PostFXContext/SSAO can rebuild
     // view-space positions from depth. (Bloom doesn't use it; SSAO does.)
@@ -193,15 +197,24 @@ void Renderer::Impl::FillCameraAttribs(const SwapChainDesc& sc) {
     postCamera.mProjInv        = proj.Inverse();
     postCamera.mViewProjInv    = viewProj.Inverse();
     postCamera.f4Position      = float4(float3::MakeVector(viewInv[3]), 1.0f);  // camera world pos
+
+    // Depth-of-field lens parameters (DoF reads its circle-of-confusion from these).
+    // Focal length + sensor size keep their struct defaults (50mm / 36mm).
+    postCamera.fFocusDistance = post.dofFocusDist;
+    postCamera.fFStop         = post.dofFStop;
 }
 
-void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& bloomOut, ITextureView*& aoOut) {
-    bloomOut = nullptr;
+void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITextureView*& aoOut) {
+    colorOut = nullptr;
     aoOut    = nullptr;
-    if (!p.bloom && !p.ssao) return;
+    if (!p.bloom && !p.ssao && !p.dof) return;
 
     const SwapChainDesc& sc = swapChain->GetDesc();
     if (sc.Width == 0 || sc.Height == 0) return;
+
+    // DoF uses the motion vectors (via the context) to smooth its circle-of-confusion
+    // over time — safe now that motion is real.
+    const auto dofFlags = DepthOfField::FEATURE_FLAG_ENABLE_TEMPORAL_SMOOTHING;
 
     // Prepare the shared context + the enabled effects (each early-outs on unchanged
     // size). The PSOs are what PostFXContext::IsPSOsReady() gates on below.
@@ -212,10 +225,11 @@ void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& bloomOut, ITe
     postFX->PrepareResources(device, frame, PostFXContext::FEATURE_FLAG_NONE);
     if (p.bloom) bloom->PrepareResources(device, context, postFX.get(), Bloom::FEATURE_FLAG_NONE);
     if (p.ssao)  ssao->PrepareResources(device, context, postFX.get(), ScreenSpaceAmbientOcclusion::FEATURE_FLAG_NONE);
+    if (p.dof)   dof->PrepareResources(device, context, postFX.get(), dofFlags);
 
-    // Run the shared context: real camera + scene depth (as curr and prev), zero
-    // motion. This computes the reprojected-depth/blue-noise resources the effects
-    // build on and flips IsPSOsReady() true.
+    // Run the shared context: real camera + scene depth (as curr and prev) + the
+    // scene's motion vectors. This computes the reprojected-depth / closest-motion /
+    // blue-noise resources the effects build on and flips IsPSOsReady() true.
     FillCameraAttribs(sc);
     ITextureView* depthSRV  = sceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
     ITextureView* motionSRV = motionVectors->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
@@ -249,6 +263,26 @@ void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& bloomOut, ITe
         aoOut = ssao->GetAmbientOcclusionSRV();
     }
 
+    // Color chain: scene -> DoF (depth blur) -> Bloom (glow). Each enabled stage
+    // reads the previous stage's output, so colorOut ends on the last one that ran.
+    ITextureView* colorSRV = hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+
+    if (p.dof) {
+        HLSL::DepthOfFieldAttribs attribs{};
+        attribs.MaxCircleOfConfusion = p.dofMaxCoC;   // focus/aperture live in the camera attribs
+
+        DepthOfField::RenderAttributes dra;
+        dra.pDevice         = device;
+        dra.pDeviceContext  = context;
+        dra.pPostFXContext  = postFX.get();
+        dra.pColorBufferSRV = colorSRV;
+        dra.pDepthBufferSRV = depthSRV;
+        dra.pDOFAttribs     = &attribs;
+        dof->Execute(dra);
+        colorSRV = dof->GetDepthOfFieldTextureSRV();
+        colorOut = colorSRV;
+    }
+
     if (p.bloom) {
         HLSL::BloomAttribs attribs{};
         attribs.Intensity    = p.bloomIntensity;
@@ -260,10 +294,11 @@ void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& bloomOut, ITe
         bra.pDevice         = device;
         bra.pDeviceContext  = context;
         bra.pPostFXContext  = postFX.get();
-        bra.pColorBufferSRV = hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        bra.pColorBufferSRV = colorSRV;
         bra.pBloomAttribs   = &attribs;
         bloom->Execute(bra);
-        bloomOut = bloom->GetBloomTextureSRV();
+        colorSRV = bloom->GetBloomTextureSRV();
+        colorOut = colorSRV;
     }
 }
 
@@ -511,6 +546,9 @@ bool Renderer::CreatePostFX() {
     ScreenSpaceAmbientOcclusion::CreateInfo ssaoCI;
     m_impl->ssao = std::make_unique<ScreenSpaceAmbientOcclusion>(m_impl->device, ssaoCI);
 
+    DepthOfField::CreateInfo dofCI;
+    m_impl->dof = std::make_unique<DepthOfField>(m_impl->device, dofCI);
+
     // 1x1 white texture = "fully visible" — bound to the resolve's g_AO whenever SSAO
     // is off or not yet ready, so the AO multiply is a no-op without a shader branch.
     const Uint8    white[4] = { 255, 255, 255, 255 };
@@ -526,7 +564,7 @@ bool Renderer::CreatePostFX() {
     wd.BindFlags = BIND_SHADER_RESOURCE;
     m_impl->device->CreateTexture(wd, &texData, &m_impl->aoWhite);
 
-    return m_impl->postFX && m_impl->bloom && m_impl->ssao && m_impl->aoWhite;
+    return m_impl->postFX && m_impl->bloom && m_impl->ssao && m_impl->dof && m_impl->aoWhite;
 }
 
 bool Renderer::CreateToonPipeline() {
@@ -617,6 +655,7 @@ void Renderer::Shutdown() {
     m_impl->meshes.clear();
     m_impl->bloom.reset();            // DiligentFX effect objects own GPU resources
     m_impl->ssao.reset();
+    m_impl->dof.reset();
     m_impl->postFX.reset();
     m_impl->motionVectors.Release();
     m_impl->aoWhite.Release();
@@ -665,15 +704,15 @@ void Renderer::SetPostParams(const PostParams& params) {
 void Renderer::EndScene() {
     // Run the enabled post effects first (they bind their own render targets, so
     // this must precede binding the back buffer below). RunPostFX yields:
-    //  - bloomSRV: scene + glow already composited (a drop-in HDR resolve input, so
+    //  - colorSRV: the scene after DoF + Bloom (a drop-in HDR resolve input, so
     //    tonemap.hlsl is unchanged), or null -> resolve the raw scene.
     //  - aoSRV: SSAO visibility, or null -> the white "no occlusion" default.
-    ITextureView* bloomSRV = nullptr;
+    ITextureView* colorSRV = nullptr;
     ITextureView* aoSRV    = nullptr;
-    m_impl->RunPostFX(m_impl->post, bloomSRV, aoSRV);
+    m_impl->RunPostFX(m_impl->post, colorSRV, aoSRV);
 
-    // Resolve inputs: bloom output or raw scene; real AO or the white default.
-    ITextureView* postInput = bloomSRV ? bloomSRV : m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    // Resolve inputs: processed color or raw scene; real AO or the white default.
+    ITextureView* postInput = colorSRV ? colorSRV : m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
     ITextureView* aoInput   = aoSRV    ? aoSRV    : m_impl->aoWhite->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 
     // Resolve the HDR source to the back buffer: SSAO darkening + exposure + tone

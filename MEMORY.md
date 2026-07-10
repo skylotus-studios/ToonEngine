@@ -407,6 +407,27 @@ show **red/green rotational gradients** (opposite sides move opposite screen
 directions). First frame's `prevViewProj` is identity → one frame of bad motion,
 harmless (temporal rejects large deltas).
 
+## Depth of field (DiligentFX `DepthOfField` via `PostFXContext`, roadmap #1)
+
+Bokeh depth-of-field: blurs by depth-based circle of confusion, sharp at the focus
+plane. Reads scene color + depth and (like Bloom) returns a **full replacement
+color**, so it slots into the color chain. Uses the motion vectors for temporal CoC
+smoothing (`FEATURE_FLAG_ENABLE_TEMPORAL_SMOOTHING`).
+
+- **Focus/aperture live in `CameraAttribs`**, not the DoF attribs: `FillCameraAttribs`
+  sets `fFocusDistance` + `fFStop` from `PostParams` (focal length / sensor keep the
+  struct's 50mm / 36mm defaults). The DoF attribs only carry kernel/quality
+  (`MaxCircleOfConfusion` = blur size, bokeh ring count/density, temporal factor).
+  CoC math is in `DOF_ComputeCircleOfConfusion.fx`.
+- **Color chain in `RunPostFX`:** scene → **DoF** → **Bloom**. Each enabled stage reads
+  the previous stage's output; `colorOut` ends on the last one that ran (or null →
+  raw scene). SSAO stays separate (its AO multiplies in the resolve). So `RunPostFX`
+  now returns `(colorOut, aoOut)` instead of `(bloomOut, aoOut)`.
+- **Off by default** — it's a strong look; the user opts in. Default focus 10.5 (≈ the
+  objects at camera distance 10), f/6, MaxCoC 0.015 — objects sharp, near/far ground
+  blurs. Verified visually (cube sharp, bokeh on out-of-focus) + clean run / graceful
+  close. f/2 was way too shallow (everything blurred); a higher f-stop widens focus.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -523,3 +544,9 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   default** (denoises without ghosting). Convention: `currNDC - prevNDC`, raw (the lib
   applies the NDC->UV (0.5,-0.5) scale). Verified the motion buffer directly (static =
   black, spinning = rotational red/green). See "Motion vectors" above.
+- **2026-07-10** — **Depth of field** (roadmap #1): DiligentFX `DepthOfField` via the
+  shared context, using the new motion vectors for temporal CoC smoothing. `RunPostFX`
+  became a color chain (scene → DoF → Bloom, returns `colorOut`); focus/aperture set
+  in `CameraAttribs` from `PostParams`. Off by default (strong look); tuned defaults
+  (focus 10.5, f/6). Verified: clean run, graceful close, visible depth blur (cube in
+  focus, bokeh elsewhere). See "Depth of field" above.
