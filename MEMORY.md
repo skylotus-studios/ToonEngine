@@ -354,9 +354,9 @@ a bloom SRV to `EndScene`.
   `fHandness = view.Determinant() > 0 ? 1 : -1` (copied from DiligentFX's own
   `RadientGeometryPass` — get this wrong and AO inverts or vanishes).
 - **Depth** — the same `sceneDepth` SRV Bloom already used.
-- **Motion** — still the zero texture. Fine because SSAO **temporal accumulation is
-  off by default** (`ResetAccumulation = 1`); with real motion it would need a
-  velocity buffer or it ghosts the spinning objects. UI exposes a temporal toggle.
+- **Motion** — now a **real** NDC velocity buffer (see *Motion vectors* below), so SSAO
+  **temporal accumulation is on by default** (`ResetAccumulation = 0`) and denoises the
+  AO without ghosting the spinning objects. UI keeps a temporal toggle.
 
 **Compositing:** SSAO output (`GetAmbientOcclusionSRV`, R8) is *visibility* (1 = open),
 so the tone-map multiplies: `hdr *= lerp(1, ao*ao, strength)`. Squaring is a stylized
@@ -374,6 +374,38 @@ texture** (`aoWhite`) is bound so the multiply is a no-op with no shader branch.
 - Default look: `ssaoRadius` (EffectRadius) 1.5 world units, `ssaoStrength` 1.0.
 - `EndScene` gates `ssaoStrength` to 0 unless a real AO texture was produced this
   frame (`aoSRV != null`), so the white default never darkens anything.
+
+## Motion vectors (for SSAO temporal / DoF)
+
+The scene now writes a **third MRT target** (`motionVectors`, RG16F) — per-pixel
+screen velocity — replacing the zero texture Bloom/SSAO were fed. This is what
+temporal effects reproject the previous frame with.
+
+**Convention (get it exactly right or temporal smears):** store
+`motion = currNDC.xy − prevNDC.xy` (**NDC** space, current − previous). DiligentFX
+stores motion in NDC and applies the NDC→UV `F3NDC_XYZ_TO_UVD_SCALE = (0.5, −0.5)`
+itself (SSAO temporal: `prevPixel = currPixel − motion·viewportSize`), so **do not**
+pre-scale or flip Y — hand it the raw NDC delta. Derived + checked against
+`SSAO_ComputeTemporalAccumulation.fx`; `ComputeReprojectedDepth.fx` reprojects depth
+from the camera matrices separately, so the motion texture specifically needs the
+**object+camera** motion.
+
+**Plumbing:**
+- `ShaderConstants`/`toon_common.hlsli` gained `prevWorldViewProj`. The toon VS
+  outputs both clip positions (`CurrClip`, `PrevClip`); the PS writes
+  `ComputeMotion() = currClip.xy/w − prevClip.xy/w` to `SV_Target2`. Both toon PSOs
+  are now 3-RT.
+- Camera motion: `SetCamera` snapshots the old `viewProj` as `prevViewProj` before
+  overwriting. Object motion: **`DrawMesh` gained a `prevTransform`** — the app owns
+  object history (the seam philosophy; the renderer has no stable object identity).
+  `main.cpp` tracks `prevSpinAngle`; the static ground passes its transform twice.
+- `DrawMesh` combines them: `prevWVP = WorldFromTransform(prevT) · prevViewProj`.
+
+**Verified** by temporarily routing the motion buffer through the tone-map
+(`abs(motion)·120`): static ground + background **black** (zero), spinning objects
+show **red/green rotational gradients** (opposite sides move opposite screen
+directions). First frame's `prevViewProj` is identity → one frame of bad motion,
+harmless (temporal rejects large deltas).
 
 ## Verifying a Vulkan build
 
@@ -484,3 +516,10 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   off. Added a **ground plane** (`MakePlane`) so contact shadows are visible; verified
   the raw AO buffer (torus hole dark, bg white → correct orientation), ran clean, close
   exits 0. `RunBloom` generalized to `RunPostFX`. See "SSAO" above.
+- **2026-07-10** — **Motion vectors** (unblocks SSAO temporal + DoF): the scene now
+  writes a real NDC velocity buffer (3rd MRT target) instead of a zero texture. Toon
+  shaders difference `currClip`/`prevClip`; `DrawMesh` gained a `prevTransform` and
+  `SetCamera` snapshots `prevViewProj`. SSAO temporal accumulation now **on by
+  default** (denoises without ghosting). Convention: `currNDC - prevNDC`, raw (the lib
+  applies the NDC->UV (0.5,-0.5) scale). Verified the motion buffer directly (static =
+  black, spinning = rotational red/green). See "Motion vectors" above.

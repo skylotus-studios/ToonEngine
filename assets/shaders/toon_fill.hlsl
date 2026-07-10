@@ -11,6 +11,8 @@ PSInput VSMain(VSInput vin)
     PSInput o;
     o.Pos         = mul(float4(vin.Pos, 1.0), g_WorldViewProj);
     o.WorldNormal = mul(float4(vin.Normal, 0.0), g_World).xyz;
+    o.CurrClip    = o.Pos;
+    o.PrevClip    = mul(float4(vin.Pos, 1.0), g_PrevWorldViewProj);
     return o;
 }
 
@@ -31,5 +33,6 @@ PSOutput PSMain(PSInput pin)
     PSOutput o;
     o.Color  = float4(g_BaseColor.rgb * shade, 1.0);
     o.Normal = float4(N, 0.0);   // world-space normal for the SSAO G-buffer
+    o.Motion = ComputeMotion(pin.CurrClip, pin.PrevClip);
     return o;
 }

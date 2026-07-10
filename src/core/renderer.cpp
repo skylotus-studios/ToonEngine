@@ -82,6 +82,7 @@ namespace toon {
 // normals in [-1,1] directly, so no encode/decode is needed.
 static constexpr TEXTURE_FORMAT kHDRFormat        = TEX_FORMAT_RGBA16_FLOAT;
 static constexpr TEXTURE_FORMAT kNormalFormat     = TEX_FORMAT_RGBA16_FLOAT;
+static constexpr TEXTURE_FORMAT kMotionFormat     = TEX_FORMAT_RG16_FLOAT;   // NDC motion (SSAO temporal/DoF)
 static constexpr TEXTURE_FORMAT kSceneDepthFormat = TEX_FORMAT_D32_FLOAT;
 
 // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
@@ -89,6 +90,7 @@ static constexpr TEXTURE_FORMAT kSceneDepthFormat = TEX_FORMAT_D32_FLOAT;
 struct ShaderConstants {
     float4x4 worldViewProj;
     float4x4 world;
+    float4x4 prevWorldViewProj;   // previous frame, for motion vectors
     float4   lightDir;
     float4   baseColor;
     float4   outline;      // rgb color, w = extrude width
@@ -159,12 +161,14 @@ struct Renderer::Impl {
     void FillCameraAttribs(const SwapChainDesc& sc);
 
     // Per-frame scene state. view/proj are kept split (not just viewProj) because
-    // the camera attribs above need each one and their inverses.
-    float4x4   view     = float4x4::Identity();
-    float4x4   proj     = float4x4::Identity();
-    float4x4   viewProj = float4x4::Identity();
-    float      nearZ    = 0.1f;
-    float      farZ     = 100.0f;
+    // the camera attribs above need each one and their inverses. prevViewProj is last
+    // frame's, so DrawMesh can build each object's previous clip position for motion.
+    float4x4   view         = float4x4::Identity();
+    float4x4   proj         = float4x4::Identity();
+    float4x4   viewProj     = float4x4::Identity();
+    float4x4   prevViewProj = float4x4::Identity();
+    float      nearZ        = 0.1f;
+    float      farZ         = 100.0f;
     float3     lightDir = float3(0.5f, 0.8f, -0.3f);  // world-space dir TO light (shader normalizes)
     PostParams post;
 };
@@ -404,24 +408,18 @@ bool Renderer::CreateOffscreenTargets(uint32_t width, uint32_t height) {
     dd.BindFlags = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
     m_impl->device->CreateTexture(dd, nullptr, &m_impl->sceneDepth);
 
-    // Zero motion-vector target for PostFXContext. The toon scene has no motion and
-    // Bloom ignores the result, but PostFXContext requires a motion input to run;
-    // clear it once (we never write it again) so nothing reads uninitialized data.
+    // Screen-space motion-vector target (third scene render target): NDC velocity per
+    // pixel, read by SSAO temporal accumulation (and DoF). Cleared + written each
+    // frame by the toon passes; PostFXContext then reads it.
     TextureDesc md;
-    md.Name      = "motion vectors (zero)";
+    md.Name      = "motion vectors";
     md.Type      = RESOURCE_DIM_TEX_2D;
     md.Width     = width;
     md.Height    = height;
     md.MipLevels = 1;
-    md.Format    = TEX_FORMAT_RG16_FLOAT;
+    md.Format    = kMotionFormat;
     md.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
     m_impl->device->CreateTexture(md, nullptr, &m_impl->motionVectors);
-    if (m_impl->motionVectors) {
-        ITextureView* mrtv = m_impl->motionVectors->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
-        const float   zero[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        m_impl->context->SetRenderTargets(1, &mrtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        m_impl->context->ClearRenderTarget(mrtv, zero, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-    }
 
     return m_impl->hdrColor && m_impl->normalBuffer && m_impl->sceneDepth && m_impl->motionVectors;
 }
@@ -563,9 +561,10 @@ bool Renderer::CreateToonPipeline() {
         ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
 
         GraphicsPipelineDesc& gp = ci.GraphicsPipeline;
-        gp.NumRenderTargets                     = 2;                  // MRT: color + normal G-buffer
+        gp.NumRenderTargets                     = 3;                  // MRT: color + normals + motion
         gp.RTVFormats[0]                        = kHDRFormat;         // SV_Target0: HDR scene color
         gp.RTVFormats[1]                        = kNormalFormat;      // SV_Target1: world-space normals
+        gp.RTVFormats[2]                        = kMotionFormat;      // SV_Target2: NDC motion vectors
         gp.DSVFormat                            = kSceneDepthFormat;
         gp.PrimitiveTopology                    = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         gp.RasterizerDesc.CullMode              = cull;
@@ -642,17 +641,20 @@ void Renderer::Shutdown() {
 // --- Per-frame lifecycle ----------------------------------------------------
 
 void Renderer::BeginFrame(const Color& c) {
-    // The scene renders into two offscreen targets (resolved in EndScene): HDR color
-    // + a world-space normal G-buffer for SSAO, sharing the scene depth buffer.
+    // The scene renders into three offscreen targets (consumed in EndScene): HDR
+    // color, a world-space normal G-buffer (SSAO), and NDC motion vectors (SSAO
+    // temporal / DoF), sharing the scene depth buffer.
     ITextureView* rtvs[] = { m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET),
-                             m_impl->normalBuffer->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET) };
+                             m_impl->normalBuffer->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET),
+                             m_impl->motionVectors->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET) };
     ITextureView* dsv = m_impl->sceneDepth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
-    m_impl->context->SetRenderTargets(2, rtvs, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    m_impl->context->SetRenderTargets(3, rtvs, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
-    const float clear[]  = { c.r, c.g, c.b, c.a };
-    const float zeroN[]  = { 0.0f, 0.0f, 0.0f, 0.0f };   // background normal (SSAO discards it by depth)
+    const float clear[] = { c.r, c.g, c.b, c.a };
+    const float zero[]  = { 0.0f, 0.0f, 0.0f, 0.0f };   // background: zero normal + zero motion
     m_impl->context->ClearRenderTarget(rtvs[0], clear, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-    m_impl->context->ClearRenderTarget(rtvs[1], zeroN, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    m_impl->context->ClearRenderTarget(rtvs[1], zero,  RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    m_impl->context->ClearRenderTarget(rtvs[2], zero,  RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     m_impl->context->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 }
 
@@ -764,41 +766,53 @@ void Renderer::SetCamera(const Camera& cam) {
     const float4x4 proj = float4x4::Projection(cam.fovY, aspect, cam.nearZ, cam.farZ, false);
 
     // Keep view/proj (and near/far) split, not just their product: the SSAO camera
-    // attribs (FillCameraAttribs) need each matrix and its inverse.
-    m_impl->view     = view;
-    m_impl->proj     = proj;
-    m_impl->viewProj = view * proj;
-    m_impl->nearZ    = cam.nearZ;
-    m_impl->farZ     = cam.farZ;
+    // attribs (FillCameraAttribs) need each matrix and its inverse. Snapshot the old
+    // viewProj first so motion vectors capture camera motion too. SetCamera runs once
+    // per frame before the draws, so this is last frame's value.
+    m_impl->prevViewProj = m_impl->viewProj;
+    m_impl->view         = view;
+    m_impl->proj         = proj;
+    m_impl->viewProj     = view * proj;
+    m_impl->nearZ        = cam.nearZ;
+    m_impl->farZ         = cam.farZ;
 }
 
 void Renderer::SetLight(const Vec3& directionToLight) {
     m_impl->lightDir = float3(directionToLight.x, directionToLight.y, directionToLight.z);
 }
 
-void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Material& mat) {
+// Object -> world (Diligent is row-major / row-vector: v * M). Rotation order X,Y,Z.
+static float4x4 WorldFromTransform(const Transform& t) {
+    return float4x4::Scale(t.scale.x, t.scale.y, t.scale.z) *
+           float4x4::RotationX(t.rotationEuler.x) *
+           float4x4::RotationY(t.rotationEuler.y) *
+           float4x4::RotationZ(t.rotationEuler.z) *
+           float4x4::Translation(t.position.x, t.position.y, t.position.z);
+}
+
+void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Transform& prevT, const Material& mat) {
     const uint32_t idx = static_cast<uint32_t>(handle);
     if (idx == 0 || idx > m_impl->meshes.size())
         return;
     const Impl::GpuMesh& mesh = m_impl->meshes[idx - 1];
 
-    // World, then world-view-proj (Diligent is row-major / row-vector: v * M).
-    const float4x4 world = float4x4::Scale(t.scale.x, t.scale.y, t.scale.z) *
-                           float4x4::RotationX(t.rotationEuler.x) *
-                           float4x4::RotationY(t.rotationEuler.y) *
-                           float4x4::RotationZ(t.rotationEuler.z) *
-                           float4x4::Translation(t.position.x, t.position.y, t.position.z);
-    const float4x4 wvp = world * m_impl->viewProj;
+    // This frame's and last frame's clip transforms — the pair the motion-vector pass
+    // differences. Camera motion rides in via viewProj/prevViewProj; object motion via
+    // the two world matrices.
+    const float4x4 world   = WorldFromTransform(t);
+    const float4x4 wvp     = world * m_impl->viewProj;
+    const float4x4 prevWvp = WorldFromTransform(prevT) * m_impl->prevViewProj;
 
     {
         const float3& L = m_impl->lightDir;
         MapHelper<ShaderConstants> cb(m_impl->context, m_impl->constants, MAP_WRITE, MAP_FLAG_DISCARD);
-        cb->worldViewProj = wvp;
-        cb->world         = world;
-        cb->lightDir      = float4(L.x, L.y, L.z, 0.0f);
-        cb->baseColor     = float4(mat.baseColor.x, mat.baseColor.y, mat.baseColor.z, 1.0f);
-        cb->outline       = float4(mat.outlineColor.x, mat.outlineColor.y, mat.outlineColor.z, mat.outlineWidth);
-        cb->params        = float4(mat.bands, mat.ambient, 0.0f, 0.0f);
+        cb->worldViewProj     = wvp;
+        cb->world             = world;
+        cb->prevWorldViewProj = prevWvp;
+        cb->lightDir          = float4(L.x, L.y, L.z, 0.0f);
+        cb->baseColor         = float4(mat.baseColor.x, mat.baseColor.y, mat.baseColor.z, 1.0f);
+        cb->outline           = float4(mat.outlineColor.x, mat.outlineColor.y, mat.outlineColor.z, mat.outlineWidth);
+        cb->params            = float4(mat.bands, mat.ambient, 0.0f, 0.0f);
     }
 
     IBuffer*     vbs[]     = { mesh.vertexBuffer };

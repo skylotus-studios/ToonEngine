@@ -103,8 +103,8 @@ struct PostParams {
     bool  ssao         = true;
     float ssaoStrength = 1.0f;    // composite strength (0 = off, 1 = full occlusion)
     float ssaoRadius   = 1.5f;    // world-space occlusion radius
-    bool  ssaoTemporal = false;   // temporal accumulation — ghosts the spinning scene
-                                  // without real motion vectors, so off by default
+    bool  ssaoTemporal = true;    // temporal accumulation — denoises the AO; safe now
+                                  // that the scene writes real motion vectors
 };
 
 // --- Renderer ---------------------------------------------------------------
@@ -140,7 +140,11 @@ public:
     void SetLight(const Vec3& directionToLight);  // world-space direction TO the light
 
     // Draw a mesh with the toon pipeline (outline pass + banded fill pass).
-    void DrawMesh(MeshHandle mesh, const Transform& transform, const Material& material);
+    // `prevTransform` is the object's placement *last* frame — it drives the motion
+    // vectors SSAO temporal accumulation / DoF consume. Pass the same value as
+    // `transform` for a static object (no motion).
+    void DrawMesh(MeshHandle mesh, const Transform& transform, const Transform& prevTransform,
+                  const Material& material);
 
     // Post-processing. Set params, then EndScene() resolves the HDR scene to the
     // back buffer (call after the DrawMesh calls, before the UI overlay).

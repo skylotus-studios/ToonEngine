@@ -15,6 +15,8 @@ PSInput VSMain(VSInput vin)
     float3 inflated = vin.Pos + vin.SmoothNormal * g_Outline.w;  // object-space extrude
     o.Pos           = mul(float4(inflated, 1.0), g_WorldViewProj);
     o.WorldNormal   = mul(float4(vin.Normal, 0.0), g_World).xyz;  // world space, for the G-buffer
+    o.CurrClip      = o.Pos;
+    o.PrevClip      = mul(float4(inflated, 1.0), g_PrevWorldViewProj);
     return o;
 }
 
@@ -25,5 +27,6 @@ PSOutput PSMain(PSInput pin)
     PSOutput o;
     o.Color  = float4(g_Outline.rgb, 1.0);
     o.Normal = float4(normalize(pin.WorldNormal), 0.0);
+    o.Motion = ComputeMotion(pin.CurrClip, pin.PrevClip);
     return o;
 }

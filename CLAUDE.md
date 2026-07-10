@@ -19,8 +19,9 @@ The app opens a window, creates a Vulkan device + swap chain, and each frame dra
 small spinning scene — a smooth **sphere**, a faceted **cube**, a **torus**, on a
 **ground plane** — each cel-shaded with a **banded diffuse fill + inverted-hull
 silhouette outline** in its own color. The scene renders into an **HDR offscreen
-target + a world-space normal G-buffer** (MRT); **DiligentFX's SSAO** (via
-`PostFXContext`) darkens contact/creased areas and **Bloom** adds a soft glow to the
+target + world-space normal + motion-vector G-buffers** (MRT); **DiligentFX's SSAO**
+(via `PostFXContext`, with temporal denoise) darkens contact/creased areas and
+**Bloom** adds a soft glow to the
 bright bands, then an **ACES tone-map pass** resolves to the back buffer, with a
 docked **Dear ImGui** debug overlay driving the look live (light, band count, colors,
 outline width, camera, exposure, bloom, SSAO). HLSL shaders cross-compile to SPIR-V at
@@ -123,11 +124,9 @@ matrix-convention, winding, and outline-ordering details.
 ## Roadmap
 
 1. **More DiligentFX effects** — Bloom + SSAO are in (via `PostFXContext`; see
-   MEMORY.md). SSAO added the world-space normal G-buffer + real `CameraAttribs`
-   the shared context needs. DoF is the next candidate on the same context; the one
-   remaining stub is **motion vectors** (still a zero texture), so any
-   motion-dependent effect — or SSAO temporal accumulation without ghosting — needs
-   a real velocity buffer first.
+   MEMORY.md), and the shared context now has all real inputs: world-space normal
+   G-buffer, `CameraAttribs`, and **motion vectors** (SSAO temporal is on). **DoF**
+   is the next candidate — it reuses this same context + motion buffer.
 2. **Toon pipeline extensions** — inverse-transpose normals for non-uniform scale;
    instancing; per-object outline tuning; an optional post-process depth+normal
    edge-detect outline variant.

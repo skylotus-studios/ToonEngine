@@ -133,6 +133,7 @@ int main() {
         const double now = glfwGetTime();
         const float  dt  = static_cast<float>(now - lastTime);
         lastTime = now;
+        const float prevSpinAngle = spinAngle;      // last frame's angle (for motion vectors)
         if (spin) spinAngle += dt * 0.6f;
 
         renderer.BeginFrame(clearColor);
@@ -141,13 +142,14 @@ int main() {
         renderer.SetCamera(camera);
         renderer.SetLight(lightDir);
 
-        // Ground plane, just below the objects (fixed; catches their AO contact shadows).
+        // Ground plane, just below the objects (fixed; catches their AO contact
+        // shadows). It never moves, so its previous transform equals its current one.
         {
             groundMaterial.bands   = style.bands;
             groundMaterial.ambient = style.ambient;
             toon::Transform groundXform;
             groundXform.position = { 0.0f, -1.05f, 0.0f };   // just under the sphere/torus
-            renderer.DrawMesh(groundMesh, groundXform, groundMaterial);
+            renderer.DrawMesh(groundMesh, groundXform, groundXform, groundMaterial);
         }
 
         for (Object& obj : objects) {
@@ -157,10 +159,13 @@ int main() {
             obj.material.bands        = style.bands;
             obj.material.ambient      = style.ambient;
 
+            // Current + previous placement — the delta is this object's motion vector.
             toon::Transform xform;
             xform.position      = obj.position;
             xform.rotationEuler = obj.spinAxis * spinAngle;
-            renderer.DrawMesh(obj.mesh, xform, obj.material);
+            toon::Transform prevXform = xform;
+            prevXform.rotationEuler = obj.spinAxis * prevSpinAngle;
+            renderer.DrawMesh(obj.mesh, xform, prevXform, obj.material);
         }
 
         // Resolve the HDR scene to the back buffer (exposure + tone map).
@@ -227,7 +232,7 @@ int main() {
             if (post.ssao) {
                 ImGui::SliderFloat("AO strength", &post.ssaoStrength, 0.0f, 1.0f);
                 ImGui::SliderFloat("AO radius", &post.ssaoRadius, 0.1f, 3.0f);
-                ImGui::Checkbox("AO temporal (ghosts when spinning)", &post.ssaoTemporal);
+                ImGui::Checkbox("AO temporal (motion-vector denoise)", &post.ssaoTemporal);
             }
         }
         ImGui::End();

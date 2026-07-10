@@ -8,8 +8,9 @@
 //============================================================================
 cbuffer Constants
 {
-    row_major float4x4 g_WorldViewProj; // object -> clip
-    row_major float4x4 g_World;         // object -> world (for normals; uniform scale assumed)
+    row_major float4x4 g_WorldViewProj;     // object -> clip (this frame)
+    row_major float4x4 g_World;             // object -> world (for normals; uniform scale assumed)
+    row_major float4x4 g_PrevWorldViewProj; // object -> clip (previous frame), for motion vectors
 
     float4 g_LightDir;   // xyz: normalized direction TO the light;  w unused
     float4 g_BaseColor;  // rgb: material albedo;                    w unused
@@ -28,13 +29,27 @@ struct PSInput
 {
     float4 Pos         : SV_POSITION;
     float3 WorldNormal : TEXCOORD0;
+    float4 CurrClip    : TEXCOORD1;  // clip-space pos this frame (for motion vectors)
+    float4 PrevClip    : TEXCOORD2;  // clip-space pos last frame
 };
 
-// The scene pass writes two targets (MRT): the shaded color, and a world-space
-// normal G-buffer that DiligentFX's SSAO reads. Both toon passes (fill + outline)
-// output this struct so their PSO render-target counts match the bound targets.
+// The scene pass writes three targets (MRT), all read by DiligentFX post effects:
+// the shaded color, a world-space normal G-buffer (SSAO), and a screen-space motion
+// vector (SSAO temporal / DoF). Both toon passes (fill + outline) output this struct
+// so their PSO render-target counts match the bound targets.
 struct PSOutput
 {
     float4 Color  : SV_Target0;  // HDR scene color
     float4 Normal : SV_Target1;  // world-space normal in [-1,1] (xyz); w unused
+    float2 Motion : SV_Target2;  // NDC-space (currNDC - prevNDC); DiligentFX scales to UV
 };
+
+// Screen-space motion vector for a pixel: the NDC displacement from last frame to
+// this one. DiligentFX stores motion in NDC and applies the NDC->UV (0.5,-0.5) scale
+// itself, so we hand it the raw delta.
+float2 ComputeMotion(float4 currClip, float4 prevClip)
+{
+    float2 currNDC = currClip.xy / currClip.w;
+    float2 prevNDC = prevClip.xy / prevClip.w;
+    return currNDC - prevNDC;
+}
