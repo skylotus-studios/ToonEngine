@@ -11,6 +11,8 @@
 
 #include <cstdint>
 
+#include "core/math.h"   // toon::Vec3 (plain, Diligent-free)
+
 // Forward-declared so this header pulls in neither GLFW nor any Diligent header.
 struct GLFWwindow;
 
@@ -26,8 +28,55 @@ enum class TextureHandle  : uint32_t { Invalid = 0 };
 enum class BufferHandle   : uint32_t { Invalid = 0 };
 enum class ShaderHandle   : uint32_t { Invalid = 0 };
 enum class PipelineHandle : uint32_t { Invalid = 0 };
+enum class MeshHandle     : uint32_t { Invalid = 0 };
 
 struct Color { float r = 0.0f, g = 0.0f, b = 0.0f, a = 1.0f; };
+
+// --- Scene vocabulary -------------------------------------------------------
+// Plain, backend-agnostic types the engine speaks in. The renderer converts
+// them to Diligent math/resources behind the seam.
+
+// One mesh vertex. The input layout in renderer.cpp mirrors this (three
+// tightly-packed float3s). `normal` shades the fill (may be faceted/per-face);
+// `smoothNormal` is the averaged normal the outline hull extrudes along, so hard
+// edges (e.g. a cube's corners) stay closed instead of splitting apart. For
+// smooth meshes the two are identical.
+struct Vertex {
+    Vec3 position;
+    Vec3 normal;
+    Vec3 smoothNormal;
+};
+
+// Turntable camera orbiting a target at the origin. The renderer builds the
+// view + (Vulkan-correct) projection from these; keeping the matrix math on the
+// Diligent side avoids leaking NDC/handedness conventions across the seam.
+struct Camera {
+    float distance = 4.0f;      // orbit radius from the origin
+    float yaw      = 0.0f;      // radians, around +Y
+    float pitch    = 0.0f;      // radians, around +X
+    float fovY     = 1.0472f;   // vertical field of view (~60 degrees)
+    float nearZ    = 0.1f;
+    float farZ     = 100.0f;
+};
+
+// Per-object toon look, passed to DrawMesh. Lives in the seam so the debug UI
+// can drive it live and so each object in a scene can differ. (The light is
+// global scene state — see SetLight.)
+struct Material {
+    Vec3  baseColor    = { 0.85f, 0.30f, 0.35f }; // albedo
+    Vec3  outlineColor = { 0.05f, 0.05f, 0.07f }; // rim color
+    float outlineWidth = 0.03f;                   // object-space extrusion
+    float bands        = 4.0f;                    // number of shading bands
+    float ambient      = 0.25f;                   // shadow-side floor (0 = black)
+};
+
+// Per-object placement. Rotation is applied X, then Y, then Z. Scale is assumed
+// uniform (the fill pass transforms normals by the world matrix directly).
+struct Transform {
+    Vec3 position      = { 0.0f, 0.0f, 0.0f };
+    Vec3 rotationEuler = { 0.0f, 0.0f, 0.0f };   // radians
+    Vec3 scale         = { 1.0f, 1.0f, 1.0f };
+};
 
 // --- Renderer ---------------------------------------------------------------
 // Owns the graphics device, immediate context, and swap chain, and drives the
@@ -52,6 +101,18 @@ public:
     // Keep the swap chain matched to the window's framebuffer size.
     void Resize(uint32_t width, uint32_t height);
 
+    // --- Scene: meshes + toon draw ------------------------------------------
+    // Upload a mesh once; returns a handle (MeshHandle::Invalid on failure).
+    MeshHandle CreateMesh(const Vertex* vertices, uint32_t vertexCount,
+                          const uint32_t* indices, uint32_t indexCount);
+
+    // Per-frame scene state (set between BeginFrame and the DrawMesh calls).
+    void SetCamera(const Camera& camera);
+    void SetLight(const Vec3& directionToLight);  // world-space direction TO the light
+
+    // Draw a mesh with the toon pipeline (outline pass + banded fill pass).
+    void DrawMesh(MeshHandle mesh, const Transform& transform, const Material& material);
+
     // --- Debug/editor UI (Dear ImGui) ---------------------------------------
     // Diligent's ImGui renderer backend (ImGuiImplDiligent) is confined to
     // renderer.cpp same as everything else — main.cpp only sees these four
@@ -64,6 +125,10 @@ public:
     void EndUI();
 
 private:
+    // Builds the toon fill/outline PSOs + shared constant buffer (called from
+    // Init). Signature is plain so the header stays Diligent-free.
+    bool CreateToonPipeline();
+
     struct Impl;         // defined in renderer.cpp — hides all Diligent types
     Impl* m_impl = nullptr;
 };

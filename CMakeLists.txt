@@ -44,6 +44,7 @@ add_subdirectory(external/glfw)
 add_executable(ToonEngine
     src/main.cpp
     src/core/renderer.cpp
+    src/core/primitives.cpp
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
 )
 
@@ -58,6 +59,7 @@ target_link_libraries(ToonEngine
         Diligent-BuildSettings
         Diligent-GraphicsEngineVk-shared   # Vulkan: Windows, Linux, macOS (via MoltenVK)
         Diligent-Common                    # RefCntAutoPtr.hpp + other Common/interface utilities
+        Diligent-GraphicsTools             # MapHelper.hpp (dynamic CB updates) + graphics utilities
         Diligent-Imgui                     # ImGuiImplDiligent renderer backend + vendored Dear ImGui
         glfw
 )
@@ -67,6 +69,12 @@ target_link_libraries(ToonEngine
 # selects that dynamic-load path; copy_required_dlls (below) drops the engine
 # DLLs next to the executable so the loader finds them.
 target_compile_definitions(ToonEngine PRIVATE ENGINE_DLL=1)
+
+# Bake in the absolute path to the HLSL sources so the shader stream factory
+# finds them regardless of the working directory (dev convenience). A shipped
+# build would copy assets/shaders next to the exe and use a relative path.
+target_compile_definitions(ToonEngine PRIVATE
+    TOON_SHADERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders")
 
 # Convenience function from DiligentCore: copies the engine shared libraries
 # next to the executable so the OS can find and load them at runtime.
