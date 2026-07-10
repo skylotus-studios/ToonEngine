@@ -23,11 +23,12 @@ set(DILIGENT_NO_DIRECT3D11 ON CACHE BOOL "" FORCE)
 set(DILIGENT_NO_DIRECT3D12 ON CACHE BOOL "" FORCE)
 set(DILIGENT_NO_OPENGL     ON CACHE BOOL "" FORCE)
 
-# Tools adds Dear ImGui (debug/editor UI) + texture/glTF loaders. Uncomment FX
-# later for the PBR renderer / post-processing effects.
+# Tools adds Dear ImGui (debug/editor UI) + texture/glTF loaders. FX adds the
+# post-processing effects (bloom, tone mapping, SSAO, ...) — see the toon HDR
+# post chain in core/renderer.cpp.
 add_subdirectory(external/DiligentCore)
 add_subdirectory(external/DiligentTools)
-# add_subdirectory(external/DiligentFX)
+add_subdirectory(external/DiligentFX)
 
 # --- GLFW: cross-platform window + input (submodule under external/) ----------
 set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
@@ -61,6 +62,7 @@ target_link_libraries(ToonEngine
         Diligent-Common                    # RefCntAutoPtr.hpp + other Common/interface utilities
         Diligent-GraphicsTools             # MapHelper.hpp (dynamic CB updates) + graphics utilities
         Diligent-Imgui                     # ImGuiImplDiligent renderer backend + vendored Dear ImGui
+        DiligentFX                         # post-processing effects (bloom, tone mapping, ...)
         glfw
 )
 

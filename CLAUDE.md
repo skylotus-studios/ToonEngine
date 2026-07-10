@@ -69,10 +69,11 @@ src/
     math.h                Minimal Diligent-free vector types (Vec2/3/4) for the seam's public API
     primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus) -> toon::MeshData
 assets/
-  shaders/                HLSL toon shaders: toon_common.hlsli + toon_fill.hlsl + toon_outline.hlsl (HLSL->SPIR-V at runtime)
+  shaders/                HLSL: toon_common.hlsli + toon_fill/toon_outline + tonemap.hlsl (HLSL->SPIR-V at runtime)
 external/                 Git submodules (not committed as files; see .gitmodules)
   DiligentCore/           Rendering: RHI + Vulkan backend (D3D11/D3D12/GL disabled), HLSL->SPIR-V
   DiligentTools/          Dear ImGui renderer backend (Diligent-Imgui), texture/glTF loaders
+  DiligentFX/             Post-processing effects (bloom, SSAO, tone-mapping shaders)
   glfw/                   Cross-platform window + input
 CMakeLists.txt            add_subdirectory(DiligentCore, DiligentTools, glfw); disables unused backends
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
@@ -90,8 +91,9 @@ calls `Renderer::Init / BeginFrame / EndFrame / Resize / InitUI / BeginUI / EndU
    `hWnd` · Linux `WindowId`+`pDisplay` · macOS `pNSView` (needs a Cocoa `.mm`
    helper from GLFWDemo — not yet written).
 3. `EngineFactoryVk` creates the device/context, then the swap chain.
-4. Per frame: bind the back-buffer RTV/DSV, clear, draw the scene (toon passes),
-   draw the ImGui overlay on top, `Present()`.
+4. Per frame: render the scene (toon passes) into an **HDR offscreen target**,
+   resolve it to the back buffer with a tone-map pass (`EndScene`), draw the
+   ImGui overlay on top, `Present()`.
 5. **Dear ImGui**: `InitUI` constructs `ImGuiImplDiligent` then the GLFW
    platform backend (order matters — see MEMORY.md). Per frame: `BeginUI()` →
    engine/game code calls `ImGui::` directly → `EndUI()`.
@@ -154,7 +156,11 @@ for the matrix-convention, winding, and outline-ordering details.
    **upstream ocornut/imgui** docking (the DiligentGraphics fork's docking branch
    is too old to build). `git submodule update` reverts it (docking then silently
    disables). See MEMORY.md → "Docking".
-6. **DiligentFX.** Bloom, SSAO, tone mapping.
+6. **DiligentFX.** ⏳ In progress. Added as a submodule (API256018) + wired into
+   the build. HDR pipeline established: the scene renders to an offscreen RGBA16F
+   target, resolved to the back buffer by a full-screen **tone-map** pass (ACES +
+   exposure — `assets/shaders/tonemap.hlsl`, `Renderer::EndScene`). This is the
+   foundation DiligentFX's **Bloom / SSAO** components plug into — those are next.
 7. **Cross-platform.** Linux (Vulkan), then macOS (MoltenVK — Cocoa helper).
 8. **Other backends.** D3D11 disabled by default; re-enable to support older Windows devices.
 

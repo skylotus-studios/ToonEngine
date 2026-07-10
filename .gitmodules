@@ -7,3 +7,6 @@
 [submodule "external/DiligentTools"]
 	path = external/DiligentTools
 	url = https://github.com/DiligentGraphics/DiligentTools.git
+[submodule "external/DiligentFX"]
+	path = external/DiligentFX
+	url = https://github.com/DiligentGraphics/DiligentFX.git

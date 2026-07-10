@@ -78,6 +78,14 @@ struct Transform {
     Vec3 scale         = { 1.0f, 1.0f, 1.0f };
 };
 
+// HDR resolve / tone-mapping controls (roadmap: DiligentFX post-processing). The
+// scene renders to an offscreen HDR target; EndScene resolves it to the back
+// buffer with exposure + a filmic tone-map curve. Bloom/SSAO will hook in here.
+struct PostParams {
+    float exposure = 1.0f;   // linear multiplier applied before tone mapping
+    bool  toneMap  = true;   // ACES filmic tone map (vs. plain clamp)
+};
+
 // --- Renderer ---------------------------------------------------------------
 // Owns the graphics device, immediate context, and swap chain, and drives the
 // per-frame lifecycle. Backend-agnostic by construction (see file header).
@@ -113,6 +121,11 @@ public:
     // Draw a mesh with the toon pipeline (outline pass + banded fill pass).
     void DrawMesh(MeshHandle mesh, const Transform& transform, const Material& material);
 
+    // Post-processing. Set params, then EndScene() resolves the HDR scene to the
+    // back buffer (call after the DrawMesh calls, before the UI overlay).
+    void SetPostParams(const PostParams& params);
+    void EndScene();
+
     // --- Debug/editor UI (Dear ImGui) ---------------------------------------
     // Diligent's ImGui renderer backend (ImGuiImplDiligent) is confined to
     // renderer.cpp same as everything else — main.cpp only sees these four
@@ -125,9 +138,12 @@ public:
     void EndUI();
 
 private:
-    // Builds the toon fill/outline PSOs + shared constant buffer (called from
-    // Init). Signature is plain so the header stays Diligent-free.
-    bool CreateToonPipeline();
+    // Internal setup steps (called from Init/Resize). Plain signatures so the
+    // header stays Diligent-free.
+    bool CreateToonPipeline();                                // toon fill/outline PSOs + shared CB
+    bool CreatePostPipeline();                                // HDR tone-map resolve PSO
+    bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + depth
+    void BindPostInput();                                    // point the resolve at the HDR target
 
     struct Impl;         // defined in renderer.cpp — hides all Diligent types
     Impl* m_impl = nullptr;

@@ -25,6 +25,8 @@
 #include "SwapChain.h"
 #include "GraphicsTypes.h"
 #include "Buffer.h"
+#include "Texture.h"
+#include "Sampler.h"
 #include "Shader.h"
 #include "PipelineState.h"
 #include "RefCntAutoPtr.hpp"
@@ -53,6 +55,11 @@ using namespace Diligent;
 
 namespace toon {
 
+// The scene renders to an HDR target, then a full-screen pass tone-maps it to
+// the back buffer — the foundation for DiligentFX post effects.
+static constexpr TEXTURE_FORMAT kHDRFormat        = TEX_FORMAT_RGBA16_FLOAT;
+static constexpr TEXTURE_FORMAT kSceneDepthFormat = TEX_FORMAT_D32_FLOAT;
+
 // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
 // (two row-major float4x4 rows + four float4 rows = 192 bytes, 16-aligned).
 struct ShaderConstants {
@@ -62,6 +69,14 @@ struct ShaderConstants {
     float4   baseColor;
     float4   outline;      // rgb color, w = extrude width
     float4   params;       // x = bands, y = ambient
+};
+
+// GPU mirror of tonemap.hlsl's PostConstants.
+struct PostConstants {
+    float exposure;
+    float toneMap;      // 1 = ACES
+    float outputSRGB;   // 1 = encode sRGB in-shader
+    float pad;
 };
 
 // All Diligent state hides here, behind the PIMPL boundary.
@@ -86,9 +101,18 @@ struct Renderer::Impl {
     };
     std::vector<GpuMesh> meshes;   // handle N -> meshes[N-1]; handle 0 = Invalid
 
+    // HDR offscreen scene target + tone-map resolve to the back buffer.
+    RefCntAutoPtr<ITexture>               hdrColor;      // RGBA16F scene color
+    RefCntAutoPtr<ITexture>               sceneDepth;    // D32 depth for the scene pass
+    RefCntAutoPtr<IPipelineState>         tonemapPSO;
+    RefCntAutoPtr<IShaderResourceBinding> tonemapSRB;
+    RefCntAutoPtr<IBuffer>                postConstants;
+    bool                                  outputSRGB = false;  // back buffer is a non-sRGB UNORM
+
     // Per-frame scene state.
-    float4x4 viewProj = float4x4::Identity();
-    float3   lightDir = float3(0.5f, 0.8f, -0.3f);  // world-space dir TO light (shader normalizes)
+    float4x4   viewProj = float4x4::Identity();
+    float3     lightDir = float3(0.5f, 0.8f, -0.3f);  // world-space dir TO light (shader normalizes)
+    PostParams post;
 };
 
 // Fill Diligent's NativeWindow from a GLFW window, per platform.
@@ -162,7 +186,114 @@ bool Renderer::Init(GLFWwindow* window) {
         std::fprintf(stderr, "Renderer: failed to create toon pipeline\n");
         return false;
     }
+
+    // HDR pipeline: offscreen scene target + tone-map resolve to the back buffer.
+    const SwapChainDesc& sc = m_impl->swapChain->GetDesc();
+    if (!CreateOffscreenTargets(sc.Width, sc.Height)) {
+        std::fprintf(stderr, "Renderer: failed to create offscreen HDR targets\n");
+        return false;
+    }
+    if (!CreatePostPipeline()) {
+        std::fprintf(stderr, "Renderer: failed to create tone-map pipeline\n");
+        return false;
+    }
+    BindPostInput();
+
+    // If the back buffer isn't an sRGB format, the tone-map shader encodes sRGB.
+    m_impl->outputSRGB = !(sc.ColorBufferFormat == TEX_FORMAT_RGBA8_UNORM_SRGB ||
+                           sc.ColorBufferFormat == TEX_FORMAT_BGRA8_UNORM_SRGB);
     return true;
+}
+
+bool Renderer::CreateOffscreenTargets(uint32_t width, uint32_t height) {
+    m_impl->hdrColor.Release();
+    m_impl->sceneDepth.Release();
+
+    TextureDesc cd;
+    cd.Name      = "HDR scene color";
+    cd.Type      = RESOURCE_DIM_TEX_2D;
+    cd.Width     = width;
+    cd.Height    = height;
+    cd.MipLevels = 1;
+    cd.Format    = kHDRFormat;
+    cd.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+    m_impl->device->CreateTexture(cd, nullptr, &m_impl->hdrColor);
+
+    TextureDesc dd;
+    dd.Name      = "scene depth";
+    dd.Type      = RESOURCE_DIM_TEX_2D;
+    dd.Width     = width;
+    dd.Height    = height;
+    dd.MipLevels = 1;
+    dd.Format    = kSceneDepthFormat;
+    dd.BindFlags = BIND_DEPTH_STENCIL;
+    m_impl->device->CreateTexture(dd, nullptr, &m_impl->sceneDepth);
+
+    return m_impl->hdrColor && m_impl->sceneDepth;
+}
+
+bool Renderer::CreatePostPipeline() {
+    IRenderDevice*       device = m_impl->device;
+    const SwapChainDesc& sc     = m_impl->swapChain->GetDesc();
+
+    {
+        BufferDesc cbDesc;
+        cbDesc.Name           = "post constants";
+        cbDesc.Size           = sizeof(PostConstants);
+        cbDesc.Usage          = USAGE_DYNAMIC;
+        cbDesc.BindFlags      = BIND_UNIFORM_BUFFER;
+        cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+        device->CreateBuffer(cbDesc, nullptr, &m_impl->postConstants);
+        if (!m_impl->postConstants) return false;
+    }
+
+    IShaderSourceInputStreamFactory* sf = m_impl->shaderFactory;
+    auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "tonemap VS", "tonemap.hlsl", "VSMain");
+    auto ps = CreateToonShader(device, sf, SHADER_TYPE_PIXEL,  "tonemap PS", "tonemap.hlsl", "PSMain");
+    if (!vs || !ps) return false;
+
+    GraphicsPipelineStateCreateInfo ci;
+    ci.PSODesc.Name         = "tonemap PSO";
+    ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+    GraphicsPipelineDesc& gp = ci.GraphicsPipeline;
+    gp.NumRenderTargets              = 1;
+    gp.RTVFormats[0]                 = sc.ColorBufferFormat;   // resolve to the back buffer
+    gp.PrimitiveTopology             = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    gp.RasterizerDesc.CullMode       = CULL_MODE_NONE;
+    gp.DepthStencilDesc.DepthEnable  = False;
+
+    ci.pVS = vs;
+    ci.pPS = ps;
+
+    // g_HDRColor is mutable (re-pointed when the target is recreated on resize);
+    // the PostConstants CB is static.
+    ShaderResourceVariableDesc vars[] = {
+        { SHADER_TYPE_PIXEL, "g_HDRColor",    SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+        { SHADER_TYPE_PIXEL, "PostConstants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC  },
+    };
+    ci.PSODesc.ResourceLayout.Variables    = vars;
+    ci.PSODesc.ResourceLayout.NumVariables = sizeof(vars) / sizeof(vars[0]);
+
+    SamplerDesc linClamp;
+    linClamp.MinFilter = FILTER_TYPE_LINEAR; linClamp.MagFilter = FILTER_TYPE_LINEAR; linClamp.MipFilter = FILTER_TYPE_LINEAR;
+    linClamp.AddressU  = TEXTURE_ADDRESS_CLAMP; linClamp.AddressV = TEXTURE_ADDRESS_CLAMP; linClamp.AddressW = TEXTURE_ADDRESS_CLAMP;
+    ImmutableSamplerDesc immSamplers[] = { { SHADER_TYPE_PIXEL, "g_HDRColor", linClamp } };
+    ci.PSODesc.ResourceLayout.ImmutableSamplers    = immSamplers;
+    ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
+
+    device->CreateGraphicsPipelineState(ci, &m_impl->tonemapPSO);
+    if (!m_impl->tonemapPSO) return false;
+    if (auto* v = m_impl->tonemapPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "PostConstants"))
+        v->Set(m_impl->postConstants);
+    m_impl->tonemapPSO->CreateShaderResourceBinding(&m_impl->tonemapSRB, true);
+    return m_impl->tonemapSRB != nullptr;
+}
+
+void Renderer::BindPostInput() {
+    if (!m_impl->tonemapSRB || !m_impl->hdrColor) return;
+    if (auto* v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_HDRColor"))
+        v->Set(m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 }
 
 bool Renderer::CreateToonPipeline() {
@@ -188,8 +319,6 @@ bool Renderer::CreateToonPipeline() {
         LayoutElement{2, 0, 3, VT_FLOAT32, False},   // ATTRIB2 smooth normal (outline hull)
     };
 
-    const SwapChainDesc& sc = m_impl->swapChain->GetDesc();
-
     // Build a graphics PSO for one toon pass and wire the shared CB into it.
     auto buildPass = [&](const char* name, IShader* vs, IShader* ps, CULL_MODE cull,
                          RefCntAutoPtr<IPipelineState>&         pso,
@@ -200,8 +329,8 @@ bool Renderer::CreateToonPipeline() {
 
         GraphicsPipelineDesc& gp = ci.GraphicsPipeline;
         gp.NumRenderTargets                     = 1;
-        gp.RTVFormats[0]                        = sc.ColorBufferFormat;
-        gp.DSVFormat                            = sc.DepthBufferFormat;
+        gp.RTVFormats[0]                        = kHDRFormat;          // scene renders to the HDR target
+        gp.DSVFormat                            = kSceneDepthFormat;
         gp.PrimitiveTopology                    = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         gp.RasterizerDesc.CullMode              = cull;
         gp.RasterizerDesc.FrontCounterClockwise = True;   // primitives are CCW when seen from outside
@@ -245,6 +374,11 @@ void Renderer::Shutdown() {
 
     // Release scene/pipeline GPU objects before the device.
     m_impl->meshes.clear();
+    m_impl->tonemapSRB.Release();
+    m_impl->tonemapPSO.Release();
+    m_impl->postConstants.Release();
+    m_impl->hdrColor.Release();
+    m_impl->sceneDepth.Release();
     m_impl->fillSRB.Release();
     m_impl->outlineSRB.Release();
     m_impl->fillPSO.Release();
@@ -258,8 +392,9 @@ void Renderer::Shutdown() {
 }
 
 void Renderer::BeginFrame(const Color& c) {
-    ITextureView* rtv = m_impl->swapChain->GetCurrentBackBufferRTV();
-    ITextureView* dsv = m_impl->swapChain->GetDepthBufferDSV();
+    // The scene renders into the HDR offscreen target (resolved in EndScene).
+    ITextureView* rtv = m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+    ITextureView* dsv = m_impl->sceneDepth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
     m_impl->context->SetRenderTargets(1, &rtv, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
     const float clear[] = { c.r, c.g, c.b, c.a };
@@ -267,13 +402,43 @@ void Renderer::BeginFrame(const Color& c) {
     m_impl->context->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 }
 
+void Renderer::SetPostParams(const PostParams& params) {
+    m_impl->post = params;
+}
+
+void Renderer::EndScene() {
+    // Resolve the HDR scene to the back buffer: exposure + tone map. Leaves the
+    // back-buffer RTV bound so the UI overlay draws on top.
+    ITextureView* rtv = m_impl->swapChain->GetCurrentBackBufferRTV();
+    m_impl->context->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+    {
+        MapHelper<PostConstants> cb(m_impl->context, m_impl->postConstants, MAP_WRITE, MAP_FLAG_DISCARD);
+        cb->exposure   = m_impl->post.exposure;
+        cb->toneMap    = m_impl->post.toneMap ? 1.0f : 0.0f;
+        cb->outputSRGB = m_impl->outputSRGB ? 1.0f : 0.0f;
+        cb->pad        = 0.0f;
+    }
+
+    m_impl->context->SetPipelineState(m_impl->tonemapPSO);
+    m_impl->context->CommitShaderResources(m_impl->tonemapSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+    DrawAttribs draw;
+    draw.NumVertices = 3;               // full-screen triangle
+    draw.Flags       = DRAW_FLAG_VERIFY_ALL;
+    m_impl->context->Draw(draw);
+}
+
 void Renderer::EndFrame() {
     m_impl->swapChain->Present(); // vsync on by default
 }
 
 void Renderer::Resize(uint32_t width, uint32_t height) {
-    if (m_impl->swapChain && width > 0 && height > 0)
-        m_impl->swapChain->Resize(width, height);
+    if (!m_impl->swapChain || width == 0 || height == 0) return;
+    m_impl->swapChain->Resize(width, height);
+    const SwapChainDesc& sc = m_impl->swapChain->GetDesc();
+    CreateOffscreenTargets(sc.Width, sc.Height);   // match the new back-buffer size
+    BindPostInput();                               // re-point the resolve at the new HDR target
 }
 
 MeshHandle Renderer::CreateMesh(const Vertex* vertices, uint32_t vertexCount,

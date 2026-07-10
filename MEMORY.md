@@ -192,6 +192,40 @@ a given corner.
   factory. Shipping later would copy `assets/shaders` next to the exe and use a
   relative path.
 
+## DiligentFX / HDR post-processing (roadmap #6)
+
+Added `external/DiligentFX` as a submodule pinned to **API256018** — match the
+DiligentCore/Tools API version (they're released together; a mismatched FX would
+fail to compile against Core/Tools). Enabled via the stubbed
+`add_subdirectory(external/DiligentFX)` hook (must come AFTER Core/Tools) + link
+the `DiligentFX` target. Builds clean in the Vulkan-only, backends-trimmed setup.
+
+**HDR pipeline (the foundation FX effects need).** The scene no longer renders
+straight to the back buffer:
+- `BeginFrame` binds an offscreen **RGBA16F** color + D32 depth
+  (`CreateOffscreenTargets`, recreated on resize). The toon PSOs' RTV/DSV formats
+  are `kHDRFormat` / `kSceneDepthFormat`, not the swap-chain formats.
+- `EndScene` resolves HDR → back buffer with a full-screen triangle
+  (`tonemap.hlsl`, drawn as `Draw(NumVertices=3)`, no vertex buffer): exposure +
+  ACES filmic curve, then leaves the back buffer bound so the UI overlays it.
+- Frame order in `main.cpp`: BeginFrame → DrawMesh… → **EndScene** →
+  BeginUI/UI/EndUI → EndFrame.
+
+**Gotchas:**
+- **sRGB:** the Vulkan backend picks the back-buffer format at runtime. If it's
+  NOT an sRGB format, the tone-map shader must encode sRGB itself (else mid-tones
+  crush). `Init` sets `outputSRGB` by testing the format; the shader branches on
+  it. An sRGB back buffer gets hardware encoding, so output linear there.
+- **Resolve resources:** the tone-map PSO binds the HDR color as a MUTABLE
+  texture var + an immutable linear-clamp sampler (combined-sampler name
+  `g_HDRColor`). On resize the target is recreated, so `BindPostInput` re-points
+  the SRB at the new SRV.
+- Tone mapping is currently a **self-contained ACES** shader, not DiligentFX's
+  `ToneMapping.fxh` — the DiligentFX shader includes (`SRGBUtilities.fxh`, the
+  dual C++/HLSL `*Structures.fxh` with their macro setup) add include-path
+  plumbing not worth it for a first pass. **Bloom/SSAO (the actual DiligentFX
+  components, via `PostFXContext`) are the next step** and layer onto this HDR target.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -260,3 +294,8 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   ocornut/imgui's `docking` branch — the DiligentGraphics fork's docking branch
   is ancient/incompatible. See "Docking" above for the checkout + the
   `git submodule update` reversion caveat.
+- **2026-07-09** — DiligentFX (roadmap #6, in progress): added the submodule
+  (API256018) + build wiring, and stood up the HDR pipeline — offscreen RGBA16F
+  scene target resolved to the back buffer by an exposure + ACES tone-map pass
+  (`Renderer::EndScene`, `tonemap.hlsl`). Foundation for DiligentFX bloom/SSAO
+  next. See "DiligentFX / HDR post-processing" above.

@@ -110,6 +110,9 @@ int main() {
     // Shared style applied to every object each frame (band count, outline, …).
     toon::Material style;
 
+    // HDR post-processing (foundation for DiligentFX effects).
+    toon::PostParams post;
+
     bool  spin = true;
     float spinAngle = 0.0f;
 #ifdef IMGUI_HAS_DOCK
@@ -143,6 +146,10 @@ int main() {
             xform.rotationEuler = obj.spinAxis * spinAngle;
             renderer.DrawMesh(obj.mesh, xform, obj.material);
         }
+
+        // Resolve the HDR scene to the back buffer (exposure + tone map).
+        renderer.SetPostParams(post);
+        renderer.EndScene();
 
         renderer.BeginUI();
 
@@ -187,6 +194,10 @@ int main() {
             ImGui::SliderAngle("Yaw", &camera.yaw);
             ImGui::SliderAngle("Pitch", &camera.pitch, -89.0f, 89.0f);
             ImGui::Checkbox("Spin", &spin);
+
+            ImGui::SeparatorText("Post (HDR)");
+            ImGui::Checkbox("Tone map (ACES)", &post.toneMap);
+            ImGui::SliderFloat("Exposure", &post.exposure, 0.1f, 4.0f);
         }
         ImGui::End();
         renderer.EndUI();
