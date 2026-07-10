@@ -6,6 +6,7 @@ out/
 
 # IDE / editor
 /.vs/
+/.vscode/
 /.idea/
 *.user
 *.vcxproj.filters
@@ -22,12 +23,6 @@ Thumbs.db
 *.pdb
 *.ilk
 
-# Keep VS Code project settings but ignore local noise
-.vscode/*
-!.vscode/settings.json
-!.vscode/launch.json
-!.vscode/tasks.json
-!.vscode/c_cpp_properties.json
-
-# NOTE: external/DiligentCore and external/glfw are git submodules — they are
-# tracked via .gitmodules, not committed as files, so they are not ignored here.
+# NOTE: external/DiligentCore, external/DiligentTools, external/DiligentFX and
+# external/glfw are git submodules — tracked via .gitmodules, not committed as
+# files, so they are not ignored here.

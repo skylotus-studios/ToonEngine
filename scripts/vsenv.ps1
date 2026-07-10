@@ -18,8 +18,9 @@
         . .\scripts\vsenv.ps1
         cmake --preset windows-debug
 
-    .vscode/tasks.json dot-sources this before every cmake call, so building
-    from VS Code (Ctrl+Shift+B / F5) needs no manual setup.
+    CLion users don't need this by hand: a CLion "Visual Studio" toolchain sources
+    the VS Developer environment automatically (see docs/clion-setup.md). This
+    script is for command-line / CI builds from a plain PowerShell.
 #>
 $ErrorActionPreference = 'Stop'
 

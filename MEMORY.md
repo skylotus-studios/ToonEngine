@@ -11,9 +11,12 @@ CLAUDE.md.
 
 Ninja + clang-cl need `mt.exe`/`rc.exe` and the MSVC libs on `PATH`. A plain
 terminal doesn't have these; configure fails with the cryptic
-`CMAKE_MT-NOTFOUND`. Fixed by `scripts/vsenv.ps1`, which locates the VS install
-via `vswhere` and imports the environment by sourcing `VsDevCmd.bat -arch=x64
--host_arch=x64` and copying the resulting env vars into the session.
+`CMAKE_MT-NOTFOUND`. In CLion this is handled by a **Visual Studio toolchain**,
+which sources the VS Developer environment automatically (see
+`docs/clion-setup.md`). For command-line builds, `scripts/vsenv.ps1` does the
+same: it locates the VS install via `vswhere` and imports the environment by
+sourcing `VsDevCmd.bat -arch=x64 -host_arch=x64` and copying the resulting env
+vars into the session.
 
 **Do not use `Launch-VsDevShell.ps1 -DevCmdArguments ...`** — that parameter
 doesn't exist on all VS builds (confirmed broken on this machine's VS 2022
@@ -68,6 +71,25 @@ preserve already-compiled objects whose command line didn't change.
 
 `git submodule update --init` alone won't populate DiligentTools' own
 submodules (imgui, zlib, libpng, stb, json, args) — use `--recursive`.
+
+## Window + device bring-up (GLFW + Vulkan)
+
+`main.cpp` creates the GLFW window with `GLFW_NO_API` (Vulkan owns the surface,
+not GL), then drives `Renderer`. Inside the seam (`renderer.cpp`):
+
+- **`MakeNativeWindow()`** fills Diligent's `NativeWindow` per platform — Win32
+  `hWnd`; Linux `WindowId` + `pDisplay` (X11 wired, Wayland fields exist); macOS
+  `pNSView` (needs a Cocoa `.mm` helper from GLFWDemo — not yet written, so macOS
+  is unbuilt).
+- **`EngineFactoryVk`** creates the device + immediate context, then the swap
+  chain. Desktop `PreTransform` is identity (it only matters on rotated mobile
+  displays).
+- **Dear ImGui** is brought up in `InitUI` — construct the Diligent renderer
+  backend *before* the GLFW platform backend (see below for why).
+
+Per-frame order in `main.cpp`: `BeginFrame` (bind the HDR offscreen target) →
+`DrawMesh…` → `EndScene` (tone-map resolve to the back buffer) → `BeginUI` / UI /
+`EndUI` → `EndFrame` (`Present`).
 
 ## Dear ImGui integration
 
@@ -299,3 +321,9 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   scene target resolved to the back buffer by an exposure + ACES tone-map pass
   (`Renderer::EndScene`, `tonemap.hlsl`). Foundation for DiligentFX bloom/SSAO
   next. See "DiligentFX / HDR post-processing" above.
+- **2026-07-10** — Tooling: migrated the IDE from VS Code to **CLion**. Removed
+  `.vscode/` (tasks/launch/settings/c_cpp_properties) and added
+  **`docs/clion-setup.md`** (Visual Studio toolchain + CMake presets + debug). The
+  CLion VS toolchain sources the VS Developer environment automatically, so
+  `scripts/vsenv.ps1` is now only for command-line / CI builds. Trimmed `CLAUDE.md`
+  to a lean, forward-only roadmap — completed items live here in the archive.
