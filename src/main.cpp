@@ -51,7 +51,7 @@ int main() {
     // We render with Vulkan, so tell GLFW not to create an OpenGL context.
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "ToonEngine", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(3840, 2160, "ToonEngine", nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "Failed to create window\n");
         glfwTerminate();
@@ -198,6 +198,14 @@ int main() {
             ImGui::SeparatorText("Post (HDR)");
             ImGui::Checkbox("Tone map (ACES)", &post.toneMap);
             ImGui::SliderFloat("Exposure", &post.exposure, 0.1f, 4.0f);
+
+            ImGui::Checkbox("Bloom", &post.bloom);
+            if (post.bloom) {
+                ImGui::SliderFloat("Intensity", &post.bloomIntensity, 0.0f, 1.0f);
+                ImGui::SliderFloat("Threshold", &post.bloomThreshold, 0.0f, 1.5f);
+                ImGui::SliderFloat("Soft knee", &post.bloomSoftKnee, 0.0f, 1.0f);
+                ImGui::SliderFloat("Radius",    &post.bloomRadius, 0.3f, 0.85f);
+            }
         }
         ImGui::End();
         renderer.EndUI();

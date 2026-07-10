@@ -18,9 +18,10 @@ behind a rule here.
 The app opens a window, creates a Vulkan device + swap chain, and each frame draws a
 small spinning scene — a smooth **sphere**, a faceted **cube**, a **torus** — each
 cel-shaded with a **banded diffuse fill + inverted-hull silhouette outline** in its
-own color. The scene renders into an **HDR offscreen target** that an **ACES
-tone-map pass** resolves to the back buffer, with a docked **Dear ImGui** debug
-overlay driving the look live (light, band count, colors, outline width, camera).
+own color. The scene renders into an **HDR offscreen target**; **DiligentFX's Bloom**
+(via `PostFXContext`) adds a soft glow to the bright bands, then an **ACES tone-map
+pass** resolves to the back buffer, with a docked **Dear ImGui** debug overlay driving
+the look live (light, band count, colors, outline width, camera, exposure, bloom).
 HLSL shaders cross-compile to SPIR-V at runtime.
 
 ## Build
@@ -71,6 +72,8 @@ scripts/vsenv.ps1         Imports the VS Developer env for command-line builds
 docs/clion-setup-windows.md  CLion toolchain + preset + debug setup (Windows, active)
 docs/clion-setup-linux.md    CLion setup notes for Linux (planned)
 docs/clion-setup-macos.md    CLion setup notes for macOS (planned)
+docs/style-guide.md          C++ house style (formatting + comments + seam rules)
+.claude/skills/tidy-cpp/     Skill: clean src/** to the style guide (/tidy-cpp)
 ```
 
 ## The renderer seam (load-bearing rule)
@@ -98,9 +101,11 @@ matrix-convention, winding, and outline-ordering details.
 - **HLSL** for all shaders (cross-compiled to SPIR-V by Diligent at runtime).
 - Diligent objects are COM-refcounted — hold them in `RefCntAutoPtr<>`, namespace
   `Diligent`.
-- **Disable Diligent backends you're not using** (`DILIGENT_NO_*`, set as
+- **Disable Diligent backends/modules you're not using** (`DILIGENT_NO_*`, set as
   `CACHE BOOL ... FORCE` before `add_subdirectory(DiligentCore)`) — it builds every
-  supported backend by default, which dominates compile time.
+  supported backend by default, which dominates compile time. We also set
+  `DILIGENT_NO_RADIENT` (DiligentFX's GI module — unused, and it fails to compile
+  under clang-cl; a full `cmake --build` / CI hits it even though CLion doesn't).
 - Target-based CMake only (`target_*`).
 - C++17, clang everywhere (clang-cl on Windows, Apple Clang on macOS).
 - Windows builds require the VS Developer environment (see Build).
@@ -115,8 +120,10 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-1. **DiligentFX effects** — Bloom / SSAO via `PostFXContext`, layered onto the
-   existing HDR target (the tone-map foundation is already in place).
+1. **More DiligentFX effects** — Bloom is in (via `PostFXContext`; see MEMORY.md).
+   SSAO / DoF are the next candidates on the same `PostFXContext` — though each
+   needs the shared depth+motion+camera inputs actually filled in (Bloom ignores
+   them; SSAO won't), so real motion vectors + camera attribs come with them.
 2. **Toon pipeline extensions** — inverse-transpose normals for non-uniform scale;
    instancing; per-object outline tuning; an optional post-process depth+normal
    edge-detect outline variant.

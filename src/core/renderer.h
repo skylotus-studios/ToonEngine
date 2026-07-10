@@ -78,12 +78,24 @@ struct Transform {
     Vec3 scale         = { 1.0f, 1.0f, 1.0f };
 };
 
-// HDR resolve / tone-mapping controls (roadmap: DiligentFX post-processing). The
-// scene renders to an offscreen HDR target; EndScene resolves it to the back
-// buffer with exposure + a filmic tone-map curve. Bloom/SSAO will hook in here.
+// HDR resolve / tone-mapping controls. The scene renders to an offscreen HDR
+// target; EndScene runs the optional bloom pass, then resolves to the back buffer
+// with exposure + a filmic tone-map curve.
 struct PostParams {
     float exposure = 1.0f;   // linear multiplier applied before tone mapping
     bool  toneMap  = true;   // ACES filmic tone map (vs. plain clamp)
+
+    // Bloom (DiligentFX's Bloom effect via PostFXContext). Bright pixels bleed a
+    // soft glow into their surroundings. NOTE: the threshold/knee run on the *raw*
+    // HDR scene, before exposure + tone mapping, so on this LDR-ranged toon scene
+    // (fill maxes near the base color, < 1.0) the default threshold sits below 1.0
+    // — otherwise nothing is bright enough to bloom. Raise it toward/above 1.0 once
+    // the scene carries real over-bright (emissive) values.
+    bool  bloom          = true;
+    float bloomIntensity = 0.5f;    // strength of the added glow
+    float bloomThreshold = 0.6f;    // min max(r,g,b) brightness that blooms
+    float bloomSoftKnee  = 0.5f;    // softens the threshold edge (0 = hard cutoff)
+    float bloomRadius    = 0.75f;   // glow spread (fraction of the mip chain, 0.3–0.85)
 };
 
 // --- Renderer ---------------------------------------------------------------
@@ -142,8 +154,8 @@ private:
     // header stays Diligent-free.
     bool CreateToonPipeline();                                // toon fill/outline PSOs + shared CB
     bool CreatePostPipeline();                                // HDR tone-map resolve PSO
-    bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + depth
-    void BindPostInput();                                    // point the resolve at the HDR target
+    bool CreateBloom();                                       // DiligentFX PostFXContext + Bloom effect
+    bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + depth (+ SRV) + motion
 
     struct Impl;         // defined in renderer.cpp — hides all Diligent types
     Impl* m_impl = nullptr;

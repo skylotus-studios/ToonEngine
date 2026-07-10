@@ -23,6 +23,13 @@ set(DILIGENT_NO_DIRECT3D11 ON CACHE BOOL "" FORCE)
 set(DILIGENT_NO_DIRECT3D12 ON CACHE BOOL "" FORCE)
 set(DILIGENT_NO_OPENGL     ON CACHE BOOL "" FORCE)
 
+# DiligentFX also builds Radient (its real-time GI module) as a separate library.
+# ToonEngine never links it, so CLion (which builds only the ToonEngine target)
+# never compiled it — but a full `cmake --build` (the `all` target, i.e. CI) does,
+# and it fails to compile under clang-cl (a noexcept static_assert in Radient's
+# asset managers). We don't use GI, so disable it — same rationale as the backends.
+set(DILIGENT_NO_RADIENT    ON CACHE BOOL "" FORCE)
+
 # Tools adds Dear ImGui (debug/editor UI) + texture/glTF loaders. FX adds the
 # post-processing effects (bloom, tone mapping, SSAO, ...) — see the toon HDR
 # post chain in core/renderer.cpp.
@@ -51,6 +58,14 @@ add_executable(ToonEngine
 
 # src/ is the include root: cross-directory includes read "core/renderer.h".
 target_include_directories(ToonEngine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# core/renderer.cpp includes DiligentFX's C++-side shader-structure headers
+# (BasicStructures.fxh -> CameraAttribs, BloomStructures.fxh -> BloomAttribs) to
+# talk to PostFXContext/Bloom. The DiligentFX target already exposes its root for
+# the full-path includes, but BasicStructures.fxh does a *bare*
+# #include "ShaderDefinitions.fxh", so put that directory on the include path too.
+target_include_directories(ToonEngine PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/DiligentFX/Shaders/Common/public)
 
 # Diligent-BuildSettings is an INTERFACE target that propagates the platform
 # defines (PLATFORM_WIN32 / PLATFORM_LINUX / PLATFORM_MACOS) and compiler flags

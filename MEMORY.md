@@ -88,8 +88,10 @@ not GL), then drives `Renderer`. Inside the seam (`renderer.cpp`):
   backend *before* the GLFW platform backend (see below for why).
 
 Per-frame order in `main.cpp`: `BeginFrame` (bind the HDR offscreen target) →
-`DrawMesh…` → `EndScene` (tone-map resolve to the back buffer) → `BeginUI` / UI /
-`EndUI` → `EndFrame` (`Present`).
+`DrawMesh…` → `EndScene` (run bloom, then tone-map resolve to the back buffer) →
+`BeginUI` / UI / `EndUI` → `EndFrame` (`Present`). `EndScene` internally runs the
+DiligentFX bloom chain first (it binds its own targets), then resolves whichever HDR
+source — raw scene or scene+bloom — to the back buffer.
 
 ## Dear ImGui integration
 
@@ -104,6 +106,19 @@ Per-frame order in `main.cpp`: `BeginFrame` (bind the HDR offscreen target) →
   `ImGui_ImplGlfw_InitForVulkan()`, which calls `ImGui::GetIO()` and hits
   `assert(GImGui != 0)` if no context exists yet. Construct the Diligent
   renderer backend first, then the GLFW platform backend.
+- **Shutdown ordering bug (the mirror image — aborts on window close):**
+  `ShutdownUI` must call **`ImGui_ImplGlfw_Shutdown()` before** destroying the
+  Diligent backend (`imgui.reset()` → `~ImGuiImplDiligent` → `ImGui::DestroyContext`).
+  `DestroyContext` asserts `IO.BackendPlatformUserData == 0` ("Forgot to shutdown
+  Platform backend?") if the GLFW backend is still registered — and that assert
+  `abort()`s the process (exit 3 / abort-retry-ignore dialog) when you click the
+  window's X. Tear down in the exact reverse of `InitUI`.
+- **ImGui PSO depth format = `TEX_FORMAT_UNKNOWN`.** The UI is drawn to the back
+  buffer with **no** depth attachment (EndScene binds a null DSV). Build the backend
+  with `ImGuiDiligentCreateInfo{device, ColorBufferFormat, TEX_FORMAT_UNKNOWN}`, not
+  the `(device, SwapChainDesc)` overload — the latter picks up the swap chain's depth
+  format and Diligent then warns *every frame* that the bound DSV (none) doesn't match
+  the ImGUI PSO.
 - **`ImGui::ShowDemoWindow` fails to link.** `Diligent-Imgui`'s CMake
   deliberately excludes `imgui_demo.cpp` (demo/test code, not meant to ship).
   Don't reach for the demo window to smoke-test ImGui — write a tiny custom
@@ -242,11 +257,81 @@ straight to the back buffer:
   texture var + an immutable linear-clamp sampler (combined-sampler name
   `g_HDRColor`). On resize the target is recreated, so `BindPostInput` re-points
   the SRB at the new SRV.
-- Tone mapping is currently a **self-contained ACES** shader, not DiligentFX's
+- Tone mapping is a **self-contained ACES** shader, not DiligentFX's
   `ToneMapping.fxh` — the DiligentFX shader includes (`SRGBUtilities.fxh`, the
   dual C++/HLSL `*Structures.fxh` with their macro setup) add include-path
-  plumbing not worth it for a first pass. **Bloom/SSAO (the actual DiligentFX
-  components, via `PostFXContext`) are the next step** and layer onto this HDR target.
+  plumbing not worth it for that pass.
+
+## Bloom (DiligentFX `Bloom` via `PostFXContext`, roadmap #1)
+
+The bright toon bands bleed a soft glow. Implemented with DiligentFX's real `Bloom`
+effect (compute-ish full-screen-triangle passes: prefilter → downsample → upsample),
+all in `core/renderer.cpp` behind the seam. Per-object controls live in
+`PostParams` (enable, intensity, threshold, soft-knee, radius); the debug UI drives
+them live.
+
+**The `PostFXContext` tax.** `Bloom::Execute` requires a `PostFXContext`, and Bloom
+only pulls frame-size / supported-features / a copy helper / `IsPSOsReady()` from it —
+it reads **no** depth/motion/camera. But `IsPSOsReady()` only flips true *inside*
+`PostFXContext::Execute`, which hard-requires a current **and** previous depth SRV, a
+**motion-vector** SRV, and **camera attribs**. Those feed the shared temporal
+machinery (reprojected depth, closest motion, blue noise) that TAA/SSR/SSAO use and
+Bloom ignores. So `Impl::RunBloom` feeds it scaffolding purely to reach the ready
+gate:
+- **Depth** — `sceneDepth` now also carries `BIND_SHADER_RESOURCE` (D32 → R32_FLOAT
+  SRV on Vulkan). Passed as *both* current and previous (we keep no history).
+- **Motion** — a frame-sized `RG16_FLOAT` target cleared to zero once in
+  `CreateOffscreenTargets` (never written again; the closest-motion pass `Load`s it
+  at full-res pixel coords, so it must be frame-sized, not 1×1).
+- **Camera** — a zeroed `HLSL::CameraAttribs` passed as curr+prev; PostFXContext
+  makes its own CB. Values are unused by Bloom, so zeros are fine.
+This runs blue-noise/reproj/motion compute every frame for nothing — the accepted
+cost of the "via PostFXContext" route (chosen deliberately over a self-contained
+bloom).
+
+**Compositing is a drop-in.** `Bloom`'s final upsample returns
+`SourceColor + Intensity*glow` (see `Bloom_ComputeUpsampledTexture.fx`), so
+`GetBloomTextureSRV()` is the **full scene+bloom in HDR**, not just the glow. So
+`EndScene` just points the tone-map's `g_HDRColor` at the bloom output instead of the
+raw `hdrColor` — **`tonemap.hlsl` is unchanged**. Bloom off → point back at `hdrColor`.
+
+**Gotchas:**
+- **`g_HDRColor` must be DYNAMIC, not MUTABLE.** EndScene re-points it every frame
+  (scene ↔ bloom output, and the target also changes on resize). Overwriting a
+  *mutable* variable's binding trips `VerifyResourceBinding` ("already bound ...
+  Overwriting ... is disallowed") — a real in-flight hazard, not pedantry. A dynamic
+  variable is the type meant for a per-frame-changing binding (Diligent gives it a
+  fresh descriptor each commit), so just `Set` it each frame before commit. This let
+  the per-frame "only re-Set when changed" cache and the `BindPostInput` helper go
+  away entirely.
+- **Threshold < 1.0 by default.** The prefilter blooms on `max(r,g,b)` of the *raw*
+  HDR scene (before exposure/tone map). The toon fill maxes near the base color
+  (< 1.0, no over-bright), so the library default `Threshold = 1.0` blooms nothing.
+  Default is `0.6`. Raise toward/above 1.0 once the scene carries emissive HDR.
+- **Ready gate / fallback.** Sync PSO creation (`EnableAsyncCreation = false`), so
+  Bloom is live from frame 1 after a one-time compile hitch. `RunBloom` still returns
+  `nullptr` (→ resolve the raw scene) while `!IsPSOsReady()`, so no black first frame.
+- **Frame index** is incremented and handed to `FrameDesc.Index`; the full-screen VS
+  uses `VertexId % 3`, and Bloom's own composite draw uses a literal
+  `StartVertexLocation`, so an unbounded index is fine.
+- **C++-side FX structs.** `renderer.cpp` includes `BasicStructures.fxh`
+  (→ `CameraAttribs`) + `BloomStructures.fxh` (→ `BloomAttribs`) inside
+  `namespace Diligent::HLSL` (float4x4/uint resolve from `BasicMath.hpp`). The
+  DiligentFX target exposes its root for the full-path includes, but
+  `BasicStructures.fxh` does a *bare* `#include "ShaderDefinitions.fxh"`, so
+  `CMakeLists.txt` also puts `DiligentFX/Shaders/Common/public` on the include path.
+- **Radient disabled.** `set(DILIGENT_NO_RADIENT ON …)` — DiligentFX's GI module is
+  unused and fails a clang-cl `noexcept` static_assert. CLion (ToonEngine target only)
+  never built it; a full `cmake --build`/CI (the `all` target) does. Nothing links it,
+  so disabling is free.
+- Bloom's shaders are **embedded** in the DiligentFX lib (a `MemoryShaderSourceFactory`
+  via `DiligentFXShaderSourceStreamFactory`), so no shader-file plumbing was needed —
+  only the two C++ struct headers above.
+
+**SSAO/DoF next** would reuse this `PostFXContext`, but they *do* read depth + camera +
+motion, so those inputs need to become real (actual view/proj camera attribs and, for
+motion-dependent effects, real motion vectors) rather than the zero scaffolding Bloom
+tolerates.
 
 ## Verifying a Vulkan build
 
@@ -327,3 +412,23 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   CLion VS toolchain sources the VS Developer environment automatically, so
   `scripts/vsenv.ps1` is now only for command-line / CI builds. Trimmed `CLAUDE.md`
   to a lean, forward-only roadmap — completed items live here in the archive.
+  (Later split into per-platform `docs/clion-setup-{windows,linux,macos}.md`.)
+- **2026-07-10** — **Bloom** (roadmap #1): wired DiligentFX's `Bloom` via
+  `PostFXContext` onto the HDR target. `Impl::RunBloom` in `EndScene` prepares +
+  executes PostFXContext (fed scene depth as curr/prev, a zero motion-vector target,
+  a zeroed camera — scaffolding it needs to reach `IsPSOsReady()` but Bloom never
+  reads) then Bloom over `hdrColor`; the tone-map then resolves Bloom's output, which
+  already holds scene+glow (so `tonemap.hlsl` is unchanged). `PostParams` + UI gained
+  bloom controls; default threshold is 0.6 (the LDR toon fill never exceeds ~0.9).
+  Also `DILIGENT_NO_RADIENT ON` (broke the full `cmake --build`) and a new include
+  dir for DiligentFX's C++-side `*Structures.fxh`. Built clean (clang-cl) and ran
+  with zero Diligent validation errors. See "Bloom" above.
+- **2026-07-10** — Bloom bugfixes + cleanup. (1) `g_HDRColor` MUTABLE→**DYNAMIC** —
+  the per-frame scene↔bloom re-`Set` was tripping `VerifyResourceBinding`; killed the
+  cache + `BindPostInput`. (2) **ImGui shutdown order** — `ImGui_ImplGlfw_Shutdown()`
+  before context destroy, else `abort()` on window close ("Forgot to shutdown Platform
+  backend?"); also built the ImGui PSO with depth = `TEX_FORMAT_UNKNOWN` (kills a
+  per-frame DSV-mismatch warning) and `WaitForIdle()` before teardown. Verified via a
+  close test (exit 0). (3) Added section dividers to `renderer.cpp`, plus
+  **`docs/style-guide.md`** and a **`.claude/skills/tidy-cpp`** skill for future
+  cleanups. See the Dear ImGui + Bloom "Gotchas" above.

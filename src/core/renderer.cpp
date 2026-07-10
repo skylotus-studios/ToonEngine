@@ -33,6 +33,12 @@
 #include "MapHelper.hpp"     // Diligent-GraphicsTools
 #include "BasicMath.hpp"
 
+// DiligentFX post-processing: the Bloom effect and the shared PostFXContext it
+// depends on (roadmap #1). Both compile into the DiligentFX target, whose root is
+// on the include path, so these resolve short-form.
+#include "PostFXContext.hpp"
+#include "Bloom.hpp"
+
 // Dear ImGui + Diligent's ImGui renderer backend (DiligentTools). The GLFW
 // platform backend (imgui_impl_glfw.cpp) is compiled directly into ToonEngine
 // by CMakeLists.txt, since DiligentTools doesn't ship a GLFW backend itself.
@@ -53,7 +59,21 @@
 
 using namespace Diligent;
 
+// DiligentFX's effect-parameter structs, compiled as C++ from the same headers its
+// shaders include. BasicStructures.fxh brings in CameraAttribs (which PostFXContext
+// wants); BloomStructures.fxh defines BloomAttribs. float4x4/float4/uint etc.
+// resolve to the Diligent:: aliases pulled in by BasicMath.hpp above. (Mirrors how
+// DiligentFX's own .cpp files include these — see Bloom.cpp.) BasicStructures.fxh
+// does a bare #include "ShaderDefinitions.fxh"; CMake puts that directory on the
+// include path so it resolves.
+namespace Diligent { namespace HLSL {
+#include "Shaders/Common/public/BasicStructures.fxh"
+#include "Shaders/PostProcess/Bloom/public/BloomStructures.fxh"
+}} // namespace Diligent::HLSL
+
 namespace toon {
+
+// --- Internal formats, GPU-mirror types & PIMPL state -----------------------
 
 // The scene renders to an HDR target, then a full-screen pass tone-maps it to
 // the back buffer — the foundation for DiligentFX post effects.
@@ -103,17 +123,88 @@ struct Renderer::Impl {
 
     // HDR offscreen scene target + tone-map resolve to the back buffer.
     RefCntAutoPtr<ITexture>               hdrColor;      // RGBA16F scene color
-    RefCntAutoPtr<ITexture>               sceneDepth;    // D32 depth for the scene pass
+    RefCntAutoPtr<ITexture>               sceneDepth;    // D32 depth (also SRV for PostFX)
     RefCntAutoPtr<IPipelineState>         tonemapPSO;
     RefCntAutoPtr<IShaderResourceBinding> tonemapSRB;
     RefCntAutoPtr<IBuffer>                postConstants;
     bool                                  outputSRGB = false;  // back buffer is a non-sRGB UNORM
+
+    // DiligentFX Bloom (roadmap #1). Bloom needs a PostFXContext, which itself
+    // requires depth + motion-vector inputs and camera attribs to reach its
+    // "PSOs ready" state (the gate Bloom checks). Bloom reads none of that — it's
+    // shared plumbing for temporal effects — so we feed the scene depth (as both
+    // current and previous; we keep no history), a zero motion-vector target, and
+    // a zeroed camera purely to satisfy PostFXContext::Execute.
+    std::unique_ptr<PostFXContext> postFX;
+    std::unique_ptr<Bloom>         bloom;
+    RefCntAutoPtr<ITexture>        motionVectors;   // RG16F, cleared to zero (unused by bloom)
+    HLSL::CameraAttribs            postCamera{};    // zeroed (unused by bloom)
+    Uint32                         frameIndex = 0;
+
+    // Runs the bloom chain for this frame and returns the SRV of the composited
+    // scene+bloom HDR texture (a drop-in for the tone-map input), or nullptr if the
+    // effect isn't ready yet (shaders still compiling, or a zero-size target).
+    ITextureView* RunBloom(const PostParams& p);
 
     // Per-frame scene state.
     float4x4   viewProj = float4x4::Identity();
     float3     lightDir = float3(0.5f, 0.8f, -0.3f);  // world-space dir TO light (shader normalizes)
     PostParams post;
 };
+
+// Bloom for this frame: prepare + execute PostFXContext (only to flip its ready
+// gate), then Bloom over the HDR scene color. See the Impl field comments above for
+// why PostFXContext gets depth/motion/camera it never reads.
+ITextureView* Renderer::Impl::RunBloom(const PostParams& p) {
+    const SwapChainDesc& sc = swapChain->GetDesc();
+    if (sc.Width == 0 || sc.Height == 0) return nullptr;
+
+    PostFXContext::FrameDesc frame;
+    frame.Index  = frameIndex;
+    frame.Width  = sc.Width;
+    frame.Height = sc.Height;
+    postFX->PrepareResources(device, frame, PostFXContext::FEATURE_FLAG_NONE);
+    bloom->PrepareResources(device, context, postFX.get(), Bloom::FEATURE_FLAG_NONE);
+
+    ITextureView* depthSRV  = sceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    ITextureView* motionSRV = motionVectors->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    postCamera.f4ViewportSize = float4(static_cast<float>(sc.Width), static_cast<float>(sc.Height),
+                                       1.0f / sc.Width, 1.0f / sc.Height);
+    postCamera.uiFrameIndex = frameIndex;
+
+    PostFXContext::RenderAttributes pfx;
+    pfx.pDevice             = device;
+    pfx.pDeviceContext      = context;
+    pfx.pCurrDepthBufferSRV = depthSRV;
+    pfx.pPrevDepthBufferSRV = depthSRV;   // no history — reuse current (unused by bloom)
+    pfx.pMotionVectorsSRV   = motionSRV;
+    pfx.pCurrCamera         = &postCamera;
+    pfx.pPrevCamera         = &postCamera;
+    postFX->Execute(pfx);
+
+    HLSL::BloomAttribs attribs{};
+    attribs.Intensity    = p.bloomIntensity;
+    attribs.Threshold    = p.bloomThreshold;
+    attribs.SoftTreshold = p.bloomSoftKnee;   // (sic — DiligentFX's field spelling)
+    attribs.Radius       = p.bloomRadius;
+
+    Bloom::RenderAttributes bra;
+    bra.pDevice         = device;
+    bra.pDeviceContext  = context;
+    bra.pPostFXContext  = postFX.get();
+    bra.pColorBufferSRV = hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    bra.pBloomAttribs   = &attribs;
+    bloom->Execute(bra);
+
+    ++frameIndex;
+
+    // Until the PSOs finish compiling, Bloom emits a black placeholder — fall back
+    // to the raw scene so the first frame(s) aren't black.
+    if (!postFX->IsPSOsReady()) return nullptr;
+    return bloom->GetBloomTextureSRV();
+}
+
+// --- File-local helpers -----------------------------------------------------
 
 // Fill Diligent's NativeWindow from a GLFW window, per platform.
 static NativeWindow MakeNativeWindow(GLFWwindow* wnd) {
@@ -149,6 +240,8 @@ static RefCntAutoPtr<IShader> CreateToonShader(IRenderDevice* device,
     device->CreateShader(ci, &shader);
     return shader;
 }
+
+// --- Construction & device / swap-chain bring-up ----------------------------
 
 Renderer::Renderer()  : m_impl(new Impl) {}
 Renderer::~Renderer() { Shutdown(); delete m_impl; m_impl = nullptr; }
@@ -193,11 +286,16 @@ bool Renderer::Init(GLFWwindow* window) {
         std::fprintf(stderr, "Renderer: failed to create offscreen HDR targets\n");
         return false;
     }
+
     if (!CreatePostPipeline()) {
         std::fprintf(stderr, "Renderer: failed to create tone-map pipeline\n");
         return false;
     }
-    BindPostInput();
+
+    if (!CreateBloom()) {
+        std::fprintf(stderr, "Renderer: failed to create bloom effect\n");
+        return false;
+    }
 
     // If the back buffer isn't an sRGB format, the tone-map shader encodes sRGB.
     m_impl->outputSRGB = !(sc.ColorBufferFormat == TEX_FORMAT_RGBA8_UNORM_SRGB ||
@@ -205,9 +303,12 @@ bool Renderer::Init(GLFWwindow* window) {
     return true;
 }
 
+// --- Offscreen targets, pipelines & effects ---------------------------------
+
 bool Renderer::CreateOffscreenTargets(uint32_t width, uint32_t height) {
     m_impl->hdrColor.Release();
     m_impl->sceneDepth.Release();
+    m_impl->motionVectors.Release();
 
     TextureDesc cd;
     cd.Name      = "HDR scene color";
@@ -219,6 +320,9 @@ bool Renderer::CreateOffscreenTargets(uint32_t width, uint32_t height) {
     cd.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
     m_impl->device->CreateTexture(cd, nullptr, &m_impl->hdrColor);
 
+    // Depth doubles as a shader resource: PostFXContext reads it as an SRV (the
+    // Vulkan backend exposes D32 depth as R32_FLOAT). BIND_SHADER_RESOURCE is the
+    // only difference from a plain depth target.
     TextureDesc dd;
     dd.Name      = "scene depth";
     dd.Type      = RESOURCE_DIM_TEX_2D;
@@ -226,10 +330,29 @@ bool Renderer::CreateOffscreenTargets(uint32_t width, uint32_t height) {
     dd.Height    = height;
     dd.MipLevels = 1;
     dd.Format    = kSceneDepthFormat;
-    dd.BindFlags = BIND_DEPTH_STENCIL;
+    dd.BindFlags = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
     m_impl->device->CreateTexture(dd, nullptr, &m_impl->sceneDepth);
 
-    return m_impl->hdrColor && m_impl->sceneDepth;
+    // Zero motion-vector target for PostFXContext. The toon scene has no motion and
+    // Bloom ignores the result, but PostFXContext requires a motion input to run;
+    // clear it once (we never write it again) so nothing reads uninitialized data.
+    TextureDesc md;
+    md.Name      = "motion vectors (zero)";
+    md.Type      = RESOURCE_DIM_TEX_2D;
+    md.Width     = width;
+    md.Height    = height;
+    md.MipLevels = 1;
+    md.Format    = TEX_FORMAT_RG16_FLOAT;
+    md.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+    m_impl->device->CreateTexture(md, nullptr, &m_impl->motionVectors);
+    if (m_impl->motionVectors) {
+        ITextureView* mrtv = m_impl->motionVectors->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+        const float   zero[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        m_impl->context->SetRenderTargets(1, &mrtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_impl->context->ClearRenderTarget(mrtv, zero, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    }
+
+    return m_impl->hdrColor && m_impl->sceneDepth && m_impl->motionVectors;
 }
 
 bool Renderer::CreatePostPipeline() {
@@ -266,10 +389,15 @@ bool Renderer::CreatePostPipeline() {
     ci.pVS = vs;
     ci.pPS = ps;
 
-    // g_HDRColor is mutable (re-pointed when the target is recreated on resize);
-    // the PostConstants CB is static.
+    // g_HDRColor is DYNAMIC: EndScene re-points it every frame at whichever HDR
+    // source we resolve (the raw scene, or Bloom's output when enabled), and that
+    // texture also changes on resize. A dynamic variable is the type meant for a
+    // per-frame-changing binding — Diligent manages a fresh descriptor each commit,
+    // so switching it is safe. (A MUTABLE variable bakes one binding and rejects
+    // being overwritten while a prior frame may still be reading it.) PostConstants
+    // never changes binding, so it stays static.
     ShaderResourceVariableDesc vars[] = {
-        { SHADER_TYPE_PIXEL, "g_HDRColor",    SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+        { SHADER_TYPE_PIXEL, "g_HDRColor",    SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
         { SHADER_TYPE_PIXEL, "PostConstants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC  },
     };
     ci.PSODesc.ResourceLayout.Variables    = vars;
@@ -290,10 +418,17 @@ bool Renderer::CreatePostPipeline() {
     return m_impl->tonemapSRB != nullptr;
 }
 
-void Renderer::BindPostInput() {
-    if (!m_impl->tonemapSRB || !m_impl->hdrColor) return;
-    if (auto* v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_HDRColor"))
-        v->Set(m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+bool Renderer::CreateBloom() {
+    // Sync PSO creation: the first EndScene blocks briefly to compile the effect's
+    // shaders, so Bloom is live from the first frame it runs (no async black-frames
+    // to special-case). RunBloom still falls back to the raw scene if not ready.
+    PostFXContext::CreateInfo pfxCI;
+    m_impl->postFX = std::make_unique<PostFXContext>(m_impl->device, pfxCI);
+
+    Bloom::CreateInfo bloomCI;
+    m_impl->bloom = std::make_unique<Bloom>(m_impl->device, bloomCI);
+
+    return m_impl->postFX && m_impl->bloom;
 }
 
 bool Renderer::CreateToonPipeline() {
@@ -367,13 +502,22 @@ bool Renderer::CreateToonPipeline() {
     return true;
 }
 
+// --- Teardown ---------------------------------------------------------------
+
 void Renderer::Shutdown() {
     if (!m_impl) return;
-    if (m_impl->context) m_impl->context->Flush();
+    // Wait for the GPU to finish the last submitted frame before releasing anything.
+    // Its commands may still be reading the HDR / bloom / depth targets; releasing
+    // those while they're in flight trips Diligent's in-use checks and pops the
+    // debug abort dialog on window close. WaitForIdle also flushes.
+    if (m_impl->context) m_impl->context->WaitForIdle();
     ShutdownUI(); // must release ImGui's GPU resources before the device
 
     // Release scene/pipeline GPU objects before the device.
     m_impl->meshes.clear();
+    m_impl->bloom.reset();            // DiligentFX effect objects own GPU resources
+    m_impl->postFX.reset();
+    m_impl->motionVectors.Release();
     m_impl->tonemapSRB.Release();
     m_impl->tonemapPSO.Release();
     m_impl->postConstants.Release();
@@ -391,6 +535,8 @@ void Renderer::Shutdown() {
     m_impl->device.Release();
 }
 
+// --- Per-frame lifecycle ----------------------------------------------------
+
 void Renderer::BeginFrame(const Color& c) {
     // The scene renders into the HDR offscreen target (resolved in EndScene).
     ITextureView* rtv = m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
@@ -407,7 +553,18 @@ void Renderer::SetPostParams(const PostParams& params) {
 }
 
 void Renderer::EndScene() {
-    // Resolve the HDR scene to the back buffer: exposure + tone map. Leaves the
+    // Pick the HDR source to resolve. By default it's the raw scene target; with
+    // bloom on (and ready) it's Bloom's output, which already holds scene + glow
+    // composited (see Bloom_ComputeUpsampledTexture.fx) — a drop-in HDR input, so
+    // the tone-map shader is unchanged. RunBloom binds its own render targets, so
+    // this must run before we bind the back buffer below.
+    ITextureView* postInput = m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    if (m_impl->post.bloom) {
+        if (ITextureView* bloomSRV = m_impl->RunBloom(m_impl->post))
+            postInput = bloomSRV;
+    }
+
+    // Resolve the HDR source to the back buffer: exposure + tone map. Leaves the
     // back-buffer RTV bound so the UI overlay draws on top.
     ITextureView* rtv = m_impl->swapChain->GetCurrentBackBufferRTV();
     m_impl->context->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -419,6 +576,11 @@ void Renderer::EndScene() {
         cb->outputSRGB = m_impl->outputSRGB ? 1.0f : 0.0f;
         cb->pad        = 0.0f;
     }
+
+    // Point the resolve at this frame's HDR source. g_HDRColor is dynamic, so this
+    // may safely differ from last frame (scene <-> bloom, or a resized target).
+    if (auto* v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_HDRColor"))
+        v->Set(postInput);
 
     m_impl->context->SetPipelineState(m_impl->tonemapPSO);
     m_impl->context->CommitShaderResources(m_impl->tonemapSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -438,8 +600,11 @@ void Renderer::Resize(uint32_t width, uint32_t height) {
     m_impl->swapChain->Resize(width, height);
     const SwapChainDesc& sc = m_impl->swapChain->GetDesc();
     CreateOffscreenTargets(sc.Width, sc.Height);   // match the new back-buffer size
-    BindPostInput();                               // re-point the resolve at the new HDR target
+    // The resolve's HDR input (g_HDRColor) is dynamic — EndScene re-points it at the
+    // recreated target next frame, so there's nothing to rebind here.
 }
+
+// --- Scene: meshes, camera, lighting, draw ----------------------------------
 
 MeshHandle Renderer::CreateMesh(const Vertex* vertices, uint32_t vertexCount,
                                 const uint32_t* indices, uint32_t indexCount) {
@@ -538,11 +703,19 @@ void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Material& m
     m_impl->context->DrawIndexed(draw);
 }
 
+// --- Debug UI (Dear ImGui) --------------------------------------------------
+
 bool Renderer::InitUI(GLFWwindow* window) {
     // ImGuiImplDiligent's constructor calls ImGui::CreateContext() — it must
     // run before ImGui_ImplGlfw_InitForVulkan(), which itself calls
     // ImGui::GetIO() and asserts if no context exists yet.
-    ImGuiDiligentCreateInfo imguiCI{ m_impl->device, m_impl->swapChain->GetDesc() };
+    //
+    // Build the ImGui PSO for how the UI is actually drawn (EndScene): to the back
+    // buffer, with NO depth attachment. Passing the swap chain's depth format here
+    // instead makes Diligent warn every frame that the bound DSV (none) doesn't
+    // match the PSO, so pass TEX_FORMAT_UNKNOWN for depth.
+    const SwapChainDesc& sc = m_impl->swapChain->GetDesc();
+    ImGuiDiligentCreateInfo imguiCI{ m_impl->device, sc.ColorBufferFormat, TEX_FORMAT_UNKNOWN };
     m_impl->imgui = std::make_unique<ImGuiImplDiligent>(imguiCI);
 
     if (!ImGui_ImplGlfw_InitForVulkan(window, /*install_callbacks=*/true)) {
@@ -555,8 +728,13 @@ bool Renderer::InitUI(GLFWwindow* window) {
 
 void Renderer::ShutdownUI() {
     if (!m_impl->imgui) return;
-    m_impl->imgui.reset(); // destructor invalidates GPU objects + destroys the ImGui context
+    // Tear down in the reverse of InitUI. The GLFW platform backend must be shut
+    // down *before* the ImGui context is destroyed: ~ImGuiImplDiligent() calls
+    // ImGui::DestroyContext(), which asserts ("Forgot to shutdown Platform
+    // backend?") if the GLFW backend is still registered — that assert aborts the
+    // process on window close.
     ImGui_ImplGlfw_Shutdown();
+    m_impl->imgui.reset(); // destroys the Diligent ImGui backend + the ImGui context
 }
 
 void Renderer::BeginUI() {
