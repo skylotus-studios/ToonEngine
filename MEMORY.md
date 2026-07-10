@@ -333,6 +333,48 @@ motion, so those inputs need to become real (actual view/proj camera attribs and
 motion-dependent effects, real motion vectors) rather than the zero scaffolding Bloom
 tolerates.
 
+## SSAO (DiligentFX `ScreenSpaceAmbientOcclusion` via `PostFXContext`, roadmap #1)
+
+Darkens contact/creased areas. Unlike Bloom, SSAO reads the shared `PostFXContext`
+inputs for real, so this is where they got filled in. `Impl::RunPostFX` now runs the
+context once and then whichever effects are on (SSAO then Bloom), returning an AO SRV +
+a bloom SRV to `EndScene`.
+
+**What SSAO needs (and where it came from):**
+- **World-space normal G-buffer** (required — `pNormalBufferSRV`; SSAO does not
+  reconstruct normals from depth). Added a second scene render target
+  (`normalBuffer`, RGBA16F — holds signed normals in [-1,1] directly, no encode).
+  The scene pass is now **MRT**: both toon PSOs set `NumRenderTargets = 2`, and
+  `toon_fill`/`toon_outline` return a `PSOutput { Color:SV_Target0; Normal:SV_Target1 }`
+  writing the normalized world normal. `BeginFrame` binds + clears both targets.
+- **Real `CameraAttribs`** (SSAO rebuilds view-space position/normal from depth).
+  `SetCamera` now keeps `view`/`proj`/near/far split (not just `viewProj`);
+  `FillCameraAttribs` fills the struct — matrices + inverses, `SetClipPlanes`,
+  `f4Position` from the view-inverse translation, and crucially
+  `fHandness = view.Determinant() > 0 ? 1 : -1` (copied from DiligentFX's own
+  `RadientGeometryPass` — get this wrong and AO inverts or vanishes).
+- **Depth** — the same `sceneDepth` SRV Bloom already used.
+- **Motion** — still the zero texture. Fine because SSAO **temporal accumulation is
+  off by default** (`ResetAccumulation = 1`); with real motion it would need a
+  velocity buffer or it ghosts the spinning objects. UI exposes a temporal toggle.
+
+**Compositing:** SSAO output (`GetAmbientOcclusionSRV`, R8) is *visibility* (1 = open),
+so the tone-map multiplies: `hdr *= lerp(1, ao*ao, strength)`. Squaring is a stylized
+punch — GTAO is physically restrained (subtle on convex shapes), so raw `ao` barely
+reads; `ao*ao` deepens contact shadows while leaving open areas (1.0) untouched.
+`g_AO` is a **DYNAMIC** var like `g_HDRColor`; when SSAO is off/not-ready a **1x1 white
+texture** (`aoWhite`) is bound so the multiply is a no-op with no shader branch.
+
+**Gotchas / notes:**
+- **It's subtle without contact geometry.** The demo added a **ground plane**
+  (`MakePlane`) under the trio so there are contact shadows to see; on the original
+  floating convex objects SSAO computes almost nothing. Verified correct by
+  temporarily returning `float4(ao,ao,ao,1)` from the tone-map — the raw visibility
+  buffer showed the torus hole dark, background white (right orientation).
+- Default look: `ssaoRadius` (EffectRadius) 1.5 world units, `ssaoStrength` 1.0.
+- `EndScene` gates `ssaoStrength` to 0 unless a real AO texture was produced this
+  frame (`aoSRV != null`), so the white default never darkens anything.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -432,3 +474,13 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   close test (exit 0). (3) Added section dividers to `renderer.cpp`, plus
   **`docs/style-guide.md`** and a **`.claude/skills/tidy-cpp`** skill for future
   cleanups. See the Dear ImGui + Bloom "Gotchas" above.
+- **2026-07-10** — **SSAO** (roadmap #1): DiligentFX `ScreenSpaceAmbientOcclusion` via
+  the shared `PostFXContext`, which now gets *real* inputs (unlike Bloom): a
+  world-space **normal G-buffer** (scene pass is now MRT; toon shaders write
+  `PSOutput` color+normal) and real **`CameraAttribs`** (`FillCameraAttribs`, handness
+  from the view determinant). Motion stays zero, so SSAO temporal accumulation is off
+  by default (would ghost the spinning scene). AO (visibility) composited in the
+  tone-map as `hdr *= lerp(1, ao*ao, strength)`; `g_AO` dynamic, 1x1-white default when
+  off. Added a **ground plane** (`MakePlane`) so contact shadows are visible; verified
+  the raw AO buffer (torus hole dark, bg white → correct orientation), ran clean, close
+  exits 0. `RunBloom` generalized to `RunPostFX`. See "SSAO" above.

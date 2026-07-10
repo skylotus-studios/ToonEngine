@@ -101,9 +101,15 @@ int main() {
           toon::Material{ {0.90f, 0.70f, 0.25f} }, { 2.8f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f} },
     } };
 
+    // Ground plane beneath the trio, so SSAO has a surface to catch their contact
+    // shadows (drawn separately below — it doesn't spin and wants no outline).
+    const toon::MeshHandle groundMesh = Upload(renderer, toon::MakePlane(5.0f), "ground");
+    toon::Material groundMaterial{ {0.60f, 0.60f, 0.63f} };
+    groundMaterial.outlineWidth = 0.0f;
+
     toon::Camera camera;
-    camera.distance = 11.0f;
-    camera.pitch    = 0.25f;
+    camera.distance = 10.0f;
+    camera.pitch    = 0.22f;      // look down a little so the ground (and its AO) shows
 
     toon::Vec3 lightDir{ 0.5f, 0.8f, -0.3f };
 
@@ -134,6 +140,16 @@ int main() {
         // Scene first, so the debug UI overlays it.
         renderer.SetCamera(camera);
         renderer.SetLight(lightDir);
+
+        // Ground plane, just below the objects (fixed; catches their AO contact shadows).
+        {
+            groundMaterial.bands   = style.bands;
+            groundMaterial.ambient = style.ambient;
+            toon::Transform groundXform;
+            groundXform.position = { 0.0f, -1.05f, 0.0f };   // just under the sphere/torus
+            renderer.DrawMesh(groundMesh, groundXform, groundMaterial);
+        }
+
         for (Object& obj : objects) {
             // Push the shared style onto each object's material (keep its color).
             obj.material.outlineColor = style.outlineColor;
@@ -204,7 +220,14 @@ int main() {
                 ImGui::SliderFloat("Intensity", &post.bloomIntensity, 0.0f, 1.0f);
                 ImGui::SliderFloat("Threshold", &post.bloomThreshold, 0.0f, 1.5f);
                 ImGui::SliderFloat("Soft knee", &post.bloomSoftKnee, 0.0f, 1.0f);
-                ImGui::SliderFloat("Radius",    &post.bloomRadius, 0.3f, 0.85f);
+                ImGui::SliderFloat("Bloom radius", &post.bloomRadius, 0.3f, 0.85f);
+            }
+
+            ImGui::Checkbox("SSAO", &post.ssao);
+            if (post.ssao) {
+                ImGui::SliderFloat("AO strength", &post.ssaoStrength, 0.0f, 1.0f);
+                ImGui::SliderFloat("AO radius", &post.ssaoRadius, 0.1f, 3.0f);
+                ImGui::Checkbox("AO temporal (ghosts when spinning)", &post.ssaoTemporal);
             }
         }
         ImGui::End();

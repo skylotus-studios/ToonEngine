@@ -96,6 +96,15 @@ struct PostParams {
     float bloomThreshold = 0.6f;    // min max(r,g,b) brightness that blooms
     float bloomSoftKnee  = 0.5f;    // softens the threshold edge (0 = hard cutoff)
     float bloomRadius    = 0.75f;   // glow spread (fraction of the mip chain, 0.3–0.85)
+
+    // Screen-space ambient occlusion (DiligentFX's SSAO via PostFXContext). Darkens
+    // creases / contact areas. Unlike bloom, SSAO reads real depth + normals + camera,
+    // so enabling it fills in the camera attribs PostFXContext otherwise gets as zeros.
+    bool  ssao         = true;
+    float ssaoStrength = 1.0f;    // composite strength (0 = off, 1 = full occlusion)
+    float ssaoRadius   = 1.5f;    // world-space occlusion radius
+    bool  ssaoTemporal = false;   // temporal accumulation — ghosts the spinning scene
+                                  // without real motion vectors, so off by default
 };
 
 // --- Renderer ---------------------------------------------------------------
@@ -154,8 +163,8 @@ private:
     // header stays Diligent-free.
     bool CreateToonPipeline();                                // toon fill/outline PSOs + shared CB
     bool CreatePostPipeline();                                // HDR tone-map resolve PSO
-    bool CreateBloom();                                       // DiligentFX PostFXContext + Bloom effect
-    bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + depth (+ SRV) + motion
+    bool CreatePostFX();                                      // PostFXContext + Bloom + SSAO effects
+    bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + normal + depth + motion
 
     struct Impl;         // defined in renderer.cpp — hides all Diligent types
     Impl* m_impl = nullptr;

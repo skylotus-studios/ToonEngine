@@ -33,11 +33,12 @@
 #include "MapHelper.hpp"     // Diligent-GraphicsTools
 #include "BasicMath.hpp"
 
-// DiligentFX post-processing: the Bloom effect and the shared PostFXContext it
-// depends on (roadmap #1). Both compile into the DiligentFX target, whose root is
-// on the include path, so these resolve short-form.
+// DiligentFX post-processing: the Bloom + SSAO effects and the shared PostFXContext
+// they depend on. All compile into the DiligentFX target, whose root is on the
+// include path, so these resolve short-form.
 #include "PostFXContext.hpp"
 #include "Bloom.hpp"
+#include "ScreenSpaceAmbientOcclusion.hpp"
 
 // Dear ImGui + Diligent's ImGui renderer backend (DiligentTools). The GLFW
 // platform backend (imgui_impl_glfw.cpp) is compiled directly into ToonEngine
@@ -69,15 +70,18 @@ using namespace Diligent;
 namespace Diligent { namespace HLSL {
 #include "Shaders/Common/public/BasicStructures.fxh"
 #include "Shaders/PostProcess/Bloom/public/BloomStructures.fxh"
+#include "Shaders/PostProcess/ScreenSpaceAmbientOcclusion/public/ScreenSpaceAmbientOcclusionStructures.fxh"
 }} // namespace Diligent::HLSL
 
 namespace toon {
 
 // --- Internal formats, GPU-mirror types & PIMPL state -----------------------
 
-// The scene renders to an HDR target, then a full-screen pass tone-maps it to
-// the back buffer — the foundation for DiligentFX post effects.
+// The scene renders to an HDR color target + a world-space normal G-buffer (for
+// SSAO), then a full-screen pass tone-maps to the back buffer. RGBA16F holds signed
+// normals in [-1,1] directly, so no encode/decode is needed.
 static constexpr TEXTURE_FORMAT kHDRFormat        = TEX_FORMAT_RGBA16_FLOAT;
+static constexpr TEXTURE_FORMAT kNormalFormat     = TEX_FORMAT_RGBA16_FLOAT;
 static constexpr TEXTURE_FORMAT kSceneDepthFormat = TEX_FORMAT_D32_FLOAT;
 
 // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
@@ -94,9 +98,9 @@ struct ShaderConstants {
 // GPU mirror of tonemap.hlsl's PostConstants.
 struct PostConstants {
     float exposure;
-    float toneMap;      // 1 = ACES
-    float outputSRGB;   // 1 = encode sRGB in-shader
-    float pad;
+    float toneMap;       // 1 = ACES
+    float outputSRGB;    // 1 = encode sRGB in-shader
+    float ssaoStrength;  // 0 = AO ignored, 1 = full occlusion
 };
 
 // All Diligent state hides here, behind the PIMPL boundary.
@@ -123,85 +127,140 @@ struct Renderer::Impl {
 
     // HDR offscreen scene target + tone-map resolve to the back buffer.
     RefCntAutoPtr<ITexture>               hdrColor;      // RGBA16F scene color
+    RefCntAutoPtr<ITexture>               normalBuffer;  // RGBA16F world-space normals (SSAO G-buffer)
     RefCntAutoPtr<ITexture>               sceneDepth;    // D32 depth (also SRV for PostFX)
     RefCntAutoPtr<IPipelineState>         tonemapPSO;
     RefCntAutoPtr<IShaderResourceBinding> tonemapSRB;
     RefCntAutoPtr<IBuffer>                postConstants;
     bool                                  outputSRGB = false;  // back buffer is a non-sRGB UNORM
 
-    // DiligentFX Bloom (roadmap #1). Bloom needs a PostFXContext, which itself
-    // requires depth + motion-vector inputs and camera attribs to reach its
-    // "PSOs ready" state (the gate Bloom checks). Bloom reads none of that — it's
-    // shared plumbing for temporal effects — so we feed the scene depth (as both
-    // current and previous; we keep no history), a zero motion-vector target, and
-    // a zeroed camera purely to satisfy PostFXContext::Execute.
-    std::unique_ptr<PostFXContext> postFX;
-    std::unique_ptr<Bloom>         bloom;
-    RefCntAutoPtr<ITexture>        motionVectors;   // RG16F, cleared to zero (unused by bloom)
-    HLSL::CameraAttribs            postCamera{};    // zeroed (unused by bloom)
+    // DiligentFX post effects (Bloom + SSAO) share a PostFXContext. It requires
+    // depth + motion + camera to reach its "PSOs ready" gate (which both effects
+    // check). Bloom ignores those inputs; SSAO reads real depth + a world-space
+    // normal G-buffer + camera. So when a post effect runs we fill `postCamera`
+    // from the actual view/proj (not zeros) and the scene writes `normalBuffer`.
+    // Motion stays a zero texture (we keep no frame history), which is why SSAO's
+    // temporal accumulation is off by default — it would ghost the moving scene.
+    std::unique_ptr<PostFXContext>               postFX;
+    std::unique_ptr<Bloom>                       bloom;
+    std::unique_ptr<ScreenSpaceAmbientOcclusion> ssao;
+    RefCntAutoPtr<ITexture>        motionVectors;   // RG16F, zero (no real motion)
+    RefCntAutoPtr<ITexture>        aoWhite;         // 1x1 white = "fully visible" default
+    HLSL::CameraAttribs            postCamera{};
     Uint32                         frameIndex = 0;
 
-    // Runs the bloom chain for this frame and returns the SRV of the composited
-    // scene+bloom HDR texture (a drop-in for the tone-map input), or nullptr if the
-    // effect isn't ready yet (shaders still compiling, or a zero-size target).
-    ITextureView* RunBloom(const PostParams& p);
+    // Run the shared PostFXContext plus whichever effects are enabled. Outputs the
+    // composited scene+bloom SRV (or null -> resolve the raw scene) and the AO SRV
+    // (or null -> bind the white default). No-op if neither effect is enabled.
+    void RunPostFX(const PostParams& p, ITextureView*& bloomOut, ITextureView*& aoOut);
 
-    // Per-frame scene state.
+    // Fill postCamera from the stored view/proj so PostFXContext/SSAO can rebuild
+    // view-space positions from depth. (Bloom doesn't use it; SSAO does.)
+    void FillCameraAttribs(const SwapChainDesc& sc);
+
+    // Per-frame scene state. view/proj are kept split (not just viewProj) because
+    // the camera attribs above need each one and their inverses.
+    float4x4   view     = float4x4::Identity();
+    float4x4   proj     = float4x4::Identity();
     float4x4   viewProj = float4x4::Identity();
+    float      nearZ    = 0.1f;
+    float      farZ     = 100.0f;
     float3     lightDir = float3(0.5f, 0.8f, -0.3f);  // world-space dir TO light (shader normalizes)
     PostParams post;
 };
 
-// Bloom for this frame: prepare + execute PostFXContext (only to flip its ready
-// gate), then Bloom over the HDR scene color. See the Impl field comments above for
-// why PostFXContext gets depth/motion/camera it never reads.
-ITextureView* Renderer::Impl::RunBloom(const PostParams& p) {
-    const SwapChainDesc& sc = swapChain->GetDesc();
-    if (sc.Width == 0 || sc.Height == 0) return nullptr;
+void Renderer::Impl::FillCameraAttribs(const SwapChainDesc& sc) {
+    const float4x4 viewInv = view.Inverse();
+    const float    W = static_cast<float>(sc.Width);
+    const float    H = static_cast<float>(sc.Height);
 
+    postCamera.f4ViewportSize = float4(W, H, W > 0.0f ? 1.0f / W : 0.0f, H > 0.0f ? 1.0f / H : 0.0f);
+    postCamera.SetClipPlanes(nearZ, farZ);   // near < far -> non-reversed [0,1] depth
+    postCamera.fSceneNearZ     = postCamera.fNearPlaneZ;
+    postCamera.fSceneFarZ      = postCamera.fFarPlaneZ;
+    postCamera.fSceneNearDepth = postCamera.fNearPlaneDepth;
+    postCamera.fSceneFarDepth  = postCamera.fFarPlaneDepth;
+    postCamera.fHandness       = view.Determinant() > 0.0f ? 1.0f : -1.0f;
+    postCamera.uiFrameIndex    = frameIndex;
+    postCamera.mView           = view;
+    postCamera.mProj           = proj;
+    postCamera.mViewProj       = viewProj;
+    postCamera.mViewInv        = viewInv;
+    postCamera.mProjInv        = proj.Inverse();
+    postCamera.mViewProjInv    = viewProj.Inverse();
+    postCamera.f4Position      = float4(float3::MakeVector(viewInv[3]), 1.0f);  // camera world pos
+}
+
+void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& bloomOut, ITextureView*& aoOut) {
+    bloomOut = nullptr;
+    aoOut    = nullptr;
+    if (!p.bloom && !p.ssao) return;
+
+    const SwapChainDesc& sc = swapChain->GetDesc();
+    if (sc.Width == 0 || sc.Height == 0) return;
+
+    // Prepare the shared context + the enabled effects (each early-outs on unchanged
+    // size). The PSOs are what PostFXContext::IsPSOsReady() gates on below.
     PostFXContext::FrameDesc frame;
     frame.Index  = frameIndex;
     frame.Width  = sc.Width;
     frame.Height = sc.Height;
     postFX->PrepareResources(device, frame, PostFXContext::FEATURE_FLAG_NONE);
-    bloom->PrepareResources(device, context, postFX.get(), Bloom::FEATURE_FLAG_NONE);
+    if (p.bloom) bloom->PrepareResources(device, context, postFX.get(), Bloom::FEATURE_FLAG_NONE);
+    if (p.ssao)  ssao->PrepareResources(device, context, postFX.get(), ScreenSpaceAmbientOcclusion::FEATURE_FLAG_NONE);
 
+    // Run the shared context: real camera + scene depth (as curr and prev), zero
+    // motion. This computes the reprojected-depth/blue-noise resources the effects
+    // build on and flips IsPSOsReady() true.
+    FillCameraAttribs(sc);
     ITextureView* depthSRV  = sceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
     ITextureView* motionSRV = motionVectors->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
-    postCamera.f4ViewportSize = float4(static_cast<float>(sc.Width), static_cast<float>(sc.Height),
-                                       1.0f / sc.Width, 1.0f / sc.Height);
-    postCamera.uiFrameIndex = frameIndex;
 
     PostFXContext::RenderAttributes pfx;
     pfx.pDevice             = device;
     pfx.pDeviceContext      = context;
     pfx.pCurrDepthBufferSRV = depthSRV;
-    pfx.pPrevDepthBufferSRV = depthSRV;   // no history — reuse current (unused by bloom)
+    pfx.pPrevDepthBufferSRV = depthSRV;   // no history — reuse current
     pfx.pMotionVectorsSRV   = motionSRV;
     pfx.pCurrCamera         = &postCamera;
     pfx.pPrevCamera         = &postCamera;
     postFX->Execute(pfx);
-
-    HLSL::BloomAttribs attribs{};
-    attribs.Intensity    = p.bloomIntensity;
-    attribs.Threshold    = p.bloomThreshold;
-    attribs.SoftTreshold = p.bloomSoftKnee;   // (sic — DiligentFX's field spelling)
-    attribs.Radius       = p.bloomRadius;
-
-    Bloom::RenderAttributes bra;
-    bra.pDevice         = device;
-    bra.pDeviceContext  = context;
-    bra.pPostFXContext  = postFX.get();
-    bra.pColorBufferSRV = hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
-    bra.pBloomAttribs   = &attribs;
-    bloom->Execute(bra);
-
     ++frameIndex;
 
-    // Until the PSOs finish compiling, Bloom emits a black placeholder — fall back
-    // to the raw scene so the first frame(s) aren't black.
-    if (!postFX->IsPSOsReady()) return nullptr;
-    return bloom->GetBloomTextureSRV();
+    if (!postFX->IsPSOsReady()) return;   // still compiling — skip effects this frame
+
+    if (p.ssao) {
+        HLSL::ScreenSpaceAmbientOcclusionAttribs attribs{};
+        attribs.EffectRadius      = p.ssaoRadius;
+        attribs.ResetAccumulation = p.ssaoTemporal ? 0 : 1;   // 1 = current frame only (no ghosting)
+
+        ScreenSpaceAmbientOcclusion::RenderAttributes ra;
+        ra.pDevice          = device;
+        ra.pDeviceContext   = context;
+        ra.pPostFXContext   = postFX.get();
+        ra.pDepthBufferSRV  = depthSRV;
+        ra.pNormalBufferSRV = normalBuffer->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        ra.pSSAOAttribs     = &attribs;
+        ssao->Execute(ra);
+        aoOut = ssao->GetAmbientOcclusionSRV();
+    }
+
+    if (p.bloom) {
+        HLSL::BloomAttribs attribs{};
+        attribs.Intensity    = p.bloomIntensity;
+        attribs.Threshold    = p.bloomThreshold;
+        attribs.SoftTreshold = p.bloomSoftKnee;   // (sic — DiligentFX's field spelling)
+        attribs.Radius       = p.bloomRadius;
+
+        Bloom::RenderAttributes bra;
+        bra.pDevice         = device;
+        bra.pDeviceContext  = context;
+        bra.pPostFXContext  = postFX.get();
+        bra.pColorBufferSRV = hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        bra.pBloomAttribs   = &attribs;
+        bloom->Execute(bra);
+        bloomOut = bloom->GetBloomTextureSRV();
+    }
 }
 
 // --- File-local helpers -----------------------------------------------------
@@ -292,8 +351,8 @@ bool Renderer::Init(GLFWwindow* window) {
         return false;
     }
 
-    if (!CreateBloom()) {
-        std::fprintf(stderr, "Renderer: failed to create bloom effect\n");
+    if (!CreatePostFX()) {
+        std::fprintf(stderr, "Renderer: failed to create post-processing effects\n");
         return false;
     }
 
@@ -307,6 +366,7 @@ bool Renderer::Init(GLFWwindow* window) {
 
 bool Renderer::CreateOffscreenTargets(uint32_t width, uint32_t height) {
     m_impl->hdrColor.Release();
+    m_impl->normalBuffer.Release();
     m_impl->sceneDepth.Release();
     m_impl->motionVectors.Release();
 
@@ -319,6 +379,17 @@ bool Renderer::CreateOffscreenTargets(uint32_t width, uint32_t height) {
     cd.Format    = kHDRFormat;
     cd.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
     m_impl->device->CreateTexture(cd, nullptr, &m_impl->hdrColor);
+
+    // World-space normal G-buffer (second scene render target), read by SSAO.
+    TextureDesc nd;
+    nd.Name      = "scene normals";
+    nd.Type      = RESOURCE_DIM_TEX_2D;
+    nd.Width     = width;
+    nd.Height    = height;
+    nd.MipLevels = 1;
+    nd.Format    = kNormalFormat;
+    nd.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+    m_impl->device->CreateTexture(nd, nullptr, &m_impl->normalBuffer);
 
     // Depth doubles as a shader resource: PostFXContext reads it as an SRV (the
     // Vulkan backend exposes D32 depth as R32_FLOAT). BIND_SHADER_RESOURCE is the
@@ -352,7 +423,7 @@ bool Renderer::CreateOffscreenTargets(uint32_t width, uint32_t height) {
         m_impl->context->ClearRenderTarget(mrtv, zero, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     }
 
-    return m_impl->hdrColor && m_impl->sceneDepth && m_impl->motionVectors;
+    return m_impl->hdrColor && m_impl->normalBuffer && m_impl->sceneDepth && m_impl->motionVectors;
 }
 
 bool Renderer::CreatePostPipeline() {
@@ -396,8 +467,16 @@ bool Renderer::CreatePostPipeline() {
     // so switching it is safe. (A MUTABLE variable bakes one binding and rejects
     // being overwritten while a prior frame may still be reading it.) PostConstants
     // never changes binding, so it stays static.
+    // g_HDRColor and g_AO are DYNAMIC: EndScene re-points them every frame at
+    // whichever HDR source we resolve (raw scene, or Bloom's output) and at the SSAO
+    // result (or a white "no occlusion" default). A dynamic variable is the type
+    // meant for a per-frame-changing binding — Diligent manages a fresh descriptor
+    // each commit. (A MUTABLE variable bakes one binding and rejects being
+    // overwritten while a prior frame may still be reading it.) PostConstants never
+    // changes binding, so it stays static.
     ShaderResourceVariableDesc vars[] = {
         { SHADER_TYPE_PIXEL, "g_HDRColor",    SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+        { SHADER_TYPE_PIXEL, "g_AO",          SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
         { SHADER_TYPE_PIXEL, "PostConstants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC  },
     };
     ci.PSODesc.ResourceLayout.Variables    = vars;
@@ -406,7 +485,10 @@ bool Renderer::CreatePostPipeline() {
     SamplerDesc linClamp;
     linClamp.MinFilter = FILTER_TYPE_LINEAR; linClamp.MagFilter = FILTER_TYPE_LINEAR; linClamp.MipFilter = FILTER_TYPE_LINEAR;
     linClamp.AddressU  = TEXTURE_ADDRESS_CLAMP; linClamp.AddressV = TEXTURE_ADDRESS_CLAMP; linClamp.AddressW = TEXTURE_ADDRESS_CLAMP;
-    ImmutableSamplerDesc immSamplers[] = { { SHADER_TYPE_PIXEL, "g_HDRColor", linClamp } };
+    ImmutableSamplerDesc immSamplers[] = {
+        { SHADER_TYPE_PIXEL, "g_HDRColor", linClamp },
+        { SHADER_TYPE_PIXEL, "g_AO",       linClamp },
+    };
     ci.PSODesc.ResourceLayout.ImmutableSamplers    = immSamplers;
     ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
 
@@ -418,17 +500,35 @@ bool Renderer::CreatePostPipeline() {
     return m_impl->tonemapSRB != nullptr;
 }
 
-bool Renderer::CreateBloom() {
-    // Sync PSO creation: the first EndScene blocks briefly to compile the effect's
-    // shaders, so Bloom is live from the first frame it runs (no async black-frames
-    // to special-case). RunBloom still falls back to the raw scene if not ready.
+bool Renderer::CreatePostFX() {
+    // Sync PSO creation: the first EndScene blocks briefly to compile the effects'
+    // shaders, so they're live from the first frame they run (no async black-frames
+    // to special-case). RunPostFX still falls back to the raw scene if not ready.
     PostFXContext::CreateInfo pfxCI;
     m_impl->postFX = std::make_unique<PostFXContext>(m_impl->device, pfxCI);
 
     Bloom::CreateInfo bloomCI;
     m_impl->bloom = std::make_unique<Bloom>(m_impl->device, bloomCI);
 
-    return m_impl->postFX && m_impl->bloom;
+    ScreenSpaceAmbientOcclusion::CreateInfo ssaoCI;
+    m_impl->ssao = std::make_unique<ScreenSpaceAmbientOcclusion>(m_impl->device, ssaoCI);
+
+    // 1x1 white texture = "fully visible" — bound to the resolve's g_AO whenever SSAO
+    // is off or not yet ready, so the AO multiply is a no-op without a shader branch.
+    const Uint8    white[4] = { 255, 255, 255, 255 };
+    TextureSubResData sub{ white, 4 };
+    TextureData       texData{ &sub, 1 };
+    TextureDesc wd;
+    wd.Name      = "AO white default";
+    wd.Type      = RESOURCE_DIM_TEX_2D;
+    wd.Width     = 1;
+    wd.Height    = 1;
+    wd.MipLevels = 1;
+    wd.Format    = TEX_FORMAT_RGBA8_UNORM;
+    wd.BindFlags = BIND_SHADER_RESOURCE;
+    m_impl->device->CreateTexture(wd, &texData, &m_impl->aoWhite);
+
+    return m_impl->postFX && m_impl->bloom && m_impl->ssao && m_impl->aoWhite;
 }
 
 bool Renderer::CreateToonPipeline() {
@@ -463,8 +563,9 @@ bool Renderer::CreateToonPipeline() {
         ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
 
         GraphicsPipelineDesc& gp = ci.GraphicsPipeline;
-        gp.NumRenderTargets                     = 1;
-        gp.RTVFormats[0]                        = kHDRFormat;          // scene renders to the HDR target
+        gp.NumRenderTargets                     = 2;                  // MRT: color + normal G-buffer
+        gp.RTVFormats[0]                        = kHDRFormat;         // SV_Target0: HDR scene color
+        gp.RTVFormats[1]                        = kNormalFormat;      // SV_Target1: world-space normals
         gp.DSVFormat                            = kSceneDepthFormat;
         gp.PrimitiveTopology                    = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         gp.RasterizerDesc.CullMode              = cull;
@@ -516,12 +617,15 @@ void Renderer::Shutdown() {
     // Release scene/pipeline GPU objects before the device.
     m_impl->meshes.clear();
     m_impl->bloom.reset();            // DiligentFX effect objects own GPU resources
+    m_impl->ssao.reset();
     m_impl->postFX.reset();
     m_impl->motionVectors.Release();
+    m_impl->aoWhite.Release();
     m_impl->tonemapSRB.Release();
     m_impl->tonemapPSO.Release();
     m_impl->postConstants.Release();
     m_impl->hdrColor.Release();
+    m_impl->normalBuffer.Release();
     m_impl->sceneDepth.Release();
     m_impl->fillSRB.Release();
     m_impl->outlineSRB.Release();
@@ -538,13 +642,17 @@ void Renderer::Shutdown() {
 // --- Per-frame lifecycle ----------------------------------------------------
 
 void Renderer::BeginFrame(const Color& c) {
-    // The scene renders into the HDR offscreen target (resolved in EndScene).
-    ITextureView* rtv = m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+    // The scene renders into two offscreen targets (resolved in EndScene): HDR color
+    // + a world-space normal G-buffer for SSAO, sharing the scene depth buffer.
+    ITextureView* rtvs[] = { m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET),
+                             m_impl->normalBuffer->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET) };
     ITextureView* dsv = m_impl->sceneDepth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
-    m_impl->context->SetRenderTargets(1, &rtv, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    m_impl->context->SetRenderTargets(2, rtvs, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
-    const float clear[] = { c.r, c.g, c.b, c.a };
-    m_impl->context->ClearRenderTarget(rtv, clear, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    const float clear[]  = { c.r, c.g, c.b, c.a };
+    const float zeroN[]  = { 0.0f, 0.0f, 0.0f, 0.0f };   // background normal (SSAO discards it by depth)
+    m_impl->context->ClearRenderTarget(rtvs[0], clear, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    m_impl->context->ClearRenderTarget(rtvs[1], zeroN, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     m_impl->context->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 }
 
@@ -553,34 +661,40 @@ void Renderer::SetPostParams(const PostParams& params) {
 }
 
 void Renderer::EndScene() {
-    // Pick the HDR source to resolve. By default it's the raw scene target; with
-    // bloom on (and ready) it's Bloom's output, which already holds scene + glow
-    // composited (see Bloom_ComputeUpsampledTexture.fx) — a drop-in HDR input, so
-    // the tone-map shader is unchanged. RunBloom binds its own render targets, so
-    // this must run before we bind the back buffer below.
-    ITextureView* postInput = m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
-    if (m_impl->post.bloom) {
-        if (ITextureView* bloomSRV = m_impl->RunBloom(m_impl->post))
-            postInput = bloomSRV;
-    }
+    // Run the enabled post effects first (they bind their own render targets, so
+    // this must precede binding the back buffer below). RunPostFX yields:
+    //  - bloomSRV: scene + glow already composited (a drop-in HDR resolve input, so
+    //    tonemap.hlsl is unchanged), or null -> resolve the raw scene.
+    //  - aoSRV: SSAO visibility, or null -> the white "no occlusion" default.
+    ITextureView* bloomSRV = nullptr;
+    ITextureView* aoSRV    = nullptr;
+    m_impl->RunPostFX(m_impl->post, bloomSRV, aoSRV);
 
-    // Resolve the HDR source to the back buffer: exposure + tone map. Leaves the
-    // back-buffer RTV bound so the UI overlay draws on top.
+    // Resolve inputs: bloom output or raw scene; real AO or the white default.
+    ITextureView* postInput = bloomSRV ? bloomSRV : m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    ITextureView* aoInput   = aoSRV    ? aoSRV    : m_impl->aoWhite->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+
+    // Resolve the HDR source to the back buffer: SSAO darkening + exposure + tone
+    // map. Leaves the back-buffer RTV bound so the UI overlay draws on top.
     ITextureView* rtv = m_impl->swapChain->GetCurrentBackBufferRTV();
     m_impl->context->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
     {
         MapHelper<PostConstants> cb(m_impl->context, m_impl->postConstants, MAP_WRITE, MAP_FLAG_DISCARD);
-        cb->exposure   = m_impl->post.exposure;
-        cb->toneMap    = m_impl->post.toneMap ? 1.0f : 0.0f;
-        cb->outputSRGB = m_impl->outputSRGB ? 1.0f : 0.0f;
-        cb->pad        = 0.0f;
+        cb->exposure     = m_impl->post.exposure;
+        cb->toneMap      = m_impl->post.toneMap ? 1.0f : 0.0f;
+        cb->outputSRGB   = m_impl->outputSRGB ? 1.0f : 0.0f;
+        // Only apply strength when a real AO texture was produced (else g_AO is the
+        // white default and the multiply is a no-op anyway).
+        cb->ssaoStrength = aoSRV ? m_impl->post.ssaoStrength : 0.0f;
     }
 
-    // Point the resolve at this frame's HDR source. g_HDRColor is dynamic, so this
-    // may safely differ from last frame (scene <-> bloom, or a resized target).
+    // Point the resolve at this frame's HDR source + AO. Both are dynamic, so they
+    // may safely differ from last frame (scene <-> bloom, AO on/off, or a resize).
     if (auto* v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_HDRColor"))
         v->Set(postInput);
+    if (auto* v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_AO"))
+        v->Set(aoInput);
 
     m_impl->context->SetPipelineState(m_impl->tonemapPSO);
     m_impl->context->CommitShaderResources(m_impl->tonemapSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -648,7 +762,14 @@ void Renderer::SetCamera(const Camera& cam) {
                           float4x4::Translation(0.0f, 0.0f, cam.distance);
     // NegativeOneToOneZ = false -> [0,1] depth range for Vulkan/D3D.
     const float4x4 proj = float4x4::Projection(cam.fovY, aspect, cam.nearZ, cam.farZ, false);
+
+    // Keep view/proj (and near/far) split, not just their product: the SSAO camera
+    // attribs (FillCameraAttribs) need each matrix and its inverse.
+    m_impl->view     = view;
+    m_impl->proj     = proj;
     m_impl->viewProj = view * proj;
+    m_impl->nearZ    = cam.nearZ;
+    m_impl->farZ     = cam.farZ;
 }
 
 void Renderer::SetLight(const Vec3& directionToLight) {

@@ -14,7 +14,7 @@ PSInput VSMain(VSInput vin)
     return o;
 }
 
-float4 PSMain(PSInput pin) : SV_TARGET
+PSOutput PSMain(PSInput pin)
 {
     float3 N     = normalize(pin.WorldNormal);
     float3 L     = normalize(g_LightDir.xyz);
@@ -28,5 +28,8 @@ float4 PSMain(PSInput pin) : SV_TARGET
     float ambient = g_Params.y;
     float shade   = lerp(ambient, 1.0, ramp);
 
-    return float4(g_BaseColor.rgb * shade, 1.0);
+    PSOutput o;
+    o.Color  = float4(g_BaseColor.rgb * shade, 1.0);
+    o.Normal = float4(N, 0.0);   // world-space normal for the SSAO G-buffer
+    return o;
 }

@@ -14,11 +14,16 @@ PSInput VSMain(VSInput vin)
     // closed — the per-face normal would split shared verts apart and gap.
     float3 inflated = vin.Pos + vin.SmoothNormal * g_Outline.w;  // object-space extrude
     o.Pos           = mul(float4(inflated, 1.0), g_WorldViewProj);
-    o.WorldNormal   = vin.Normal;
+    o.WorldNormal   = mul(float4(vin.Normal, 0.0), g_World).xyz;  // world space, for the G-buffer
     return o;
 }
 
-float4 PSMain(PSInput pin) : SV_TARGET
+PSOutput PSMain(PSInput pin)
 {
-    return float4(g_Outline.rgb, 1.0);
+    // The rim is mostly overwritten by the fill; where it survives (the silhouette)
+    // still needs a sane G-buffer normal so SSAO doesn't read garbage there.
+    PSOutput o;
+    o.Color  = float4(g_Outline.rgb, 1.0);
+    o.Normal = float4(normalize(pin.WorldNormal), 0.0);
+    return o;
 }

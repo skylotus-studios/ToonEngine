@@ -16,13 +16,15 @@ behind a rule here.
 ## Current state
 
 The app opens a window, creates a Vulkan device + swap chain, and each frame draws a
-small spinning scene — a smooth **sphere**, a faceted **cube**, a **torus** — each
-cel-shaded with a **banded diffuse fill + inverted-hull silhouette outline** in its
-own color. The scene renders into an **HDR offscreen target**; **DiligentFX's Bloom**
-(via `PostFXContext`) adds a soft glow to the bright bands, then an **ACES tone-map
-pass** resolves to the back buffer, with a docked **Dear ImGui** debug overlay driving
-the look live (light, band count, colors, outline width, camera, exposure, bloom).
-HLSL shaders cross-compile to SPIR-V at runtime.
+small spinning scene — a smooth **sphere**, a faceted **cube**, a **torus**, on a
+**ground plane** — each cel-shaded with a **banded diffuse fill + inverted-hull
+silhouette outline** in its own color. The scene renders into an **HDR offscreen
+target + a world-space normal G-buffer** (MRT); **DiligentFX's SSAO** (via
+`PostFXContext`) darkens contact/creased areas and **Bloom** adds a soft glow to the
+bright bands, then an **ACES tone-map pass** resolves to the back buffer, with a
+docked **Dear ImGui** debug overlay driving the look live (light, band count, colors,
+outline width, camera, exposure, bloom, SSAO). HLSL shaders cross-compile to SPIR-V at
+runtime.
 
 ## Build
 
@@ -63,7 +65,7 @@ src/
     renderer.h            The seam: opaque handles + scene types (Vertex/Camera/ToonParams/Transform) + PIMPL Renderer
     renderer.cpp          Diligent Engine (Vulkan): toon PSOs/shaders/mesh buffers + ImGui-Diligent glue — ALL Diligent code here
     math.h                Minimal Diligent-free vector types for the seam's public API
-    primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus) -> toon::MeshData
+    primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus/plane) -> toon::MeshData
 assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + tonemap.hlsl (HLSL->SPIR-V at runtime)
 external/                 Git submodules (see .gitmodules): DiligentCore/Tools/FX, glfw
 CMakeLists.txt            add_subdirectory the submodules; disables unused Diligent backends
@@ -120,10 +122,12 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-1. **More DiligentFX effects** — Bloom is in (via `PostFXContext`; see MEMORY.md).
-   SSAO / DoF are the next candidates on the same `PostFXContext` — though each
-   needs the shared depth+motion+camera inputs actually filled in (Bloom ignores
-   them; SSAO won't), so real motion vectors + camera attribs come with them.
+1. **More DiligentFX effects** — Bloom + SSAO are in (via `PostFXContext`; see
+   MEMORY.md). SSAO added the world-space normal G-buffer + real `CameraAttribs`
+   the shared context needs. DoF is the next candidate on the same context; the one
+   remaining stub is **motion vectors** (still a zero texture), so any
+   motion-dependent effect — or SSAO temporal accumulation without ghosting — needs
+   a real velocity buffer first.
 2. **Toon pipeline extensions** — inverse-transpose normals for non-uniform scale;
    instancing; per-object outline tuning; an optional post-process depth+normal
    edge-detect outline variant.

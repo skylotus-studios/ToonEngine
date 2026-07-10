@@ -8,12 +8,18 @@
 Texture2D    g_HDRColor;
 SamplerState g_HDRColor_sampler;
 
+// Screen-space ambient occlusion (DiligentFX SSAO). Stores *visibility* in .r
+// (1 = fully open, 0 = fully occluded). When SSAO is off, a 1x1 white texture is
+// bound so the composite below is a no-op.
+Texture2D    g_AO;
+SamplerState g_AO_sampler;
+
 cbuffer PostConstants
 {
-    float g_Exposure;    // linear multiplier before tone mapping
-    float g_ToneMap;     // 1 = ACES filmic, 0 = clamp only
-    float g_OutputSRGB;  // 1 = encode sRGB here (back buffer is a non-sRGB UNORM)
-    float g_Pad;
+    float g_Exposure;      // linear multiplier before tone mapping
+    float g_ToneMap;       // 1 = ACES filmic, 0 = clamp only
+    float g_OutputSRGB;    // 1 = encode sRGB here (back buffer is a non-sRGB UNORM)
+    float g_SSAOStrength;  // 0 = AO ignored; 1 = full occlusion
 };
 
 struct VSOut
@@ -50,6 +56,14 @@ float3 LinearToSRGB(float3 c)
 float4 PSMain(VSOut i) : SV_TARGET
 {
     float3 hdr = g_HDRColor.Sample(g_HDRColor_sampler, i.UV).rgb;
+
+    // Darken occluded areas (contact shadows). Applied in linear HDR, before
+    // exposure + tone mapping, so it reads as lost ambient light. GTAO visibility is
+    // physically restrained (subtle on convex shapes); square it so contact shadows
+    // read with the stylized look, leaving fully-open areas (1.0) untouched.
+    float ao = g_AO.Sample(g_AO_sampler, i.UV).r;
+    hdr *= lerp(1.0, ao * ao, g_SSAOStrength);
+
     hdr *= g_Exposure;
 
     float3 col = g_ToneMap > 0.5 ? ACESFilm(hdr) : saturate(hdr);

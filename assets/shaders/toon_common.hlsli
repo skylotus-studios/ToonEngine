@@ -29,3 +29,12 @@ struct PSInput
     float4 Pos         : SV_POSITION;
     float3 WorldNormal : TEXCOORD0;
 };
+
+// The scene pass writes two targets (MRT): the shaded color, and a world-space
+// normal G-buffer that DiligentFX's SSAO reads. Both toon passes (fill + outline)
+// output this struct so their PSO render-target counts match the bound targets.
+struct PSOutput
+{
+    float4 Color  : SV_Target0;  // HDR scene color
+    float4 Normal : SV_Target1;  // world-space normal in [-1,1] (xyz); w unused
+};

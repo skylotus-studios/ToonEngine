@@ -114,4 +114,21 @@ MeshData MakeTorus(float majorRadius, float minorRadius,
     return mesh;
 }
 
+MeshData MakePlane(float halfExtent) {
+    const float h = halfExtent;
+    const Vec3  n{ 0.0f, 1.0f, 0.0f };  // faces +Y (up)
+
+    // Wound to match the +Y face of MakeCube (CCW seen from above under the
+    // left-handed projection), so it survives the fill's back-face culling.
+    MeshData mesh;
+    mesh.vertices = {
+        Vertex{ {-h, 0.0f, -h}, n, n },
+        Vertex{ {-h, 0.0f,  h}, n, n },
+        Vertex{ { h, 0.0f,  h}, n, n },
+        Vertex{ { h, 0.0f, -h}, n, n },
+    };
+    AddQuad(mesh.indices, 0, 1, 2, 3);
+    return mesh;
+}
+
 } // namespace toon

@@ -33,4 +33,9 @@ MeshData MakeCube(float halfExtent);
 MeshData MakeTorus(float majorRadius, float minorRadius,
                    uint32_t majorSegments, uint32_t minorSegments);
 
+// Flat square in the XZ plane centered at the origin, facing +Y (a ground plane).
+// `halfExtent` is half the side length. Gives SSAO a surface to catch the
+// objects' contact shadows.
+MeshData MakePlane(float halfExtent);
+
 } // namespace toon
