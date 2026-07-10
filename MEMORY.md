@@ -270,6 +270,29 @@ gained a per-object `scale`). Verified on the RTX 3080 via `PrintWindow`: the el
 cel bands follow the true stretched surface (not skewed toward the wide axis) and its
 outline stays a uniform rim; cube/torus visibly unchanged.
 
+### Per-object outline tuning (roadmap #1)
+
+The inverted-hull outline was always per-object *capable* — `Material::outlineColor` /
+`outlineWidth` flow through `DrawMesh` into `g_Outline` — but `main.cpp` overwrote both
+from one global `style` every frame, so every object shared one line. Made it genuinely
+per-object, **app-side only** (no seam/shader change):
+
+- Each `Object` owns its outline (sphere: thin dark-red rim; cube: bold near-black edge;
+  torus: dark-bronze line) via its `Material{ baseColor, outlineColor, outlineWidth }`.
+- The draw loop stopped stomping outline color/width; it now overlays only the
+  genuinely-global bits (band count, ambient, SSR gloss) onto a **per-draw copy** of the
+  object's material — so the object's stored outline stays the editable source of truth.
+- A single global `outlineScale` (default 1.0) multiplies every object's width together
+  (`m.outlineWidth = obj.material.outlineWidth * outlineScale`), for dialing the whole
+  scene's line weight without losing per-object ratios.
+- UI: an **"Objects"** section (per object: base color + outline width + outline color,
+  `PushID(i)` so labels don't collide) plus a global **"Outline width ×"** slider; the old
+  single global outline width/color controls are gone. `Object` gained a `name` for labels.
+- The ground keeps `outlineWidth = 0` — the per-object *disable* case.
+
+Verified via `PrintWindow`: three visibly distinct outlines (width + color), live-tunable,
+clean run. Bands/ambient stay global by design (a scene-wide shading look).
+
 ## DiligentFX / HDR post-processing (roadmap #6)
 
 Added `external/DiligentFX` as a submodule pinned to **API256018** — match the
@@ -671,3 +694,11 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   **ellipsoid** (`Object` gained a per-object `scale`). Built clean (clang-cl), ran with
   zero validation errors, graceful close; verified the ellipsoid shading + uniform outline
   via `PrintWindow`. See "Non-uniform scale" above.
+- **2026-07-10** — **Per-object outline tuning** (roadmap #1): stopped `main.cpp` stomping
+  each object's outline with a shared `style` — every `Object` now carries its own outline
+  color + width (sphere thin dark-red, cube bold near-black, torus dark-bronze), the draw
+  loop overlays only global band/ambient/gloss onto a per-draw material copy, and a global
+  `outlineScale` scales all widths together. UI reworked into a per-object "Objects" section
+  + a global "Outline width ×" multiplier (`Object` gained a `name`). App-only — the
+  Material/shader already carried per-object outlines. Built clean, verified three distinct
+  outlines via `PrintWindow`. See "Per-object outline tuning" above.

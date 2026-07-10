@@ -24,8 +24,10 @@
 #endif
 
 namespace {
-// A scene object: which mesh, how it looks, where it sits, its spin axis, and scale.
+// A scene object: name (for the UI), which mesh, how it looks (its own material,
+// including its own outline), where it sits, its spin axis, and scale.
 struct Object {
+    const char*      name;
     toon::MeshHandle mesh;
     toon::Material   material;
     toon::Vec3       position;
@@ -94,14 +96,22 @@ int main() {
     // Three primitives in a row: a smooth sphere — non-uniformly scaled into a
     // spinning ellipsoid, which exercises the inverse-transpose normal matrix (its
     // cel bands stay locked to the true surface instead of skewing) — a faceted cube
-    // (per-face shading, smooth-normal outline hull), and a torus. Each its own color.
+    // (per-face shading, smooth-normal outline hull), and a torus.
+    //
+    // Each carries its OWN outline (color + width), not a shared one: the sphere a
+    // thin dark-red rim, the cube a bold near-black edge, the torus a mid dark-bronze
+    // line. Material{ baseColor, outlineColor, outlineWidth }; a global multiplier
+    // (below) scales every width together, and the debug UI tunes each live.
     std::array<Object, 3> objects{ {
-        { Upload(renderer, toon::MakeUVSphere(1.0f, 32, 48),          "sphere"),
-          toon::Material{ {0.85f, 0.30f, 0.35f} }, {-2.8f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.5f, 0.8f, 1.0f} },
-        { Upload(renderer, toon::MakeCube(0.9f),                      "cube"),
-          toon::Material{ {0.30f, 0.45f, 0.85f} }, { 0.0f, 0.0f, 0.0f}, {0.5f, 1.0f, 0.0f} },
-        { Upload(renderer, toon::MakeTorus(0.75f, 0.32f, 48, 24),     "torus"),
-          toon::Material{ {0.90f, 0.70f, 0.25f} }, { 2.8f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f} },
+        { "Sphere", Upload(renderer, toon::MakeUVSphere(1.0f, 32, 48),      "sphere"),
+          toon::Material{ {0.85f, 0.30f, 0.35f}, {0.24f, 0.05f, 0.08f}, 0.030f },
+          {-2.8f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.5f, 0.8f, 1.0f} },
+        { "Cube", Upload(renderer, toon::MakeCube(0.9f),                    "cube"),
+          toon::Material{ {0.30f, 0.45f, 0.85f}, {0.02f, 0.02f, 0.05f}, 0.050f },
+          { 0.0f, 0.0f, 0.0f}, {0.5f, 1.0f, 0.0f} },
+        { "Torus", Upload(renderer, toon::MakeTorus(0.75f, 0.32f, 48, 24),  "torus"),
+          toon::Material{ {0.90f, 0.70f, 0.25f}, {0.32f, 0.20f, 0.03f}, 0.022f },
+          { 2.8f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f} },
     } };
 
     // Ground plane beneath the trio, so SSAO has a surface to catch their contact
@@ -117,8 +127,11 @@ int main() {
 
     toon::Vec3 lightDir{ 0.5f, 0.8f, -0.3f };
 
-    // Shared style applied to every object each frame (band count, outline, …).
+    // Style shared by every object each frame: band count + ambient floor (a global
+    // shading look). Outline color/width are per-object (above), but this scales all of
+    // their widths together — handy for dialing the whole scene's line weight at once.
     toon::Material style;
+    float outlineScale = 1.0f;   // global multiplier over each object's outline width
 
     // HDR post-processing (foundation for DiligentFX effects).
     toon::PostParams post;
@@ -160,12 +173,15 @@ int main() {
         }
 
         for (Object& obj : objects) {
-            // Push the shared style onto each object's material (keep its color).
-            obj.material.outlineColor = style.outlineColor;
-            obj.material.outlineWidth = style.outlineWidth;
-            obj.material.bands        = style.bands;
-            obj.material.ambient      = style.ambient;
-            obj.material.roughness    = 0.15f;   // lightly glossy so SSR reflects on them
+            // The object's own material is the source of truth (base color + its own
+            // outline color/width, all editable live in the UI). Copy it per-draw and
+            // overlay the shared style: global band count + ambient, a fixed gloss for
+            // SSR, and the global outline-width multiplier over this object's own width.
+            toon::Material m = obj.material;
+            m.bands        = style.bands;
+            m.ambient      = style.ambient;
+            m.roughness    = 0.15f;   // lightly glossy so SSR reflects on them
+            m.outlineWidth = obj.material.outlineWidth * outlineScale;
 
             // Current + previous placement — the delta is this object's motion vector.
             toon::Transform xform;
@@ -174,7 +190,7 @@ int main() {
             xform.scale         = obj.scale;
             toon::Transform prevXform = xform;   // same scale/position; only the spin differs
             prevXform.rotationEuler = obj.spinAxis * prevSpinAngle;
-            renderer.DrawMesh(obj.mesh, xform, prevXform, obj.material);
+            renderer.DrawMesh(obj.mesh, xform, prevXform, m);
         }
 
         // Resolve the HDR scene to the back buffer (post effects + exposure + tone map).
@@ -210,13 +226,19 @@ int main() {
             ImGui::SeparatorText("Style (all objects)");
             ImGui::SliderFloat("Bands", &style.bands, 1.0f, 8.0f, "%.0f");
             ImGui::SliderFloat("Ambient", &style.ambient, 0.0f, 1.0f);
-            ImGui::SliderFloat("Outline width", &style.outlineWidth, 0.0f, 0.15f);
-            ImGui::ColorEdit3("Outline color", &style.outlineColor.x);
+            ImGui::SliderFloat("Outline width x", &outlineScale, 0.0f, 3.0f);
 
-            ImGui::SeparatorText("Base colors");
-            ImGui::ColorEdit3("Sphere", &objects[0].material.baseColor.x);
-            ImGui::ColorEdit3("Cube",   &objects[1].material.baseColor.x);
-            ImGui::ColorEdit3("Torus",  &objects[2].material.baseColor.x);
+            // Per-object material: base color + this object's own outline (color + width).
+            ImGui::SeparatorText("Objects");
+            for (int i = 0; i < static_cast<int>(objects.size()); ++i) {
+                Object& o = objects[i];
+                ImGui::PushID(i);
+                ImGui::Text("%s", o.name);
+                ImGui::ColorEdit3("Base color",     &o.material.baseColor.x);
+                ImGui::SliderFloat("Outline width", &o.material.outlineWidth, 0.0f, 0.15f);
+                ImGui::ColorEdit3("Outline color",  &o.material.outlineColor.x);
+                ImGui::PopID();
+            }
 
             ImGui::SeparatorText("Camera");
             ImGui::SliderFloat("Distance", &camera.distance, 3.0f, 25.0f);

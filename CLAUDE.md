@@ -19,13 +19,13 @@ The app opens a window, creates a Vulkan device + swap chain, and each frame dra
 small spinning scene — a smooth **sphere** (non-uniformly scaled into an **ellipsoid**,
 exercising the inverse-transpose normal matrix), a faceted **cube**, a **torus**, on a
 **ground plane** — each cel-shaded with a **banded diffuse fill + inverted-hull
-silhouette outline** in its own color. The scene renders into an **HDR offscreen
+silhouette outline** in its own colors (base + a **per-object outline**). The scene renders into an **HDR offscreen
 target + world-space normal + motion-vector G-buffers** (MRT); a **DiligentFX post
 chain** (via `PostFXContext`) applies **SSAO** (temporal-denoised contact shadows),
 optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bloom**,
 then an **ACES tone-map pass** resolves to the back buffer, with a docked **Dear ImGui**
-debug overlay driving the look live (light, band count, colors, outline width, camera,
-and every post effect). HLSL shaders cross-compile to SPIR-V at runtime.
+debug overlay driving the look live (light, band count, per-object colors + outlines,
+camera, and every post effect). HLSL shaders cross-compile to SPIR-V at runtime.
 
 ## Build
 
@@ -123,9 +123,9 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-1. **Toon pipeline extensions** — instancing; per-object outline tuning; an optional
-   post-process depth+normal edge-detect outline variant. (Non-uniform-scale support —
-   inverse-transpose normal matrix + world-space outline extrude — is done; see MEMORY.md.)
+1. **Toon pipeline extensions** — instancing. (Non-uniform scale + per-object outline
+   tuning are done — inverse-transpose normal matrix, world-space outline extrude, and
+   independent per-object outline color/width; see MEMORY.md.)
 2. **Asset loading** — wire in DiligentTools' `AssetLoader` / `TextureLoader` / glTF
    loaders when pulling in real assets.
 3. **Cross-platform** — Linux (Vulkan) first, then macOS (MoltenVK; needs the GLFW
@@ -133,8 +133,7 @@ matrix-convention, winding, and outline-ordering details.
 4. **Durable docking fix** — fork DiligentTools and pin its imgui to a `docking`
    commit so `git submodule update --recursive` stops reverting the local checkout
    (see MEMORY.md → *Docking*).
-5. **Other backends** — re-enable D3D11/D3D12 individually when there's a concrete
-   reason (older Windows devices; RenderDoc/PIX).
+5. **Other backends** — re-enable D3D11 for older Windows devices support.
 
 ## Constraints
 
