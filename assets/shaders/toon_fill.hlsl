@@ -10,7 +10,7 @@ PSInput VSMain(VSInput vin)
 {
     PSInput o;
     o.Pos         = mul(float4(vin.Pos, 1.0), g_WorldViewProj);
-    o.WorldNormal = mul(float4(vin.Normal, 0.0), g_World).xyz;
+    o.WorldNormal = mul(float4(vin.Normal, 0.0), g_NormalMatrix).xyz;  // inverse-transpose: correct under non-uniform scale
     o.CurrClip    = o.Pos;
     o.PrevClip    = mul(float4(vin.Pos, 1.0), g_PrevWorldViewProj);
     return o;

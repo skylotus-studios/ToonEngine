@@ -71,8 +71,9 @@ struct Material {
     float roughness    = 0.9f;                    // SSR: low = reflective, high = matte
 };
 
-// Per-object placement. Rotation is applied X, then Y, then Z. Scale is assumed
-// uniform (the fill pass transforms normals by the world matrix directly).
+// Per-object placement. Rotation is applied X, then Y, then Z. Scale may be
+// non-uniform: DrawMesh derives an inverse-transpose normal matrix so shading,
+// the G-buffer normals, and the outline width all stay correct under any scale.
 struct Transform {
     Vec3 position      = { 0.0f, 0.0f, 0.0f };
     Vec3 rotationEuler = { 0.0f, 0.0f, 0.0f };   // radians

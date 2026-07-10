@@ -92,15 +92,16 @@ static constexpr TEXTURE_FORMAT kMotionFormat     = TEX_FORMAT_RG16_FLOAT;   // 
 static constexpr TEXTURE_FORMAT kSceneDepthFormat = TEX_FORMAT_D32_FLOAT;
 
 // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
-// (two row-major float4x4 rows + four float4 rows = 192 bytes, 16-aligned).
+// (four row-major float4x4 rows + four float4 rows = 320 bytes, 16-aligned).
 struct ShaderConstants {
     float4x4 worldViewProj;
     float4x4 world;
+    float4x4 normalMatrix;        // inverse-transpose of world (correct normals under non-uniform scale)
     float4x4 prevWorldViewProj;   // previous frame, for motion vectors
     float4   lightDir;
     float4   baseColor;
     float4   outline;      // rgb color, w = extrude width
-    float4   params;       // x = bands, y = ambient
+    float4   params;       // x = bands, y = ambient, z = roughness
 };
 
 // GPU mirror of tonemap.hlsl's PostConstants.
@@ -936,11 +937,18 @@ void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Transform& 
     const float4x4 wvp     = world * m_impl->viewProj;
     const float4x4 prevWvp = WorldFromTransform(prevT) * m_impl->prevViewProj;
 
+    // Normal matrix = inverse-transpose of the world matrix. For rotation + uniform
+    // scale this is proportional to world itself, but non-uniform scale needs the real
+    // inverse-transpose or normals skew (and the shading/AO/SSR read them wrong). Its
+    // 3x3 transpose is world^-1, which the outline VS uses to keep its width uniform.
+    const float4x4 normalMat = world.Inverse().Transpose();
+
     {
         const float3& L = m_impl->lightDir;
         MapHelper<ShaderConstants> cb(m_impl->context, m_impl->constants, MAP_WRITE, MAP_FLAG_DISCARD);
         cb->worldViewProj     = wvp;
         cb->world             = world;
+        cb->normalMatrix      = normalMat;
         cb->prevWorldViewProj = prevWvp;
         cb->lightDir          = float4(L.x, L.y, L.z, 0.0f);
         cb->baseColor         = float4(mat.baseColor.x, mat.baseColor.y, mat.baseColor.z, 1.0f);

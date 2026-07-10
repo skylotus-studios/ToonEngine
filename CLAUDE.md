@@ -16,7 +16,8 @@ behind a rule here.
 ## Current state
 
 The app opens a window, creates a Vulkan device + swap chain, and each frame draws a
-small spinning scene — a smooth **sphere**, a faceted **cube**, a **torus**, on a
+small spinning scene — a smooth **sphere** (non-uniformly scaled into an **ellipsoid**,
+exercising the inverse-transpose normal matrix), a faceted **cube**, a **torus**, on a
 **ground plane** — each cel-shaded with a **banded diffuse fill + inverted-hull
 silhouette outline** in its own color. The scene renders into an **HDR offscreen
 target + world-space normal + motion-vector G-buffers** (MRT); a **DiligentFX post
@@ -122,22 +123,17 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-1. **DiligentFX post effects — done.** Bloom, SSAO, DoF, motion vectors, TAA, and SSR
-   are all in via `PostFXContext` (see MEMORY.md), sharing the normal + motion
-   G-buffers and real `CameraAttribs`. Further effects would reuse the same plumbing,
-   but the roster is comprehensive; tuning + toon-appropriate use is the open work
-   (SSR is subtle on flat matte geometry; TAA softens cel edges — both opt-in).
-2. **Toon pipeline extensions** — inverse-transpose normals for non-uniform scale;
-   instancing; per-object outline tuning; an optional post-process depth+normal
-   edge-detect outline variant.
-3. **Asset loading** — wire in DiligentTools' `AssetLoader` / `TextureLoader` / glTF
+1. **Toon pipeline extensions** — instancing; per-object outline tuning; an optional
+   post-process depth+normal edge-detect outline variant. (Non-uniform-scale support —
+   inverse-transpose normal matrix + world-space outline extrude — is done; see MEMORY.md.)
+2. **Asset loading** — wire in DiligentTools' `AssetLoader` / `TextureLoader` / glTF
    loaders when pulling in real assets.
-4. **Cross-platform** — Linux (Vulkan) first, then macOS (MoltenVK; needs the GLFW
+3. **Cross-platform** — Linux (Vulkan) first, then macOS (MoltenVK; needs the GLFW
    Cocoa `NSView` `.mm` helper).
-5. **Durable docking fix** — fork DiligentTools and pin its imgui to a `docking`
+4. **Durable docking fix** — fork DiligentTools and pin its imgui to a `docking`
    commit so `git submodule update --recursive` stops reverting the local checkout
    (see MEMORY.md → *Docking*).
-6. **Other backends** — re-enable D3D11/D3D12 individually when there's a concrete
+5. **Other backends** — re-enable D3D11/D3D12 individually when there's a concrete
    reason (older Windows devices; RenderDoc/PIX).
 
 ## Constraints

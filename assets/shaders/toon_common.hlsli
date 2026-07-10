@@ -9,7 +9,11 @@
 cbuffer Constants
 {
     row_major float4x4 g_WorldViewProj;     // object -> clip (this frame)
-    row_major float4x4 g_World;             // object -> world (for normals; uniform scale assumed)
+    row_major float4x4 g_World;             // object -> world (positions; outline extrude base)
+    row_major float4x4 g_NormalMatrix;      // inverse-transpose of g_World. Its 3x3 transforms
+                                            // normals correctly under NON-UNIFORM scale (plain
+                                            // g_World would skew them); its 3x3 transpose is
+                                            // world^-1, used to keep the outline width uniform.
     row_major float4x4 g_PrevWorldViewProj; // object -> clip (previous frame), for motion vectors
 
     float4 g_LightDir;   // xyz: normalized direction TO the light;  w unused

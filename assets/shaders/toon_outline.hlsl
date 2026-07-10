@@ -12,9 +12,18 @@ PSInput VSMain(VSInput vin)
     PSInput o;
     // Extrude along the SMOOTH normal so hard edges (e.g. a cube's corners) stay
     // closed — the per-face normal would split shared verts apart and gap.
-    float3 inflated = vin.Pos + vin.SmoothNormal * g_Outline.w;  // object-space extrude
+    //
+    // The extrude is g_Outline.w *world-space* units so it stays uniform under
+    // non-uniform scale (a plain object-space push would be stretched by the scale).
+    // We still offset the object-space position and reuse the existing WVP path: take
+    // the true world normal (g_NormalMatrix), then bring a world-space step back into
+    // object space through world^-1 (the 3x3 transpose of g_NormalMatrix). For uniform
+    // scale this reduces exactly to `vin.Pos + vin.SmoothNormal * g_Outline.w`.
+    float3   worldNormal = normalize(mul(float4(vin.SmoothNormal, 0.0), g_NormalMatrix).xyz);
+    float3x3 worldInv    = transpose((float3x3)g_NormalMatrix);            // world^-1 (3x3)
+    float3   inflated    = vin.Pos + mul(worldNormal, worldInv) * g_Outline.w;
     o.Pos           = mul(float4(inflated, 1.0), g_WorldViewProj);
-    o.WorldNormal   = mul(float4(vin.Normal, 0.0), g_World).xyz;  // world space, for the G-buffer
+    o.WorldNormal   = mul(float4(vin.Normal, 0.0), g_NormalMatrix).xyz;    // world space, for the G-buffer
     o.CurrClip      = o.Pos;
     o.PrevClip      = mul(float4(inflated, 1.0), g_PrevWorldViewProj);
     return o;

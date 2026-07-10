@@ -24,12 +24,13 @@
 #endif
 
 namespace {
-// A scene object: which mesh, how it looks, where it sits, and its spin axis.
+// A scene object: which mesh, how it looks, where it sits, its spin axis, and scale.
 struct Object {
     toon::MeshHandle mesh;
     toon::Material   material;
     toon::Vec3       position;
-    toon::Vec3       spinAxis;   // rotationEuler = spinAxis * angle
+    toon::Vec3       spinAxis;                  // rotationEuler = spinAxis * angle
+    toon::Vec3       scale{ 1.0f, 1.0f, 1.0f }; // per-object scale (may be non-uniform)
 };
 
 // Upload a CPU mesh and return its handle (logs on failure).
@@ -90,11 +91,13 @@ int main() {
         });
 
     // --- Scene ---------------------------------------------------------------
-    // Three primitives in a row: a smooth sphere, a faceted cube (per-face
-    // shading, smooth-normal outline hull), and a torus. Each has its own color.
+    // Three primitives in a row: a smooth sphere — non-uniformly scaled into a
+    // spinning ellipsoid, which exercises the inverse-transpose normal matrix (its
+    // cel bands stay locked to the true surface instead of skewing) — a faceted cube
+    // (per-face shading, smooth-normal outline hull), and a torus. Each its own color.
     std::array<Object, 3> objects{ {
         { Upload(renderer, toon::MakeUVSphere(1.0f, 32, 48),          "sphere"),
-          toon::Material{ {0.85f, 0.30f, 0.35f} }, {-2.8f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f} },
+          toon::Material{ {0.85f, 0.30f, 0.35f} }, {-2.8f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.5f, 0.8f, 1.0f} },
         { Upload(renderer, toon::MakeCube(0.9f),                      "cube"),
           toon::Material{ {0.30f, 0.45f, 0.85f} }, { 0.0f, 0.0f, 0.0f}, {0.5f, 1.0f, 0.0f} },
         { Upload(renderer, toon::MakeTorus(0.75f, 0.32f, 48, 24),     "torus"),
@@ -168,7 +171,8 @@ int main() {
             toon::Transform xform;
             xform.position      = obj.position;
             xform.rotationEuler = obj.spinAxis * spinAngle;
-            toon::Transform prevXform = xform;
+            xform.scale         = obj.scale;
+            toon::Transform prevXform = xform;   // same scale/position; only the spin differs
             prevXform.rotationEuler = obj.spinAxis * prevSpinAngle;
             renderer.DrawMesh(obj.mesh, xform, prevXform, obj.material);
         }

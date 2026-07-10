@@ -170,8 +170,8 @@ uploading a Diligent matrix as-is would transpose it. Two fixes exist (transpose
 on upload, or declare `row_major`); we use **`row_major float4x4` in the cbuffer**
 (`toon_common.hlsli`) and upload verbatim — no `.Transpose()`. Shaders then use
 `mul(float4(pos,1), g_WorldViewProj)` (row-vector). The C++ `ShaderConstants`
-struct must match the `.hlsli` cbuffer field-for-field (2×float4x4 + 4×float4 =
-192 B).
+struct must match the `.hlsli` cbuffer field-for-field (4×float4x4 + 4×float4 =
+320 B — grew as motion vectors and the normal matrix were added).
 
 Projection: `float4x4::Projection(fovY, aspect, near, far, /*NegativeOneToOneZ=*/false)`
 → `[0,1]` depth for Vulkan/D3D. **No manual Y-flip needed** — Diligent handles
@@ -228,6 +228,47 @@ a given corner.
   works regardless of CWD. The `.hlsli` `#include` resolves through the same
   factory. Shipping later would copy `assets/shaders` next to the exe and use a
   relative path.
+
+### Non-uniform scale (roadmap #1): inverse-transpose normal matrix + world-space outline
+
+`Transform::scale` may now be non-uniform. Two things break under non-uniform scale,
+both fixed by **one** added cbuffer matrix, `g_NormalMatrix`:
+
+- **Shading / G-buffer normals.** `n * g_World` is correct only for rotation + *uniform*
+  scale; non-uniform scale skews the normal — and the fill shading, the SSAO normal
+  G-buffer, and SSR all read it, so all three go wrong at once. Fix: the standard
+  **inverse-transpose** normal matrix `(World⁻¹)ᵀ`, built CPU-side in `DrawMesh` as
+  `world.Inverse().Transpose()` and uploaded as `g_NormalMatrix`. Both toon VS shade with
+  `mul(float4(N,0), g_NormalMatrix).xyz`. (Row-vector convention: the normal transform is
+  `n * (M⁻¹)ᵀ` — same formula as column-vector. The 4×4's upper-left 3×3 is the true 3×3
+  inverse-transpose even with translation present, so a full float4x4 is fine — no float3x3
+  cbuffer-packing headaches.)
+- **Outline width.** The inverted hull extruded a constant amount in *object* space, so
+  non-uniform world scale stretched the shell (thick on the scaled axis). Fix: extrude a
+  constant **world-space** width. To reuse the existing WVP path (and leave the
+  motion-vector plumbing untouched), the offset is still applied in object space: take the
+  true world normal `nWorld = normalize(smoothN * g_NormalMatrix)`, then map a world-space
+  step back to object space through `world⁻¹` — which is exactly the **3×3 transpose of
+  `g_NormalMatrix`** (since `g_NormalMatrix` is `World⁻ᵀ`). So
+  `inflated = pos + mul(nWorld, transpose((float3x3)g_NormalMatrix)) * g_Outline.w`, fed to
+  the same `g_WorldViewProj` / `g_PrevWorldViewProj`.
+
+**One matrix, zero regression.** For scale = 1, `(World⁻¹)ᵀ`'s 3×3 is just the rotation
+`R`, so the normal line reduces to `n*R` (= the old `n*g_World` for a pure rotation) and the
+outline `inflated` reduces *algebraically* to `pos + smoothN * g_Outline.w` (the old
+object-space extrude). Every existing object is scale = 1, so the scene stays
+pixel-identical; only a non-uniformly-scaled object differs, and there it's correct. Hence
+no new `viewProj`/`prevWorld` fields and no touch to the motion convention.
+
+**cbuffer grew 256 → 320 B** (`g_NormalMatrix` inserted after `g_World`); the C++
+`ShaderConstants` mirror must match field-for-field — a size mismatch trips a Diligent
+validation error immediately, which is how the layout was confirmed clean.
+
+**Demo:** the scene's sphere carries a fixed non-uniform `Transform::scale` (`{1.5, 0.8,
+1.0}`) → a spinning **ellipsoid**, the textbook normal-matrix test (`main.cpp`'s `Object`
+gained a per-object `scale`). Verified on the RTX 3080 via `PrintWindow`: the ellipsoid's
+cel bands follow the true stretched surface (not skewed toward the wide axis) and its
+outline stays a uniform rim; cube/torus visibly unchanged.
 
 ## DiligentFX / HDR post-processing (roadmap #6)
 
@@ -620,3 +661,13 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   it's visible when enabled (a flat ground reflects the sky → misses). Verified via
   the radiance buffer; clean run, graceful close. See "SSR" above. **All six DiligentFX
   post effects (Bloom, SSAO, DoF, motion vectors, TAA, SSR) are now in.**
+- **2026-07-10** — **Non-uniform scale** (roadmap #1, toon pipeline extensions): added an
+  inverse-transpose **normal matrix** (`g_NormalMatrix`) so the fill shading and the
+  normal/roughness G-buffer stay correct under non-uniform `Transform::scale`, and reworked
+  the inverted-hull outline to extrude a uniform **world-space** width (reusing the WVP path
+  via the 3×3 transpose of the normal matrix = world⁻¹). One added cbuffer matrix
+  (256→320 B); both changes reduce algebraically to the old behavior at scale = 1, so the
+  existing scene is unchanged. Demo: the sphere is now a non-uniformly-scaled spinning
+  **ellipsoid** (`Object` gained a per-object `scale`). Built clean (clang-cl), ran with
+  zero validation errors, graceful close; verified the ellipsoid shading + uniform outline
+  via `PrintWindow`. See "Non-uniform scale" above.
