@@ -13,7 +13,7 @@ Ninja + clang-cl need `mt.exe`/`rc.exe` and the MSVC libs on `PATH`. A plain
 terminal doesn't have these; configure fails with the cryptic
 `CMAKE_MT-NOTFOUND`. In CLion this is handled by a **Visual Studio toolchain**,
 which sources the VS Developer environment automatically (see
-`docs/clion-setup.md`). For command-line builds, `scripts/vsenv.ps1` does the
+`docs/clion-setup-windows.md`). For command-line builds, `scripts/vsenv.ps1` does the
 same: it locates the VS install via `vswhere` and imports the environment by
 sourcing `VsDevCmd.bat -arch=x64 -host_arch=x64` and copying the resulting env
 vars into the session.

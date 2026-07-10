@@ -34,10 +34,12 @@ git submodule update --init --recursive
 ```
 
 **The IDE is CLion.** One-time toolchain + preset setup is in
-**[docs/clion-setup.md](docs/clion-setup.md)**. In short: a CLion **Visual Studio
-toolchain** supplies the VS Developer environment automatically (the Windows SDK
-tools clang-cl needs — otherwise configure fails at `CMAKE_MT-NOTFOUND`), and CLion
-reads `CMakePresets.json` for the `windows-debug` / `windows-release` profiles.
+**[docs/clion-setup-windows.md](docs/clion-setup-windows.md)** (Linux/macOS setup docs
+also exist under `docs/` for when those platforms land — see Platform support below).
+In short: a CLion **Visual Studio toolchain** supplies the VS Developer environment
+automatically (the Windows SDK tools clang-cl needs — otherwise configure fails at
+`CMAKE_MT-NOTFOUND`), and CLion reads `CMakePresets.json` for the `windows-debug` /
+`windows-release` profiles.
 
 **Command line / CI** needs that environment too — dot-source `scripts/vsenv.ps1`
 (portable via vswhere + VsDevCmd.bat), then use the presets:
@@ -66,7 +68,9 @@ external/                 Git submodules (see .gitmodules): DiligentCore/Tools/F
 CMakeLists.txt            add_subdirectory the submodules; disables unused Diligent backends
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
 scripts/vsenv.ps1         Imports the VS Developer env for command-line builds
-docs/clion-setup.md       CLion toolchain + preset + debug setup
+docs/clion-setup-windows.md  CLion toolchain + preset + debug setup (Windows, active)
+docs/clion-setup-linux.md    CLion setup notes for Linux (planned)
+docs/clion-setup-macos.md    CLion setup notes for macOS (planned)
 ```
 
 ## The renderer seam (load-bearing rule)
