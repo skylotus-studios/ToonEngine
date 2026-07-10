@@ -14,12 +14,19 @@ SamplerState g_HDRColor_sampler;
 Texture2D    g_AO;
 SamplerState g_AO_sampler;
 
+// Screen-space reflections (DiligentFX SSR). rgb = reflected radiance, a = hit
+// confidence. When SSR is off, a 1x1 black texture is bound (adds nothing).
+Texture2D    g_SSR;
+SamplerState g_SSR_sampler;
+
 cbuffer PostConstants
 {
     float g_Exposure;      // linear multiplier before tone mapping
     float g_ToneMap;       // 1 = ACES filmic, 0 = clamp only
     float g_OutputSRGB;    // 1 = encode sRGB here (back buffer is a non-sRGB UNORM)
     float g_SSAOStrength;  // 0 = AO ignored; 1 = full occlusion
+    float g_SSRStrength;   // how strongly reflections are added
+    float g_Pad0, g_Pad1, g_Pad2;
 };
 
 struct VSOut
@@ -63,6 +70,12 @@ float4 PSMain(VSOut i) : SV_TARGET
     // read with the stylized look, leaving fully-open areas (1.0) untouched.
     float ao = g_AO.Sample(g_AO_sampler, i.UV).r;
     hdr *= lerp(1.0, ao * ao, g_SSAOStrength);
+
+    // Add screen-space reflections (specular light), weighted by hit confidence. A
+    // simplified composite — no PBR fresnel/BRDF — but enough to mirror the scene in
+    // the low-roughness ground.
+    float4 ssr = g_SSR.Sample(g_SSR_sampler, i.UV);
+    hdr += ssr.rgb * ssr.a * g_SSRStrength;
 
     hdr *= g_Exposure;
 

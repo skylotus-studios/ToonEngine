@@ -21,10 +21,10 @@ small spinning scene — a smooth **sphere**, a faceted **cube**, a **torus**, o
 silhouette outline** in its own color. The scene renders into an **HDR offscreen
 target + world-space normal + motion-vector G-buffers** (MRT); a **DiligentFX post
 chain** (via `PostFXContext`) applies **SSAO** (temporal-denoised contact shadows),
-optional **depth of field**, and **Bloom**, then an **ACES tone-map pass** resolves to
-the back buffer, with a docked **Dear ImGui** debug overlay driving the look live
-(light, band count, colors, outline width, camera, exposure, bloom, SSAO, DoF). HLSL
-shaders cross-compile to SPIR-V at runtime.
+optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bloom**,
+then an **ACES tone-map pass** resolves to the back buffer, with a docked **Dear ImGui**
+debug overlay driving the look live (light, band count, colors, outline width, camera,
+and every post effect). HLSL shaders cross-compile to SPIR-V at runtime.
 
 ## Build
 
@@ -122,10 +122,11 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-1. **More DiligentFX effects** — Bloom, SSAO, and DoF are in (via `PostFXContext`;
-   see MEMORY.md), and the shared context has all real inputs: world-space normal
-   G-buffer, `CameraAttribs`, and motion vectors. Remaining candidates on the same
-   context: TAA and screen-space reflections (SSR) — both reuse this plumbing.
+1. **DiligentFX post effects — done.** Bloom, SSAO, DoF, motion vectors, TAA, and SSR
+   are all in via `PostFXContext` (see MEMORY.md), sharing the normal + motion
+   G-buffers and real `CameraAttribs`. Further effects would reuse the same plumbing,
+   but the roster is comprehensive; tuning + toon-appropriate use is the open work
+   (SSR is subtle on flat matte geometry; TAA softens cel edges — both opt-in).
 2. **Toon pipeline extensions** — inverse-transpose normals for non-uniform scale;
    instancing; per-object outline tuning; an optional post-process depth+normal
    edge-detect outline variant.

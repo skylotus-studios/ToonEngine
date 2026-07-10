@@ -32,7 +32,7 @@ PSOutput PSMain(PSInput pin)
 
     PSOutput o;
     o.Color  = float4(g_BaseColor.rgb * shade, 1.0);
-    o.Normal = float4(N, 0.0);   // world-space normal for the SSAO G-buffer
+    o.Normal = float4(N, g_Params.z);   // world normal (SSAO) + roughness in w (SSR)
     o.Motion = ComputeMotion(pin.CurrClip, pin.PrevClip);
     return o;
 }

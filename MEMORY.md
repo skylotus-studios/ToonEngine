@@ -454,6 +454,37 @@ look. Verified: clean run, graceful close, and (the real test) the spinning obje
 **don't ghost** — edges anti-alias without smearing, confirming motion+jitter are
 right (wrong motion/jitter would trail badly).
 
+## SSR (DiligentFX `ScreenSpaceReflection` via `PostFXContext`, roadmap #1)
+
+Screen-space reflections: ray-marches the depth buffer to reflect the scene in smooth
+surfaces. Reads color + depth + **world-space normals** + a **roughness** input +
+motion; returns reflection *radiance* (`GetSSRRadianceSRV`, `rgb` = radiance, `a` =
+hit confidence).
+
+- **Roughness rides in the normal buffer's `.w`** — no 4th MRT. The toon PS write
+  `float4(N, roughness)`; `Material::roughness` → `g_Params.z` → `.w`. SSR reads the
+  *same* normal texture as both `pNormalBufferSRV` (`.xyz`) and `pMaterialBufferSRV`,
+  with `RoughnessChannel = 3` selecting `.w` (its extract pass dots the RGBA with a
+  channel selector, so any channel works). `IsRoughnessPerceptual = 1` (we store
+  artist roughness). `RoughnessThreshold` (0.2) gates rays: only smooth pixels reflect.
+- **Simplified composite** — the "correct" SSR composite is full PBR specular IBL
+  (BRDF LUT + env map + per-pixel F0), which a toon renderer has none of. So the
+  tone-map just adds `ssr.rgb * ssr.a * strength` (like AO), via a `g_SSR` dynamic
+  input (1x1 **black** default when off). No fresnel; good enough to mirror the scene.
+- `RunPostFX` now outputs `(colorOut, aoOut, ssrOut)` — SSR, like SSAO, is a separate
+  composited texture, not part of the color chain.
+
+**Gotchas / honesty:**
+- **It's subtle on this scene.** SSR only reflects what's *on screen*. A flat ground
+  reflects mostly *up* → the sky/background, which has no geometry → rays miss →
+  black. Verified working by temporarily visualizing the radiance buffer + raising
+  `RoughnessThreshold` to 1.0 (then everything reflected). To make it *visible* by
+  default when enabled, the scene objects are lightly glossy (`roughness 0.15`) so
+  they catch reflections of the ground/each other; the ground is smooth (0.05) but
+  its reflections mostly escape to the sky. A vertical mirror or floating objects over
+  a mirror floor would show it far better.
+- **Off by default** (opt-in) + UI (enable, strength).
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -581,3 +612,11 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   on and records `f2Jitter`; `main.cpp` now sets post params before `SetCamera`. Off by
   default (softens toon edges). Verified: clean run, graceful close, spinning objects
   anti-alias without ghosting (motion+jitter correct). See "TAA" above.
+- **2026-07-10** — **SSR** (roadmap #1, the last DiligentFX effect): DiligentFX
+  `ScreenSpaceReflection`. Roughness packed into the normal buffer's `.w`
+  (`Material::roughness`, `RoughnessChannel = 3`); reflection radiance composited in
+  the tone-map (`g_SSR`, simplified — no PBR BRDF/env-map). `RunPostFX` now returns
+  `(colorOut, aoOut, ssrOut)`. Off by default; objects made lightly glossy (0.15) so
+  it's visible when enabled (a flat ground reflects the sky → misses). Verified via
+  the radiance buffer; clean run, graceful close. See "SSR" above. **All six DiligentFX
+  post effects (Bloom, SSAO, DoF, motion vectors, TAA, SSR) are now in.**

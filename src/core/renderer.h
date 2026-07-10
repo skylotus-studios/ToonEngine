@@ -68,6 +68,7 @@ struct Material {
     float outlineWidth = 0.03f;                   // object-space extrusion
     float bands        = 4.0f;                    // number of shading bands
     float ambient      = 0.25f;                   // shadow-side floor (0 = black)
+    float roughness    = 0.9f;                    // SSR: low = reflective, high = matte
 };
 
 // Per-object placement. Rotation is applied X, then Y, then Z. Scale is assumed
@@ -119,6 +120,14 @@ struct PostParams {
     // softens the crisp cel edges + outlines that define the toon look (but it does
     // clean up SSAO/DoF temporal noise).
     bool taa = false;
+
+    // Screen-space reflections (DiligentFX's ScreenSpaceReflection). Ray-marches the
+    // depth buffer to reflect the scene in smooth surfaces (the ground). Per-object
+    // roughness (Material::roughness) gates it: only low-roughness pixels reflect.
+    // We add the reflection radiance in the resolve (a simplified composite, no PBR
+    // BRDF/env-map). Off by default.
+    bool  ssr         = false;
+    float ssrStrength = 0.6f;    // how strongly the reflection is added
 };
 
 // --- Renderer ---------------------------------------------------------------

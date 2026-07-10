@@ -15,7 +15,7 @@ cbuffer Constants
     float4 g_LightDir;   // xyz: normalized direction TO the light;  w unused
     float4 g_BaseColor;  // rgb: material albedo;                    w unused
     float4 g_Outline;    // rgb: outline color;                      w: object-space extrude width
-    float4 g_Params;     // x: number of shading bands; y: ambient floor; zw unused
+    float4 g_Params;     // x: shading bands; y: ambient floor; z: roughness (SSR); w unused
 };
 
 struct VSInput
@@ -40,7 +40,7 @@ struct PSInput
 struct PSOutput
 {
     float4 Color  : SV_Target0;  // HDR scene color
-    float4 Normal : SV_Target1;  // world-space normal in [-1,1] (xyz); w unused
+    float4 Normal : SV_Target1;  // world-space normal in [-1,1] (xyz); w: roughness (SSR)
     float2 Motion : SV_Target2;  // NDC-space (currNDC - prevNDC); DiligentFX scales to UV
 };
 

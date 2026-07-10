@@ -26,7 +26,7 @@ PSOutput PSMain(PSInput pin)
     // still needs a sane G-buffer normal so SSAO doesn't read garbage there.
     PSOutput o;
     o.Color  = float4(g_Outline.rgb, 1.0);
-    o.Normal = float4(normalize(pin.WorldNormal), 0.0);
+    o.Normal = float4(normalize(pin.WorldNormal), g_Params.z);   // + roughness in w (SSR)
     o.Motion = ComputeMotion(pin.CurrClip, pin.PrevClip);
     return o;
 }

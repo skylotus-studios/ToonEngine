@@ -106,10 +106,11 @@ int main() {
     const toon::MeshHandle groundMesh = Upload(renderer, toon::MakePlane(5.0f), "ground");
     toon::Material groundMaterial{ {0.60f, 0.60f, 0.63f} };
     groundMaterial.outlineWidth = 0.0f;
+    groundMaterial.roughness    = 0.05f;   // smooth -> reflective (SSR); objects stay matte (0.9)
 
     toon::Camera camera;
     camera.distance = 10.0f;
-    camera.pitch    = 0.22f;      // look down a little so the ground (and its AO) shows
+    camera.pitch    = 0.25f;      // look down a little so the ground + its AO show
 
     toon::Vec3 lightDir{ 0.5f, 0.8f, -0.3f };
 
@@ -161,6 +162,7 @@ int main() {
             obj.material.outlineWidth = style.outlineWidth;
             obj.material.bands        = style.bands;
             obj.material.ambient      = style.ambient;
+            obj.material.roughness    = 0.15f;   // lightly glossy so SSR reflects on them
 
             // Current + previous placement — the delta is this object's motion vector.
             toon::Transform xform;
@@ -245,6 +247,10 @@ int main() {
             }
 
             ImGui::Checkbox("TAA (softens toon edges)", &post.taa);
+
+            ImGui::Checkbox("SSR (reflections in the ground)", &post.ssr);
+            if (post.ssr)
+                ImGui::SliderFloat("Reflection strength", &post.ssrStrength, 0.0f, 1.5f);
         }
         ImGui::End();
         renderer.EndUI();

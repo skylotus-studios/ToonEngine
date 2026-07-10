@@ -41,6 +41,7 @@
 #include "ScreenSpaceAmbientOcclusion.hpp"
 #include "DepthOfField.hpp"
 #include "TemporalAntiAliasing.hpp"
+#include "ScreenSpaceReflection.hpp"
 
 // Dear ImGui + Diligent's ImGui renderer backend (DiligentTools). The GLFW
 // platform backend (imgui_impl_glfw.cpp) is compiled directly into ToonEngine
@@ -75,6 +76,7 @@ namespace Diligent { namespace HLSL {
 #include "Shaders/PostProcess/ScreenSpaceAmbientOcclusion/public/ScreenSpaceAmbientOcclusionStructures.fxh"
 #include "Shaders/PostProcess/DepthOfField/public/DepthOfFieldStructures.fxh"
 #include "Shaders/PostProcess/TemporalAntiAliasing/public/TemporalAntiAliasingStructures.fxh"
+#include "Shaders/PostProcess/ScreenSpaceReflection/public/ScreenSpaceReflectionStructures.fxh"
 }} // namespace Diligent::HLSL
 
 namespace toon {
@@ -107,6 +109,8 @@ struct PostConstants {
     float toneMap;       // 1 = ACES
     float outputSRGB;    // 1 = encode sRGB in-shader
     float ssaoStrength;  // 0 = AO ignored, 1 = full occlusion
+    float ssrStrength;   // reflection add strength
+    float pad0, pad1, pad2;
 };
 
 // All Diligent state hides here, behind the PIMPL boundary.
@@ -152,17 +156,21 @@ struct Renderer::Impl {
     std::unique_ptr<ScreenSpaceAmbientOcclusion> ssao;
     std::unique_ptr<DepthOfField>                dof;
     std::unique_ptr<TemporalAntiAliasing>        taa;
+    std::unique_ptr<ScreenSpaceReflection>       ssr;
     float2                         frameJitter{0.0f, 0.0f};  // sub-pixel proj jitter this frame (TAA)
     RefCntAutoPtr<ITexture>        motionVectors;   // RG16F NDC velocity (scene-written)
     RefCntAutoPtr<ITexture>        aoWhite;         // 1x1 white = "fully visible" default
+    RefCntAutoPtr<ITexture>        ssrBlack;        // 1x1 black = "no reflection" default
     HLSL::CameraAttribs            postCamera{};
     Uint32                         frameIndex = 0;
 
     // Run the shared PostFXContext plus whichever effects are enabled. The color
-    // effects chain in order scene -> DoF -> Bloom; `colorOut` is the last stage's
-    // output (or null -> resolve the raw scene). `aoOut` is SSAO's visibility (or
-    // null -> the white default). No-op if no effect is enabled.
-    void RunPostFX(const PostParams& p, ITextureView*& colorOut, ITextureView*& aoOut);
+    // effects chain in order scene -> TAA -> DoF -> Bloom; `colorOut` is the last
+    // stage's output (or null -> resolve the raw scene). `aoOut` (SSAO visibility) and
+    // `ssrOut` (reflection radiance) composite in the resolve — null -> their defaults.
+    // No-op if no effect is enabled.
+    void RunPostFX(const PostParams& p, ITextureView*& colorOut, ITextureView*& aoOut,
+                   ITextureView*& ssrOut);
 
     // Fill postCamera from the stored view/proj so PostFXContext/SSAO can rebuild
     // view-space positions from depth. (Bloom doesn't use it; SSAO does.)
@@ -212,10 +220,12 @@ void Renderer::Impl::FillCameraAttribs(const SwapChainDesc& sc) {
     postCamera.f2Jitter = frameJitter;
 }
 
-void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITextureView*& aoOut) {
+void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITextureView*& aoOut,
+                               ITextureView*& ssrOut) {
     colorOut = nullptr;
     aoOut    = nullptr;
-    if (!p.bloom && !p.ssao && !p.dof && !p.taa) return;
+    ssrOut   = nullptr;
+    if (!p.bloom && !p.ssao && !p.dof && !p.taa && !p.ssr) return;
 
     const SwapChainDesc& sc = swapChain->GetDesc();
     if (sc.Width == 0 || sc.Height == 0) return;
@@ -236,6 +246,7 @@ void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITe
     if (p.ssao)  ssao->PrepareResources(device, context, postFX.get(), ScreenSpaceAmbientOcclusion::FEATURE_FLAG_NONE);
     if (p.dof)   dof->PrepareResources(device, context, postFX.get(), dofFlags);
     if (p.taa)   taa->PrepareResources(device, context, postFX.get(), taaFlags);
+    if (p.ssr)   ssr->PrepareResources(device, context, postFX.get(), ScreenSpaceReflection::FEATURE_FLAG_NONE);
 
     // Run the shared context: real camera + scene depth (as curr and prev) + the
     // scene's motion vectors. This computes the reprojected-depth / closest-motion /
@@ -271,6 +282,29 @@ void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITe
         ra.pSSAOAttribs     = &attribs;
         ssao->Execute(ra);
         aoOut = ssao->GetAmbientOcclusionSRV();
+    }
+
+    if (p.ssr) {
+        // Roughness rides in the normal buffer's .w, so it's both the normal and the
+        // material input (RoughnessChannel = 3 selects .w).
+        ITextureView* normalSRV = normalBuffer->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+
+        HLSL::ScreenSpaceReflectionAttribs attribs{};
+        attribs.RoughnessChannel      = 3;      // roughness is in normal.w
+        attribs.IsRoughnessPerceptual = 1;      // we store artist roughness, not squared
+
+        ScreenSpaceReflection::RenderAttributes ra;
+        ra.pDevice            = device;
+        ra.pDeviceContext     = context;
+        ra.pPostFXContext     = postFX.get();
+        ra.pColorBufferSRV    = hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        ra.pDepthBufferSRV    = depthSRV;
+        ra.pNormalBufferSRV   = normalSRV;
+        ra.pMaterialBufferSRV = normalSRV;      // roughness packed in .w
+        ra.pMotionVectorsSRV  = motionSRV;
+        ra.pSSRAttribs        = &attribs;
+        ssr->Execute(ra);
+        ssrOut = ssr->GetSSRRadianceSRV();
     }
 
     // Color chain: scene -> TAA (resolve) -> DoF (depth blur) -> Bloom (glow). Each
@@ -535,6 +569,7 @@ bool Renderer::CreatePostPipeline() {
     ShaderResourceVariableDesc vars[] = {
         { SHADER_TYPE_PIXEL, "g_HDRColor",    SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
         { SHADER_TYPE_PIXEL, "g_AO",          SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+        { SHADER_TYPE_PIXEL, "g_SSR",         SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
         { SHADER_TYPE_PIXEL, "PostConstants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC  },
     };
     ci.PSODesc.ResourceLayout.Variables    = vars;
@@ -546,6 +581,7 @@ bool Renderer::CreatePostPipeline() {
     ImmutableSamplerDesc immSamplers[] = {
         { SHADER_TYPE_PIXEL, "g_HDRColor", linClamp },
         { SHADER_TYPE_PIXEL, "g_AO",       linClamp },
+        { SHADER_TYPE_PIXEL, "g_SSR",      linClamp },
     };
     ci.PSODesc.ResourceLayout.ImmutableSamplers    = immSamplers;
     ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
@@ -577,22 +613,32 @@ bool Renderer::CreatePostFX() {
     TemporalAntiAliasing::CreateInfo taaCI;
     m_impl->taa = std::make_unique<TemporalAntiAliasing>(m_impl->device, taaCI);
 
-    // 1x1 white texture = "fully visible" — bound to the resolve's g_AO whenever SSAO
-    // is off or not yet ready, so the AO multiply is a no-op without a shader branch.
-    const Uint8    white[4] = { 255, 255, 255, 255 };
-    TextureSubResData sub{ white, 4 };
-    TextureData       texData{ &sub, 1 };
-    TextureDesc wd;
-    wd.Name      = "AO white default";
-    wd.Type      = RESOURCE_DIM_TEX_2D;
-    wd.Width     = 1;
-    wd.Height    = 1;
-    wd.MipLevels = 1;
-    wd.Format    = TEX_FORMAT_RGBA8_UNORM;
-    wd.BindFlags = BIND_SHADER_RESOURCE;
-    m_impl->device->CreateTexture(wd, &texData, &m_impl->aoWhite);
+    ScreenSpaceReflection::CreateInfo ssrCI;
+    m_impl->ssr = std::make_unique<ScreenSpaceReflection>(m_impl->device, ssrCI);
 
-    return m_impl->postFX && m_impl->bloom && m_impl->ssao && m_impl->dof && m_impl->taa && m_impl->aoWhite;
+    // 1x1 constant textures bound to the resolve when the matching effect is off or
+    // not ready, so the composites are no-ops without a shader branch: white = "fully
+    // visible" for g_AO, black = "no reflection" for g_SSR.
+    auto make1x1 = [&](const char* name, const Uint8 rgba[4], RefCntAutoPtr<ITexture>& out) {
+        TextureSubResData sub{ rgba, 4 };
+        TextureData       texData{ &sub, 1 };
+        TextureDesc td;
+        td.Name      = name;
+        td.Type      = RESOURCE_DIM_TEX_2D;
+        td.Width     = 1;
+        td.Height    = 1;
+        td.MipLevels = 1;
+        td.Format    = TEX_FORMAT_RGBA8_UNORM;
+        td.BindFlags = BIND_SHADER_RESOURCE;
+        m_impl->device->CreateTexture(td, &texData, &out);
+    };
+    const Uint8 white[4] = { 255, 255, 255, 255 };
+    const Uint8 black[4] = { 0, 0, 0, 0 };
+    make1x1("AO white default", white, m_impl->aoWhite);
+    make1x1("SSR black default", black, m_impl->ssrBlack);
+
+    return m_impl->postFX && m_impl->bloom && m_impl->ssao && m_impl->dof && m_impl->taa &&
+           m_impl->ssr && m_impl->aoWhite && m_impl->ssrBlack;
 }
 
 bool Renderer::CreateToonPipeline() {
@@ -685,9 +731,11 @@ void Renderer::Shutdown() {
     m_impl->ssao.reset();
     m_impl->dof.reset();
     m_impl->taa.reset();
+    m_impl->ssr.reset();
     m_impl->postFX.reset();
     m_impl->motionVectors.Release();
     m_impl->aoWhite.Release();
+    m_impl->ssrBlack.Release();
     m_impl->tonemapSRB.Release();
     m_impl->tonemapPSO.Release();
     m_impl->postConstants.Release();
@@ -736,13 +784,16 @@ void Renderer::EndScene() {
     //  - colorSRV: the scene after DoF + Bloom (a drop-in HDR resolve input, so
     //    tonemap.hlsl is unchanged), or null -> resolve the raw scene.
     //  - aoSRV: SSAO visibility, or null -> the white "no occlusion" default.
+    //  - ssrSRV: SSR reflection radiance, or null -> the black "no reflection" default.
     ITextureView* colorSRV = nullptr;
     ITextureView* aoSRV    = nullptr;
-    m_impl->RunPostFX(m_impl->post, colorSRV, aoSRV);
+    ITextureView* ssrSRV   = nullptr;
+    m_impl->RunPostFX(m_impl->post, colorSRV, aoSRV, ssrSRV);
 
-    // Resolve inputs: processed color or raw scene; real AO or the white default.
+    // Resolve inputs: processed color or raw scene; real AO/SSR or their 1x1 defaults.
     ITextureView* postInput = colorSRV ? colorSRV : m_impl->hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
     ITextureView* aoInput   = aoSRV    ? aoSRV    : m_impl->aoWhite->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    ITextureView* ssrInput  = ssrSRV   ? ssrSRV   : m_impl->ssrBlack->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 
     // Resolve the HDR source to the back buffer: SSAO darkening + exposure + tone
     // map. Leaves the back-buffer RTV bound so the UI overlay draws on top.
@@ -754,17 +805,21 @@ void Renderer::EndScene() {
         cb->exposure     = m_impl->post.exposure;
         cb->toneMap      = m_impl->post.toneMap ? 1.0f : 0.0f;
         cb->outputSRGB   = m_impl->outputSRGB ? 1.0f : 0.0f;
-        // Only apply strength when a real AO texture was produced (else g_AO is the
-        // white default and the multiply is a no-op anyway).
-        cb->ssaoStrength = aoSRV ? m_impl->post.ssaoStrength : 0.0f;
+        // Only apply strength when the matching effect produced a real texture (else
+        // the default is bound and the composite is a no-op anyway).
+        cb->ssaoStrength = aoSRV  ? m_impl->post.ssaoStrength : 0.0f;
+        cb->ssrStrength  = ssrSRV ? m_impl->post.ssrStrength  : 0.0f;
+        cb->pad0 = cb->pad1 = cb->pad2 = 0.0f;
     }
 
-    // Point the resolve at this frame's HDR source + AO. Both are dynamic, so they
-    // may safely differ from last frame (scene <-> bloom, AO on/off, or a resize).
+    // Point the resolve at this frame's HDR source + AO + SSR. All dynamic, so they
+    // may safely differ from last frame (scene <-> bloom, effects on/off, or a resize).
     if (auto* v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_HDRColor"))
         v->Set(postInput);
     if (auto* v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_AO"))
         v->Set(aoInput);
+    if (auto* v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_SSR"))
+        v->Set(ssrInput);
 
     m_impl->context->SetPipelineState(m_impl->tonemapPSO);
     m_impl->context->CommitShaderResources(m_impl->tonemapSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -890,7 +945,7 @@ void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Transform& 
         cb->lightDir          = float4(L.x, L.y, L.z, 0.0f);
         cb->baseColor         = float4(mat.baseColor.x, mat.baseColor.y, mat.baseColor.z, 1.0f);
         cb->outline           = float4(mat.outlineColor.x, mat.outlineColor.y, mat.outlineColor.z, mat.outlineWidth);
-        cb->params            = float4(mat.bands, mat.ambient, 0.0f, 0.0f);
+        cb->params            = float4(mat.bands, mat.ambient, mat.roughness, 0.0f);
     }
 
     IBuffer*     vbs[]     = { mesh.vertexBuffer };
