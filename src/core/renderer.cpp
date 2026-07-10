@@ -40,6 +40,7 @@
 #include "Bloom.hpp"
 #include "ScreenSpaceAmbientOcclusion.hpp"
 #include "DepthOfField.hpp"
+#include "TemporalAntiAliasing.hpp"
 
 // Dear ImGui + Diligent's ImGui renderer backend (DiligentTools). The GLFW
 // platform backend (imgui_impl_glfw.cpp) is compiled directly into ToonEngine
@@ -73,6 +74,7 @@ namespace Diligent { namespace HLSL {
 #include "Shaders/PostProcess/Bloom/public/BloomStructures.fxh"
 #include "Shaders/PostProcess/ScreenSpaceAmbientOcclusion/public/ScreenSpaceAmbientOcclusionStructures.fxh"
 #include "Shaders/PostProcess/DepthOfField/public/DepthOfFieldStructures.fxh"
+#include "Shaders/PostProcess/TemporalAntiAliasing/public/TemporalAntiAliasingStructures.fxh"
 }} // namespace Diligent::HLSL
 
 namespace toon {
@@ -149,6 +151,8 @@ struct Renderer::Impl {
     std::unique_ptr<Bloom>                       bloom;
     std::unique_ptr<ScreenSpaceAmbientOcclusion> ssao;
     std::unique_ptr<DepthOfField>                dof;
+    std::unique_ptr<TemporalAntiAliasing>        taa;
+    float2                         frameJitter{0.0f, 0.0f};  // sub-pixel proj jitter this frame (TAA)
     RefCntAutoPtr<ITexture>        motionVectors;   // RG16F NDC velocity (scene-written)
     RefCntAutoPtr<ITexture>        aoWhite;         // 1x1 white = "fully visible" default
     HLSL::CameraAttribs            postCamera{};
@@ -202,12 +206,16 @@ void Renderer::Impl::FillCameraAttribs(const SwapChainDesc& sc) {
     // Focal length + sensor size keep their struct defaults (50mm / 36mm).
     postCamera.fFocusDistance = post.dofFocusDist;
     postCamera.fFStop         = post.dofFStop;
+
+    // Sub-pixel jitter used to render this frame (0 unless TAA is on). PostFX shaders
+    // remove it via f2Jitter when reprojecting.
+    postCamera.f2Jitter = frameJitter;
 }
 
 void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITextureView*& aoOut) {
     colorOut = nullptr;
     aoOut    = nullptr;
-    if (!p.bloom && !p.ssao && !p.dof) return;
+    if (!p.bloom && !p.ssao && !p.dof && !p.taa) return;
 
     const SwapChainDesc& sc = swapChain->GetDesc();
     if (sc.Width == 0 || sc.Height == 0) return;
@@ -215,6 +223,7 @@ void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITe
     // DoF uses the motion vectors (via the context) to smooth its circle-of-confusion
     // over time — safe now that motion is real.
     const auto dofFlags = DepthOfField::FEATURE_FLAG_ENABLE_TEMPORAL_SMOOTHING;
+    const auto taaFlags = TemporalAntiAliasing::FEATURE_FLAG_BICUBIC_FILTER;
 
     // Prepare the shared context + the enabled effects (each early-outs on unchanged
     // size). The PSOs are what PostFXContext::IsPSOsReady() gates on below.
@@ -226,6 +235,7 @@ void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITe
     if (p.bloom) bloom->PrepareResources(device, context, postFX.get(), Bloom::FEATURE_FLAG_NONE);
     if (p.ssao)  ssao->PrepareResources(device, context, postFX.get(), ScreenSpaceAmbientOcclusion::FEATURE_FLAG_NONE);
     if (p.dof)   dof->PrepareResources(device, context, postFX.get(), dofFlags);
+    if (p.taa)   taa->PrepareResources(device, context, postFX.get(), taaFlags);
 
     // Run the shared context: real camera + scene depth (as curr and prev) + the
     // scene's motion vectors. This computes the reprojected-depth / closest-motion /
@@ -263,9 +273,24 @@ void Renderer::Impl::RunPostFX(const PostParams& p, ITextureView*& colorOut, ITe
         aoOut = ssao->GetAmbientOcclusionSRV();
     }
 
-    // Color chain: scene -> DoF (depth blur) -> Bloom (glow). Each enabled stage
-    // reads the previous stage's output, so colorOut ends on the last one that ran.
+    // Color chain: scene -> TAA (resolve) -> DoF (depth blur) -> Bloom (glow). Each
+    // enabled stage reads the previous stage's output, so colorOut ends on the last
+    // one that ran. TAA is first so DoF/Bloom process the anti-aliased image.
     ITextureView* colorSRV = hdrColor->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+
+    if (p.taa) {
+        HLSL::TemporalAntiAliasingAttribs attribs{};   // defaults (stability 0.9375)
+
+        TemporalAntiAliasing::RenderAttributes tra;
+        tra.pDevice         = device;
+        tra.pDeviceContext  = context;
+        tra.pPostFXContext  = postFX.get();
+        tra.pColorBufferSRV = colorSRV;
+        tra.pTAAAttribs     = &attribs;
+        taa->Execute(tra);
+        colorSRV = taa->GetAccumulatedFrameSRV();
+        colorOut = colorSRV;
+    }
 
     if (p.dof) {
         HLSL::DepthOfFieldAttribs attribs{};
@@ -549,6 +574,9 @@ bool Renderer::CreatePostFX() {
     DepthOfField::CreateInfo dofCI;
     m_impl->dof = std::make_unique<DepthOfField>(m_impl->device, dofCI);
 
+    TemporalAntiAliasing::CreateInfo taaCI;
+    m_impl->taa = std::make_unique<TemporalAntiAliasing>(m_impl->device, taaCI);
+
     // 1x1 white texture = "fully visible" — bound to the resolve's g_AO whenever SSAO
     // is off or not yet ready, so the AO multiply is a no-op without a shader branch.
     const Uint8    white[4] = { 255, 255, 255, 255 };
@@ -564,7 +592,7 @@ bool Renderer::CreatePostFX() {
     wd.BindFlags = BIND_SHADER_RESOURCE;
     m_impl->device->CreateTexture(wd, &texData, &m_impl->aoWhite);
 
-    return m_impl->postFX && m_impl->bloom && m_impl->ssao && m_impl->dof && m_impl->aoWhite;
+    return m_impl->postFX && m_impl->bloom && m_impl->ssao && m_impl->dof && m_impl->taa && m_impl->aoWhite;
 }
 
 bool Renderer::CreateToonPipeline() {
@@ -656,6 +684,7 @@ void Renderer::Shutdown() {
     m_impl->bloom.reset();            // DiligentFX effect objects own GPU resources
     m_impl->ssao.reset();
     m_impl->dof.reset();
+    m_impl->taa.reset();
     m_impl->postFX.reset();
     m_impl->motionVectors.Release();
     m_impl->aoWhite.Release();
@@ -802,7 +831,17 @@ void Renderer::SetCamera(const Camera& cam) {
                           float4x4::RotationX(cam.pitch) *
                           float4x4::Translation(0.0f, 0.0f, cam.distance);
     // NegativeOneToOneZ = false -> [0,1] depth range for Vulkan/D3D.
-    const float4x4 proj = float4x4::Projection(cam.fovY, aspect, cam.nearZ, cam.farZ, false);
+    float4x4 proj = float4x4::Projection(cam.fovY, aspect, cam.nearZ, cam.farZ, false);
+
+    // TAA: jitter the projection by a sub-pixel offset so accumulated frames cover
+    // different sample positions. GetJitterOffset returns 0 until TAA is ready (and
+    // we only jitter when it's on), so the scene isn't shifted otherwise. The jitter
+    // is recorded in the camera attribs (FillCameraAttribs) so PostFX can undo it.
+    m_impl->frameJitter = float2(0.0f, 0.0f);
+    if (m_impl->post.taa && m_impl->taa) {
+        m_impl->frameJitter = m_impl->taa->GetJitterOffset();
+        proj = TemporalAntiAliasing::GetJitteredProjMatrix(proj, m_impl->frameJitter);
+    }
 
     // Keep view/proj (and near/far) split, not just their product: the SSAO camera
     // attribs (FillCameraAttribs) need each matrix and its inverse. Snapshot the old

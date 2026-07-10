@@ -138,6 +138,9 @@ int main() {
 
         renderer.BeginFrame(clearColor);
 
+        // Post params up front: SetCamera reads them to decide the TAA jitter.
+        renderer.SetPostParams(post);
+
         // Scene first, so the debug UI overlays it.
         renderer.SetCamera(camera);
         renderer.SetLight(lightDir);
@@ -168,8 +171,7 @@ int main() {
             renderer.DrawMesh(obj.mesh, xform, prevXform, obj.material);
         }
 
-        // Resolve the HDR scene to the back buffer (exposure + tone map).
-        renderer.SetPostParams(post);
+        // Resolve the HDR scene to the back buffer (post effects + exposure + tone map).
         renderer.EndScene();
 
         renderer.BeginUI();
@@ -241,6 +243,8 @@ int main() {
                 ImGui::SliderFloat("Aperture (f-stop)", &post.dofFStop, 1.0f, 16.0f);
                 ImGui::SliderFloat("Max blur (CoC)", &post.dofMaxCoC, 0.0f, 0.05f, "%.3f");
             }
+
+            ImGui::Checkbox("TAA (softens toon edges)", &post.taa);
         }
         ImGui::End();
         renderer.EndUI();

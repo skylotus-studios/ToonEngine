@@ -113,6 +113,12 @@ struct PostParams {
     float dofFocusDist   = 10.5f;   // world-space distance in sharp focus (~the objects)
     float dofFStop       = 6.0f;    // aperture — smaller = shallower focus = more blur
     float dofMaxCoC      = 0.015f;  // max circle-of-confusion (blur size), texture-UV units
+
+    // Temporal anti-aliasing (DiligentFX's TemporalAntiAliasing). Jitters the camera
+    // sub-pixel each frame and accumulates via motion vectors. Off by default: it
+    // softens the crisp cel edges + outlines that define the toon look (but it does
+    // clean up SSAO/DoF temporal noise).
+    bool taa = false;
 };
 
 // --- Renderer ---------------------------------------------------------------

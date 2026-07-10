@@ -428,6 +428,32 @@ smoothing (`FEATURE_FLAG_ENABLE_TEMPORAL_SMOOTHING`).
   blurs. Verified visually (cube sharp, bokeh on out-of-focus) + clean run / graceful
   close. f/2 was way too shallow (everything blurred); a higher f-stop widens focus.
 
+## TAA (DiligentFX `TemporalAntiAliasing` via `PostFXContext`, roadmap #1)
+
+Temporal anti-aliasing: jitter the camera sub-pixel each frame, accumulate over time
+via the motion vectors. Reads only the scene color (context supplies motion+camera);
+returns the resolved frame (`GetAccumulatedFrameSRV`). First in the color chain
+(scene → **TAA** → DoF → Bloom) so the downstream effects see the clean image.
+
+**Jitter coupling (the fiddly part):** the *scene* must render with the jittered
+projection, and the jitter recorded so PostFX can undo it.
+- `taa->GetJitterOffset()` returns the NDC sub-pixel offset (Halton, 0 until ready).
+- `SetCamera` applies it with `TemporalAntiAliasing::GetJitteredProjMatrix(proj, j)`
+  (only when `post.taa`), stores `frameJitter`, and everything downstream (viewProj,
+  DrawMesh, depth) renders jittered.
+- `FillCameraAttribs` writes `frameJitter` to `f2Jitter`; PostFX reprojection removes
+  it (`ComputeReprojectedDepth.fx`: `+= NDC_TO_UVD.xy * f2Jitter`).
+- **Frame order matters:** `main.cpp` now calls `SetPostParams` **before** `SetCamera`
+  so the jitter decision sees `post.taa`.
+- Motion vectors are computed from the jittered clips (include the sub-pixel jitter
+  delta) — technically imprecise, but it's < 1px and TAA tolerates it; not worth
+  threading an un-jittered WVP through the cbuffer.
+
+**Off by default** — it softens the crisp cel edges + outlines that define the toon
+look. Verified: clean run, graceful close, and (the real test) the spinning objects
+**don't ghost** — edges anti-alias without smearing, confirming motion+jitter are
+right (wrong motion/jitter would trail badly).
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -550,3 +576,8 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   in `CameraAttribs` from `PostParams`. Off by default (strong look); tuned defaults
   (focus 10.5, f/6). Verified: clean run, graceful close, visible depth blur (cube in
   focus, bokeh elsewhere). See "Depth of field" above.
+- **2026-07-10** — **TAA** (roadmap #1): DiligentFX `TemporalAntiAliasing`, first in the
+  color chain. `SetCamera` jitters the projection (`GetJitteredProjMatrix`) when TAA is
+  on and records `f2Jitter`; `main.cpp` now sets post params before `SetCamera`. Off by
+  default (softens toon edges). Verified: clean run, graceful close, spinning objects
+  anti-alias without ghosting (motion+jitter correct). See "TAA" above.
