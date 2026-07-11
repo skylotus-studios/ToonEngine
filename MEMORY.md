@@ -568,6 +568,47 @@ captures the client area as pure black (the DWM-drawn title bar still shows).
 content.** That's how the toon sphere was verified. (Windows also reports the
 window smaller than requested under display scaling — cosmetic.)
 
+## ToonEngineOld — carry-over reference (roadmap: renderer → engine)
+
+`ToonEngineOld/` (untracked, **gitignored**, temporary — slated for removal once ported;
+`src` + `assets` only) is the old from-scratch **OpenGL 4.1** engine, kept as a porting reference. It's the inverse of the
+current tree: a real little **editor** (scene graph, inspector + gizmos, model loader,
+input, camera, serialization, shadows, grid, sprites) on the weaker renderer. The new
+engine has the strong Vulkan renderer but was a hardcoded demo — so the roadmap's next arc
+is porting that engine/editor layer *above the seam* onto Diligent.
+
+**Seam note:** the old seam is the same "opaque handles behind a backend-agnostic header"
+idea, but **low-level** (`BindShader`/`SetUniform`/immediate binds/framebuffers) — it does
+NOT map onto Diligent's PSO/SRB model, so the old `renderer.cpp` is reference-only. The
+value is everything above the seam; our seam grows instead (textured materials, a UV/bone
+vertex, a framebuffer path for shadows).
+
+**Carry-over map** (per system):
+- **assets** — fonts (BaiJamjuree, OpenSans), 4 test models, icon: **copied** into
+  `assets/` (models are Git LFS). The GLSL shaders stay in `ToonEngineOld` as HLSL-port
+  references — esp. `toon.frag` (spec + rim + shadow ramp, richer than our current fill),
+  `grid.frag`, `shadow.*`.
+- **scene/scene.{h,cpp}** — entity **tree** (flat vector + parent index, root at 0, cached
+  world matrices, add/delete/reparent/duplicate, world-preserving reparent). High value;
+  port glm→Diligent math and old handles→our `MeshHandle`/`Material`.
+- **scene/model_loader** — cgltf (glTF) + ufbx (FBX) → meshes/materials/skeleton/anim.
+  **Decision: use DiligentTools' glTF loader instead** (native integration) → glTF/GLB
+  only, no FBX (`dragon.fbx` won't load via that path; `dragon.gltf` does). Keep the old
+  loader as the reference if FBX / skeleton parsing is ever wanted.
+- **ui/overlay** — inspector + `RenderSettings` (bands, spec, rim, shadow ramp, outline
+  incl. a screen-space-width flag, CSM, grid, sky, gizmo) + **ImGuizmo** transform gizmos.
+  ImGui logic ports (our seam already exposes ImGui); ImGuizmo must be vendored.
+- **scene/camera** — orbit/pan/zoom/fly/focus editor camera (replaces our turntable).
+- **core/input/** — keyboard/mouse/gamepad + action maps + rebinding + an ImGui capture
+  gate; GLFW-based, largely direct.
+- **core/animator + animation** — skeleton + keyframe clips; after skinned loading.
+- **ui/file_browser + themes** — asset browser + 3 themes; ImGui, mostly portable.
+- **core/renderer (GL) + main.cpp** — reference only.
+
+**Materials will need textures:** the old `Material` is `baseColor + texture + normalMap`,
+and loaded models (helmet.glb) carry albedo/normal maps — so Phase A adds texture handles
+to the seam + a textured cel fill, and the toon `Vertex` gains UVs (bone weights later).
+
 ## Architecture decisions
 
 ### Renderer seam: PIMPL, not a virtual `IRenderer`
@@ -702,3 +743,17 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   + a global "Outline width ×" multiplier (`Object` gained a `name`). App-only — the
   Material/shader already carried per-object outlines. Built clean, verified three distinct
   outlines via `PrintWindow`. See "Per-object outline tuning" above.
+- **2026-07-10** — **Roadmap redesign + ToonEngineOld carry-over.** With the renderer core
+  done, pivoted the roadmap from "more rendering" to the **engine/editor layer** (phases:
+  real assets → scene graph → editor UI → environment → animation/2D; instancing deferred),
+  porting `ToonEngineOld`'s systems onto the Vulkan seam. Surveyed the old engine (untracked
+  reference folder) and copied its portable assets (fonts, 4 test models, icon) into
+  `assets/` — models via **Git LFS** (`.gitattributes` tracks `assets/models/**`). Model
+  loading will use **DiligentTools' glTF loader** (glTF/GLB only; the old cgltf/ufbx loader
+  is the FBX reference). Next up: Phase A — textured materials + load/cel-shade a real
+  model. See "ToonEngineOld — carry-over reference" above. Also **codified the
+  build-on-Diligent principle** in CLAUDE.md (use Diligent's own implementations — loaders,
+  FX, ImGui; the seam only tames boilerplate + keeps the app/public API backend-agnostic,
+  never 1:1 abstraction) and generalized the seam rule: Diligent lives in the engine's
+  implementation TUs, not just `renderer.cpp` — only the app layer + public headers stay
+  Diligent-free.

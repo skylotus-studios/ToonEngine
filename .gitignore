@@ -26,3 +26,7 @@ Thumbs.db
 # NOTE: external/DiligentCore, external/DiligentTools, external/DiligentFX and
 # external/glfw are git submodules — tracked via .gitmodules, not committed as
 # files, so they are not ignored here.
+
+# Local reference copy of the old OpenGL engine (porting/carry-over source only —
+# not part of the build; keeps its own duplicate of the LFS models). Stays local.
+/ToonEngineOld/

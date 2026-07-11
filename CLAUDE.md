@@ -13,6 +13,21 @@ behind a rule here.
 > **History:** started as a from-scratch OpenGL 4.1 renderer (`main` branch), then
 > pivoted to Diligent + Vulkan on the `diligent` branch. Mine `main` for reference only.
 
+## Guiding principle — build *on* Diligent, don't reinvent it
+
+**Diligent Engine (Core + Tools + FX) is the framework ToonEngine is built on.** Wherever
+Diligent already implements something — glTF / asset / texture loaders, the ImGui
+integration, post-processing (DiligentFX), shader cross-compilation, camera & math
+utilities — **use Diligent's implementation; don't hand-roll an equivalent.**
+
+What ToonEngine adds is a **thin layer that tames Diligent's boilerplate** (the setup
+dance a task needs) and keeps the app/game-facing API **backend- and platform-agnostic**
+(any Diligent backend / OS). That is the layer's *only* justification — it is **not**
+abstraction for its own sake. Never wrap a Diligent call 1:1 just to hide it; a seam type
+earns its place only by removing real boilerplate or by being the portability boundary.
+The goal is to *write on Diligent's framework*, not to live in a renderer that
+re-implements it.
+
 ## Current state
 
 The app opens a window, creates a Vulkan device + swap chain, and each frame draws a
@@ -36,6 +51,9 @@ submodules** (no vcpkg) — clone recursively (DiligentTools has nested submodul
 ```
 git submodule update --init --recursive
 ```
+
+Model assets under `assets/models/` use **Git LFS** — run `git lfs install` once, then
+`git lfs pull` to fetch them (a plain clone leaves pointer files). Fonts + icon are normal.
 
 **The IDE is CLion.** One-time toolchain + preset setup is in
 **[docs/clion-setup-windows.md](docs/clion-setup-windows.md)** (Linux/macOS setup docs
@@ -64,10 +82,12 @@ src/
   main.cpp                Entry point: GLFW window + game loop; builds the scene, drives Renderer (no Diligent headers)
   core/
     renderer.h            The seam: opaque handles + scene types (Vertex/Camera/ToonParams/Transform) + PIMPL Renderer
-    renderer.cpp          Diligent Engine (Vulkan): toon PSOs/shaders/mesh buffers + ImGui-Diligent glue — ALL Diligent code here
+    renderer.cpp          Diligent (Vulkan) backend behind the seam: toon PSOs/shaders/mesh buffers + DiligentFX post chain + ImGui-Diligent glue
     math.h                Minimal Diligent-free vector types for the seam's public API
     primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus/plane) -> toon::MeshData
 assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + tonemap.hlsl (HLSL->SPIR-V at runtime)
+assets/models/            glTF/GLB/FBX test models (helmet/fox/dragon) — Git LFS
+assets/fonts/             UI fonts (BaiJamjuree, OpenSans) for the editor overlay
 external/                 Git submodules (see .gitmodules): DiligentCore/Tools/FX, glfw
 CMakeLists.txt            add_subdirectory the submodules; disables unused Diligent backends
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
@@ -81,13 +101,16 @@ docs/style-guide.md          C++ house style (formatting + comments + seam rules
 
 ## The renderer seam (load-bearing rule)
 
-**Diligent stays behind the seam.** `core/renderer.h` exposes only opaque handles
-(`TextureHandle`/`BufferHandle`/`ShaderHandle`/`PipelineHandle`) and a PIMPL
-`Renderer`; **all** Diligent headers and `Diligent::` types live in
-`core/renderer.cpp` — the only translation unit allowed to name one. `main.cpp` just
-calls `Renderer::Init / BeginFrame / DrawMesh / EndScene / EndFrame / Resize / InitUI
-/ BeginUI / EndUI`. A backend swap or console port then becomes a new
-`renderer_*.cpp`, not a rewrite.
+**Diligent stays out of the app/game layer, not out of the engine.** `core/renderer.h`
+exposes only opaque handles (`TextureHandle`/`BufferHandle`/`ShaderHandle`/`PipelineHandle`)
+and a PIMPL `Renderer`; Diligent headers and `Diligent::` types live in the engine's
+**implementation** TUs (`core/renderer.cpp` today; Diligent-backed systems such as the
+asset loader as the engine grows — per the guiding principle, built directly on Diligent's
+modules). The invariant is that the **app/game layer (`main.cpp`) and the public headers
+stay Diligent-free and backend-agnostic** — not that a single file owns all Diligent.
+`main.cpp` just calls `Renderer::Init / BeginFrame / DrawMesh / EndScene / EndFrame /
+Resize / InitUI / BeginUI / EndUI`. A backend swap or console port then swaps those
+implementation TUs, not a rewrite.
 
 **Dear ImGui is exempt** — it's a plain UI library; engine/game code may `#include
 "imgui.h"` and call `ImGui::` directly (as `main.cpp` does). Only its Diligent render
@@ -123,22 +146,43 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-1. **Toon pipeline extensions** — instancing. (Non-uniform scale + per-object outline
-   tuning are done — inverse-transpose normal matrix, world-space outline extrude, and
-   independent per-object outline color/width; see MEMORY.md.)
-2. **Asset loading** — wire in DiligentTools' `AssetLoader` / `TextureLoader` / glTF
-   loaders when pulling in real assets.
-3. **Cross-platform** — Linux (Vulkan) first, then macOS (MoltenVK; needs the GLFW
-   Cocoa `NSView` `.mm` helper).
-4. **Durable docking fix** — fork DiligentTools and pin its imgui to a `docking`
-   commit so `git submodule update --recursive` stops reverting the local checkout
-   (see MEMORY.md → *Docking*).
-5. **Other backends** — re-enable D3D11 for older Windows devices support.
+The renderer core is done (toon fill + outline, HDR, full DiligentFX post stack). The next
+arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven systems
+(scene graph, model loading, inspector, input, camera) onto the Vulkan seam. See MEMORY.md
+→ *ToonEngineOld carry-over* for the survey + per-system porting notes.
+
+**A. Real assets** (in progress)
+1. **Textured materials** — UVs on the toon vertex + texture create/bind in the seam; the
+   cel fill samples an albedo map (and optionally a normal map).
+2. **Model loading** — DiligentTools' glTF/GLB loader → our meshes + textured materials;
+   cel-shade `assets/models/helmet.glb` / `fox.glb`. glTF-only via this path (the old
+   cgltf/ufbx loader in `ToonEngineOld` is the reference if FBX is ever needed).
+
+**B. Scene & editor**
+3. **Scene graph** — port `scene.{h,cpp}` (entity tree, world-matrix cache,
+   add/delete/reparent/duplicate); drive `DrawMesh` from the scene, not a hardcoded array.
+4. **Editor camera + input** — port the orbit/pan/zoom/fly `Camera` and the `Input` layer
+   (action maps + the ImGui capture gate).
+5. **Editor UI** — inspector + hierarchy panel + themes/fonts + ImGuizmo transform gizmos.
+6. **Scene serialization** — save/load scenes to disk.
+
+**C. Environment & fidelity**
+7. **Grid + sky gradient** — HLSL ports of the old editor backdrop.
+8. **Cascaded shadow maps** — toon-friendly directional shadows (needs seam framebuffer /
+   depth-array support).
+
+**D. Later**
+9. **Skeletal animation** (play the fox/dragon clips) · 10. **2D / sprites** ·
+   11. **Instancing** (deferred — a per-instance draw path for many-object scenes).
+
+**Infra / cross-cutting** (unscheduled): Linux (Vulkan) then macOS (MoltenVK, needs the
+GLFW Cocoa `NSView` `.mm` helper); durable docking fix (fork DiligentTools, pin imgui to a
+`docking` commit — see MEMORY.md → *Docking*); re-enable D3D11 for older Windows devices.
 
 ## Constraints
 
 - **C++17**, **clang everywhere** (clang-cl on Windows, Apple Clang on macOS).
 - **Windows builds require a VS Developer environment.**
 - Dependencies are **git submodules**, not vcpkg.
-- Keep Diligent behind the renderer seam — no Diligent headers outside
-  `core/renderer.cpp`.
+- Keep the **app/game layer + public headers Diligent-free and backend-agnostic**;
+  Diligent lives in the engine's implementation TUs (see the seam rule + guiding principle).
