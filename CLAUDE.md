@@ -42,11 +42,13 @@ texture** + an **inverted-hull outline** (via DiligentTools' glTF loader). The s
 target + world-space normal + motion-vector G-buffers** (MRT); a **DiligentFX post
 chain** (via `PostFXContext`) applies **SSAO** (temporal-denoised contact shadows),
 optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bloom**,
-then an **ACES tone-map pass** resolves to the back buffer, with a docked **Dear ImGui**
-debug overlay driving the look live (light, band count, per-object colors + outlines, and
-every post effect). An **editor camera** navigates the scene — right-drag orbit (+ WASD/QE
-fly), middle-drag pan, scroll zoom, F focus — with input suppressed while using the UI.
-HLSL shaders cross-compile to SPIR-V at runtime.
+then an **ACES tone-map pass** resolves to the back buffer. A docked **Dear ImGui editor**
+(dark theme) drives it live: a **Scene Hierarchy** panel (select / add-child / duplicate /
+delete / drag-drop reparent), an **Inspector** for the selected entity (name, transform,
+material), and a **Debug** panel (light, band count, global style, and every post effect). An
+**editor camera** navigates the scene — right-drag orbit (+ WASD/QE fly), middle-drag pan,
+scroll zoom, F focus — with input suppressed while using the UI. HLSL shaders cross-compile to
+SPIR-V at runtime.
 
 ## Build
 
@@ -157,35 +159,27 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
 (scene graph, model loading, inspector, input, camera) onto the Vulkan seam. See MEMORY.md
 → *ToonEngineOld carry-over* for the survey + per-system porting notes.
 
-**A. Real assets** — glTF model loading **done**: `assets/models/helmet.glb` loads via
-   DiligentTools' `GLTF::Model` (`LoadModel` / `DrawModel` behind the seam) and cel-shades
-   with its **albedo texture** in the HDR/MRT/post pipeline (glTF/GLB only — the old
-   cgltf/ufbx loader in `ToonEngineOld` is the FBX reference). See MEMORY.md → *glTF model
-   loading* for the loader gotchas. The model also gets an **inverted-hull outline**
-   (extruded along the shading normal — smooth surfaces stay closed). Follow-ups: normal /
-   metallic-roughness maps, `fox.glb` / `dragon.gltf`; procedural-mesh texturing if wanted.
+**A. Editor**
 
-**B. Scene & editor**
-3. **Scene graph** — **done**: `core/scene.{h,cpp}` — an entity tree with hierarchy-composed
-   world matrices; the render loop walks the scene (via the new `Mat4` `DrawMesh`/`DrawModel`
-   overloads), not a hardcoded array. `scene.cpp` is a Diligent-using TU (composition math).
-   The editor-triggered mutations (reparent / duplicate / topo-reorder / decompose) are
-   deferred to item 5, which exercises them.
-4. **Editor camera + input** — **done**: an orbit-around-pivot `Camera` (extends the LH
-   turntable) + `core/camera.{h,cpp}` controls (orbit/pan/zoom/fly/focus) + `core/input.{h,cpp}`
-   (GLFW polling + ImGui capture gate). Right-drag orbit / mid-drag pan / scroll zoom / WASD
-   fly / F focus. The full action-map/rebinding system is deferred (see MEMORY.md).
-5. **Editor UI** (next) — inspector + hierarchy panel + themes/fonts + ImGuizmo transform gizmos.
-6. **Scene serialization** — save/load scenes to disk.
+1. **Editor UI** — **part 1 done**: a **Scene Hierarchy** panel (flat indented entity list;
+   select / add-child / duplicate / delete / drag-drop reparent, via the deferred-mutation
+   pattern), an **Inspector** (name, transform — rotation in degrees, material), scene
+   **selection** (`Scene::selected`), a dark **theme**, and a `DockBuilder` layout (hierarchy
+   left, inspector + debug right, scene center). See MEMORY.md → *Editor UI*. **Part 2 (next):**
+   **ImGuizmo** transform gizmos + the matrix **decompose** (world→local TRS) they need →
+   **world-preserving reparent**; custom **fonts** (needs an `InitUI` hook); light/sprite
+   components.
+2. **Scene serialization** — save/load scenes to disk.
 
-**C. Environment & fidelity**
-7. **Grid + sky gradient** — HLSL ports of the old editor backdrop.
-8. **Cascaded shadow maps** — toon-friendly directional shadows (needs seam framebuffer /
+**B. Environment & fidelity**
+1. **Grid + sky gradient** — HLSL ports of the old editor backdrop.
+2. **Cascaded shadow maps** — toon-friendly directional shadows (needs seam framebuffer /
    depth-array support).
 
 **D. Later**
-9. **Skeletal animation** (play the fox/dragon clips) · 10. **2D / sprites** ·
-   11. **Instancing** (deferred — a per-instance draw path for many-object scenes).
+1. **Skeletal animation** (play the fox/dragon clips) 
+2. **2D / sprites** ·
+3. **Instancing** (deferred — a per-instance draw path for many-object scenes).
 
 **Infra / cross-cutting** (unscheduled): Linux (Vulkan) then macOS (MoltenVK, needs the
 GLFW Cocoa `NSView` `.mm` helper); durable docking fix (fork DiligentTools, pin imgui to a

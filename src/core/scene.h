@@ -37,6 +37,7 @@ struct Entity {
 // pass composes world transforms. Index 0 is the implicit root.
 struct Scene {
     std::vector<Entity> entities;
+    int                 selected = -1;   // index into entities; -1 = none (editor selection)
 };
 
 // Ensure a root exists at index 0 (parent = -1, no transform). Call once, before adding
@@ -51,6 +52,32 @@ int AddEntity(Scene& scene, int parent, const char* name);
 // parents precede children), snapshotting the previous frame's matrices first. Call once
 // per frame before drawing.
 void UpdateWorldTransforms(Scene& scene);
+
+// --- Hierarchy mutations (editor operations; defined in scene.cpp) ----------
+// All keep the parents-before-children invariant (re-ordering as needed) and fix up
+// `selected`. They mutate the vector, so never call them mid-iteration over `entities`.
+
+// True if `idx` equals `maybeAncestor` or has it anywhere up its parent chain.
+bool IsAncestorOrSelf(const Scene& scene, int idx, int maybeAncestor);
+
+// Append a new child under `parent`, re-ordered to sit under its parent's subtree in the
+// outliner. Returns the new entity's index.
+int AddChildEntity(Scene& scene, int parent, const char* name);
+
+// Delete an entity and its whole subtree (no-op on the root).
+void DeleteEntity(Scene& scene, int idx);
+
+// Duplicate an entity + its subtree as a sibling (copies mesh/model handles + material;
+// models stay shared by handle). Returns the duplicate root's new index, or -1 on failure.
+int DuplicateEntity(Scene& scene, int idx);
+
+// Re-parent `idx` under `newParent`. Simple: sets the parent + keeps the local transform
+// (so the object moves into the new parent's frame — world-preserving reparent comes with
+// the decompose in part 2). Refuses the root, cycles, and no-ops. Returns true on success.
+bool ReparentEntity(Scene& scene, int idx, int newParent);
+
+// Move `idx` to be a sibling just before/after `target` (re-parenting first if needed).
+bool MoveEntityAsSibling(Scene& scene, int idx, int target, bool before);
 
 // Drop all entities. GPU meshes/models are owned by the Renderer and freed at its Shutdown,
 // so the scene only holds handles — nothing GPU-side to release here.

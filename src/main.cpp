@@ -42,6 +42,48 @@ toon::MeshHandle Upload(toon::Renderer& r, const toon::MeshData& m, const char* 
     if (h == toon::MeshHandle::Invalid) std::fprintf(stderr, "Failed to create mesh '%s'\n", name);
     return h;
 }
+
+// A clean dark editor theme (trimmed from ToonEngineOld/src/ui/themes.cpp): ImGui's dark
+// base + softer rounding/padding and a muted-blue accent on the interactive bits. Purely a
+// style-struct edit — no backend state — so it's safe to call once after InitUI.
+void ApplyToonTheme() {
+    ImGui::StyleColorsDark();
+    ImGuiStyle& s = ImGui::GetStyle();
+    s.WindowRounding    = 6.0f;
+    s.ChildRounding     = 6.0f;
+    s.FrameRounding     = 4.0f;
+    s.GrabRounding      = 4.0f;
+    s.TabRounding       = 4.0f;
+    s.ScrollbarRounding = 4.0f;
+    s.WindowPadding     = ImVec2(10.0f, 10.0f);
+    s.FramePadding      = ImVec2(8.0f, 4.0f);
+    s.ItemSpacing       = ImVec2(8.0f, 6.0f);
+    s.IndentSpacing     = 16.0f;
+    s.WindowBorderSize  = 1.0f;
+
+    const ImVec4 accent    = ImVec4(0.26f, 0.45f, 0.78f, 1.00f);
+    const ImVec4 accentDim = ImVec4(0.26f, 0.45f, 0.78f, 0.55f);
+    ImVec4* c = s.Colors;
+    c[ImGuiCol_WindowBg]         = ImVec4(0.11f, 0.115f, 0.13f, 1.00f);
+    c[ImGuiCol_FrameBg]          = ImVec4(0.16f, 0.17f, 0.20f, 1.00f);
+    c[ImGuiCol_FrameBgHovered]   = ImVec4(0.20f, 0.22f, 0.27f, 1.00f);
+    c[ImGuiCol_FrameBgActive]    = ImVec4(0.24f, 0.27f, 0.33f, 1.00f);
+    c[ImGuiCol_Header]           = accentDim;
+    c[ImGuiCol_HeaderHovered]    = accent;
+    c[ImGuiCol_HeaderActive]     = accent;
+    c[ImGuiCol_Button]           = ImVec4(0.20f, 0.22f, 0.26f, 1.00f);
+    c[ImGuiCol_ButtonHovered]    = accent;
+    c[ImGuiCol_ButtonActive]     = ImVec4(0.36f, 0.55f, 0.88f, 1.00f);
+    c[ImGuiCol_SliderGrab]       = accent;
+    c[ImGuiCol_SliderGrabActive] = ImVec4(0.36f, 0.55f, 0.88f, 1.00f);
+    c[ImGuiCol_CheckMark]        = accent;
+    c[ImGuiCol_TitleBgActive]    = ImVec4(0.16f, 0.19f, 0.26f, 1.00f);
+    c[ImGuiCol_Tab]              = ImVec4(0.16f, 0.17f, 0.20f, 1.00f);
+    c[ImGuiCol_TabHovered]       = accent;
+    c[ImGuiCol_TabSelected]      = ImVec4(0.22f, 0.30f, 0.44f, 1.00f);
+    c[ImGuiCol_SeparatorHovered] = accent;
+    c[ImGuiCol_TextSelectedBg]   = accentDim;
+}
 } // namespace
 
 int main() {
@@ -52,8 +94,13 @@ int main() {
 
     // We render with Vulkan, so tell GLFW not to create an OpenGL context.
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    // Start maximized so the editor fills the screen and the right-docked panels (Inspector /
+    // Debug) stay on-screen on any monitor. Creating oversize (e.g. 3840x2160 on a smaller
+    // display) pushed the dock layout's right column off the visible area. The 1600x900 below
+    // is just the restored-down size.
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
-    GLFWwindow* window = glfwCreateWindow(3840, 2160, "ToonEngine", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1600, 900, "ToonEngine", nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "Failed to create window\n");
         glfwTerminate();
@@ -87,6 +134,9 @@ int main() {
 #ifdef IMGUI_HAS_DOCK
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
+
+    // Editor look: apply the dark theme once, now the UI backend is up.
+    ApplyToonTheme();
 
     // Route framebuffer resizes to the renderer's swap chain.
     glfwSetWindowUserPointer(window, &renderer);
@@ -132,6 +182,17 @@ int main() {
         e.material.roughness = 0.15f;
         spinners.push_back({ cubeIdx, { 0.5f, 1.0f, 0.0f } });
     }
+    // Satellite — a small sphere PARENTED to the cube (the hierarchy demo). It has no spin of
+    // its own; it orbits the cube purely by inheriting the cube's spinning world transform.
+    // Created right after the cube so the flat outliner (vector order) lists it directly under
+    // its parent — keeping the scripted scene in pre-order, as the editor mutations always are.
+    {
+        toon::Entity& e = scene.entities[toon::AddEntity(scene, cubeIdx, "Satellite")];
+        e.mesh = Upload(renderer, toon::MakeUVSphere(0.22f, 16, 24), "satellite");
+        e.transform->position = { 1.7f, 0.0f, 0.0f };   // offset from the cube (its parent)
+        e.material = toon::Material{ {0.40f, 0.90f, 0.55f}, {0.03f, 0.07f, 0.04f}, 0.014f };
+        e.material.roughness = 0.15f;
+    }
     // Torus.
     {
         const int i = toon::AddEntity(scene, 0, "Torus");
@@ -156,15 +217,9 @@ int main() {
         e.material.roughness    = 0.5f;
         spinners.push_back({ i, { 0.0f, 1.0f, 0.0f } });
     }
-    // Satellite — a small sphere PARENTED to the cube (the hierarchy demo). It has no spin of
-    // its own; it orbits the cube purely by inheriting the cube's spinning world transform.
-    {
-        toon::Entity& e = scene.entities[toon::AddEntity(scene, cubeIdx, "Satellite")];
-        e.mesh = Upload(renderer, toon::MakeUVSphere(0.22f, 16, 24), "satellite");
-        e.transform->position = { 1.7f, 0.0f, 0.0f };   // offset from the cube (its parent)
-        e.material = toon::Material{ {0.40f, 0.90f, 0.55f}, {0.03f, 0.07f, 0.04f}, 0.014f };
-        e.material.roughness = 0.15f;
-    }
+
+    // Start with the cube selected so the Inspector is populated on launch.
+    scene.selected = cubeIdx;
 
     // Editor camera — driven by the mouse/keyboard in the loop (defaults: pivot at the
     // origin, distance 10, a slight downward pitch so the ground + its AO show).
@@ -218,7 +273,7 @@ int main() {
             float mdx = 0.0f, mdy = 0.0f;
             toon::Input::MouseDelta(mdx, mdy);
             if (toon::Input::IsMouseDown(M::Right)) {
-                toon::CameraOrbit(camera, mdx, mdy);
+                toon::CameraOrbit(camera, -mdx, -mdy);
                 const float fwd = (toon::Input::IsKeyDown(K::W) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::S) ? 1.0f : 0.0f);
                 const float rgt = (toon::Input::IsKeyDown(K::D) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::A) ? 1.0f : 0.0f);
                 const float upv = (toon::Input::IsKeyDown(K::E) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::Q) ? 1.0f : 0.0f);
@@ -270,12 +325,139 @@ int main() {
             ImGui::DockBuilderRemoveNode(dockspaceId);
             ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
+            // Hierarchy on the far left; Inspector (top) + Debug (bottom) stacked on the
+            // right; the 3D scene shows through the pass-through center.
             ImGuiID centerId = dockspaceId;
-            const ImGuiID leftId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, 0.28f, nullptr, &centerId);
-            ImGui::DockBuilderDockWindow("ToonEngine Debug", leftId);
+            const ImGuiID leftId     = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left,  0.20f, nullptr, &centerId);
+            ImGuiID       rightId    = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.34f, nullptr, &centerId);
+            const ImGuiID rightTopId = ImGui::DockBuilderSplitNode(rightId,  ImGuiDir_Up,    0.55f, nullptr, &rightId);
+            ImGui::DockBuilderDockWindow("Scene Hierarchy", leftId);
+            ImGui::DockBuilderDockWindow("Inspector",       rightTopId);
+            ImGui::DockBuilderDockWindow("ToonEngine Debug", rightId);
             ImGui::DockBuilderFinish(dockspaceId);
         }
 #endif
+
+        // --- Scene Hierarchy: select / add / duplicate / delete / drag-drop reparent -----
+        // A flat list over scene.entities (parents always precede children), indented by
+        // depth so it reads as a tree. Structural edits reorder the vector and invalidate
+        // indices, so the loop only RECORDS a pending op / drop and applies them afterward.
+        enum class HierOp { None, AddChild, Duplicate, Delete };
+        HierOp pendingOp     = HierOp::None;
+        int    pendingTarget = -1;
+        enum class DropKind { Child, Before, After };
+        int      dropSrc  = -1, dropDst = -1;
+        DropKind dropKind = DropKind::Child;
+
+        if (ImGui::Begin("Scene Hierarchy")) {
+            const int n = static_cast<int>(scene.entities.size());
+            for (int i = 0; i < n; ++i) {
+                const toon::Entity& e = scene.entities[i];
+                const bool isRoot = (e.parent == -1);
+
+                // Depth = length of the parent chain (drives the indent).
+                int depth = 0;
+                for (int p = e.parent, guard = 0; p >= 0 && p < n && guard < n;
+                     p = scene.entities[p].parent, ++guard)
+                    ++depth;
+
+                ImGui::PushID(i);
+                if (depth > 0) ImGui::Indent(depth * 16.0f);
+
+                const bool selected = (scene.selected == i);
+                if (ImGui::Selectable(e.name.c_str(), selected, ImGuiSelectableFlags_SpanAvailWidth))
+                    scene.selected = selected ? -1 : i;   // click toggles selection off
+
+                // Drag source (everything but the root).
+                if (!isRoot && ImGui::BeginDragDropSource()) {
+                    ImGui::SetDragDropPayload("TOON_ENTITY_IDX", &i, sizeof(int));
+                    ImGui::Text("%s", e.name.c_str());
+                    ImGui::EndDragDropSource();
+                }
+                // Drop target: cursor-Y within the row picks the zone — top/bottom quarter =
+                // sibling before/after, middle = make-child (the root only accepts children).
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("TOON_ENTITY_IDX")) {
+                        const ImVec2 rmin = ImGui::GetItemRectMin();
+                        const ImVec2 rmax = ImGui::GetItemRectMax();
+                        const float  frac = (ImGui::GetIO().MousePos.y - rmin.y) / (rmax.y - rmin.y);
+                        dropSrc = *static_cast<const int*>(pl->Data);
+                        dropDst = i;
+                        if      (isRoot)       dropKind = DropKind::Child;
+                        else if (frac < 0.25f) dropKind = DropKind::Before;
+                        else if (frac > 0.75f) dropKind = DropKind::After;
+                        else                   dropKind = DropKind::Child;
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+                // Right-click: structural ops (Duplicate/Delete disabled on the root).
+                if (ImGui::BeginPopupContextItem()) {
+                    scene.selected = i;
+                    if (ImGui::MenuItem("Add Child"))                          { pendingOp = HierOp::AddChild;  pendingTarget = i; }
+                    if (ImGui::MenuItem("Duplicate", nullptr, false, !isRoot)) { pendingOp = HierOp::Duplicate; pendingTarget = i; }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Delete", nullptr, false, !isRoot))    { pendingOp = HierOp::Delete;    pendingTarget = i; }
+                    ImGui::EndPopup();
+                }
+
+                if (depth > 0) ImGui::Unindent(depth * 16.0f);
+                ImGui::PopID();
+            }
+        }
+        ImGui::End();
+
+        // Apply the one recorded structural op, then the drag-drop — indices are stable now.
+        switch (pendingOp) {
+            case HierOp::AddChild:  scene.selected = toon::AddChildEntity(scene, pendingTarget, "Entity"); break;
+            case HierOp::Duplicate: { const int d = toon::DuplicateEntity(scene, pendingTarget); if (d >= 0) scene.selected = d; } break;
+            case HierOp::Delete:    toon::DeleteEntity(scene, pendingTarget); break;
+            case HierOp::None:      break;
+        }
+        if (dropSrc >= 0 && dropDst >= 0) {
+            if (dropKind == DropKind::Child) toon::ReparentEntity(scene, dropSrc, dropDst);
+            else toon::MoveEntityAsSibling(scene, dropSrc, dropDst, dropKind == DropKind::Before);
+        }
+
+        // --- Inspector: edit the selected entity (name / transform / material) -----------
+        if (ImGui::Begin("Inspector")) {
+            if (scene.selected < 0 || scene.selected >= static_cast<int>(scene.entities.size())) {
+                ImGui::TextDisabled("Select an entity in the hierarchy.");
+            } else {
+                toon::Entity& e = scene.entities[scene.selected];
+                const bool isRoot = (e.parent == -1);
+
+                char nameBuf[128];
+                std::snprintf(nameBuf, sizeof(nameBuf), "%s", e.name.c_str());
+                if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf)))
+                    e.name = nameBuf;
+
+                // Transform — rotation shown in DEGREES for editing, stored in radians.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Transform");
+                    toon::Transform& t = *e.transform;
+                    constexpr float kRad2Deg = 57.29578f, kDeg2Rad = 0.01745329f;
+                    ImGui::DragFloat3("Position", &t.position.x, 0.01f);
+                    float deg[3] = { t.rotationEuler.x * kRad2Deg,
+                                     t.rotationEuler.y * kRad2Deg,
+                                     t.rotationEuler.z * kRad2Deg };
+                    if (ImGui::DragFloat3("Rotation", deg, 0.5f))
+                        t.rotationEuler = { deg[0] * kDeg2Rad, deg[1] * kDeg2Rad, deg[2] * kDeg2Rad };
+                    ImGui::DragFloat3("Scale", &t.scale.x, 0.01f, 0.001f, 100.0f);
+                } else if (isRoot) {
+                    ImGui::TextDisabled("(scene root — a pure anchor, no transform)");
+                }
+
+                // Material — only for renderables (a mesh or a model).
+                if (e.mesh != toon::MeshHandle::Invalid || e.model != toon::ModelHandle::Invalid) {
+                    ImGui::SeparatorText("Material");
+                    ImGui::ColorEdit3("Base color",    &e.material.baseColor.x);
+                    ImGui::ColorEdit3("Outline color", &e.material.outlineColor.x);
+                    ImGui::DragFloat("Outline width", &e.material.outlineWidth, 0.001f, 0.0f, 0.5f, "%.3f");
+                    ImGui::SliderFloat("Roughness", &e.material.roughness, 0.0f, 1.0f);
+                }
+            }
+        }
+        ImGui::End();
 
         if (ImGui::Begin("ToonEngine Debug")) {
             ImGui::Text("%.1f FPS (%.3f ms/frame)", ImGui::GetIO().Framerate,
@@ -288,21 +470,7 @@ int main() {
             ImGui::SliderFloat("Bands", &style.bands, 1.0f, 8.0f, "%.0f");
             ImGui::SliderFloat("Ambient", &style.ambient, 0.0f, 1.0f);
             ImGui::SliderFloat("Outline width x", &outlineScale, 0.0f, 3.0f);
-
-            // Per-entity material: base color + outline (color + width). Walks the scene's
-            // renderable entities (skips the root / non-renderables).
-            ImGui::SeparatorText("Objects");
-            for (int i = 0; i < static_cast<int>(scene.entities.size()); ++i) {
-                toon::Entity& e = scene.entities[i];
-                if (e.mesh == toon::MeshHandle::Invalid && e.model == toon::ModelHandle::Invalid)
-                    continue;
-                ImGui::PushID(i);
-                ImGui::Text("%s", e.name.c_str());
-                ImGui::ColorEdit3("Base color",     &e.material.baseColor.x);
-                ImGui::SliderFloat("Outline width", &e.material.outlineWidth, 0.0f, 0.15f);
-                ImGui::ColorEdit3("Outline color",  &e.material.outlineColor.x);
-                ImGui::PopID();
-            }
+            ImGui::TextDisabled("Per-object color/outline: see the Inspector.");
 
             ImGui::SeparatorText("Camera");
             ImGui::TextDisabled("Right-drag: orbit (+WASD/QE fly)");

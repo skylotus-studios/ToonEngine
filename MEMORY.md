@@ -662,6 +662,54 @@ selection). **Note:** the drag *directions* (orbit/pan signs) match common edito
 conventions but are only verifiable interactively — any inverted axis is a one-line sign
 flip in `camera.cpp`.
 
+## Editor UI (Phase B, item 5 — part 1)
+
+**Panels (`main.cpp`, ImGui — exempt from the seam).** Three docked windows around the
+pass-through scene: a **Scene Hierarchy** (left), an **Inspector** (top-right), and the
+existing **Debug** panel (bottom-right), laid out once via `DockBuilder` (guarded by
+`dockLayoutBuilt` + `#ifdef IMGUI_HAS_DOCK`; splits are left 0.20 → right 0.34 → right-up
+0.55). A trimmed **dark theme** (`StyleColorsDark` + rounding + a muted-blue accent) is
+applied once after `InitUI` — pure style-struct edit, no backend state.
+
+**Hierarchy = a flat list, not a real `TreeNode`.** It iterates `scene.entities` in vector
+order and indents each row by its parent-chain depth (`ImGui::Indent(depth*16)`). This reads
+as a tree **only because the vector is kept in pre-order** (parents immediately followed by
+their subtree). The editor mutations all topo-reorder to preserve that; the one thing that
+can break it is the **scripted scene build** (`AddEntity` is a plain append), so `main.cpp`
+creates the satellite **right after** its parent cube (not last) to keep the initial scene
+pre-order. Selection is a single `int Scene::selected` (click toggles it off; the cube is
+selected on launch so the Inspector isn't empty).
+
+**Deferred-mutation pattern (load-bearing).** Every structural edit reorders `entities` and
+invalidates indices, so the hierarchy loop must **never** mutate mid-iteration — it only
+*records* one pending op (add-child / duplicate / delete) + one pending drag-drop, then
+applies them **after** the loop and fixes up `selected`. Drag-drop payload is the int index
+(`"TOON_ENTITY_IDX"`); the drop **zone** is picked by cursor-Y within the row — top/bottom
+quarter = sibling before/after, middle = make-child (the root only accepts children).
+
+**Scene mutations (`core/scene.{h,cpp}`, plain index/vector work — no Diligent).**
+`IsAncestorOrSelf`, `AddChildEntity`, `DeleteEntity` (whole subtree via a kill-set fixpoint),
+`DuplicateEntity` (clones the subtree as a sibling — copies mesh/model **handles** + material,
+so models stay shared, no re-load), `ReparentEntity` / `MoveEntityAsSibling`, plus the topo
+helpers (`BuildChildrenList` / `TopoOrderFromChildren` / `ApplyReorder` — a pre-order DFS that
+also patches parent indices + `selected`). Adapted from `ToonEngineOld/src/scene/scene.cpp`.
+**Reparent is "simple" for now** — it sets the parent and keeps the *local* transform, so the
+object jumps into the new parent's frame; **world-preserving** reparent needs the decompose
+(part 2). Cycle-guarded (`IsAncestorOrSelf`), root never reparented/deleted/duplicated.
+
+**Inspector.** Name (`InputText` over a copy-to-buffer-then-read-back — fine since the string
+only changes via this widget), Transform (`DragFloat3` position / **rotation shown in
+DEGREES**, converted to/from the stored radians / scale — only for a non-root entity with a
+transform), Material (base + outline color, outline width, roughness — only for renderables).
+The rotation display fights the spin animation for spinning entities (expected — it sticks
+when Spin is off).
+
+**Deferred → part 2:** ImGuizmo transform gizmos (vendored submodule; needs the view/proj
+exposed as `Mat4` + a row↔column-major transpose at the boundary) and the Diligent
+**decompose** it needs (world→local TRS matching `Scale·Rx·Ry·Rz`) → world-preserving
+reparent; custom **fonts** (the ImGui-Diligent backend builds the atlas inside `InitUI`, so a
+font needs an `InitUI` hook); light / sprite / animation entity components.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -678,8 +726,20 @@ process finally exits.
 A Vulkan swap-chain doesn't show up in GDI screen-copy — `Graphics.CopyFromScreen`
 captures the client area as pure black (the DWM-drawn title bar still shows).
 **`PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT=2)` does capture the rendered
-content.** That's how the toon sphere was verified. (Windows also reports the
-window smaller than requested under display scaling — cosmetic.)
+content.** That's how the toon sphere was verified.
+
+**High-DPI crop (150% display).** `PrintWindow` captures at the window's *physical*
+framebuffer resolution, and ImGui's viewport / dock layout is sized in those physical
+pixels. On a 150%-scaled monitor the framebuffer is 1.5× the logical client (e.g. **3840×2054
+vs the 2560×1369 `GetClientRect` reports**) — so **right-docked panels sit beyond the logical
+width and get cropped out of the shot** unless the *capturing* process is DPI-aware. Fix in
+the capture script: `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2 = -4)` at the top, so
+`GetClientRect` returns the true 3840-wide size and the bitmap grabs the whole framebuffer
+(then downscale for viewing). Relatedly, the **app starts maximized** (`GLFW_MAXIMIZED` hint +
+a modest restored size) rather than hardcoding a 3840×2160 window — an oversize window on a
+smaller screen pushed the dock layout's right column off-screen even in the real app.
+`PrintWindow` also **intermittently returns an all-white frame** (a race with the swap-chain
+present) — the render is fine; just re-run the capture.
 
 ## ToonEngineOld — carry-over reference (roadmap: renderer → engine)
 
