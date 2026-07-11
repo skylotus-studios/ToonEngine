@@ -43,9 +43,10 @@ target + world-space normal + motion-vector G-buffers** (MRT); a **DiligentFX po
 chain** (via `PostFXContext`) applies **SSAO** (temporal-denoised contact shadows),
 optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bloom**,
 then an **ACES tone-map pass** resolves to the back buffer. A docked **Dear ImGui editor**
-(dark theme) drives it live: a **Scene Hierarchy** panel (select / add-child / duplicate /
-delete / drag-drop reparent), an **Inspector** for the selected entity (name, transform,
-material), and a **Debug** panel (light, band count, global style, and every post effect). An
+(Bai Jamjuree font, 3 selectable themes) drives it live: a **Scene Hierarchy** panel (select /
+add-child / duplicate / delete / drag-drop reparent), an **Inspector** for the selected entity
+(name, transform, material), and a **Debug** panel (theme, light, band count, global style, and
+every post effect). An
 **editor camera** navigates the scene — right-drag orbit (+ WASD/QE fly), middle-drag pan,
 scroll zoom, F focus — with input suppressed while using the UI. HLSL shaders cross-compile to
 SPIR-V at runtime.
@@ -165,10 +166,11 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
    select / add-child / duplicate / delete / drag-drop reparent, via the deferred-mutation
    pattern), an **Inspector** (name, transform — rotation in degrees, material), scene
    **selection** (`Scene::selected`), a dark **theme**, and a `DockBuilder` layout (hierarchy
-   left, inspector + debug right, scene center). See MEMORY.md → *Editor UI*. **Part 2 (next):**
-   **ImGuizmo** transform gizmos + the matrix **decompose** (world→local TRS) they need →
-   **world-preserving reparent**; custom **fonts** (needs an `InitUI` hook); light/sprite
-   components.
+   left, inspector + debug right, scene center). See MEMORY.md → *Editor UI*. **Part 2 so far:**
+   the **Bai Jamjuree** UI font (DPI-scaled) + **3 selectable themes** (Amber Yellow / Gruvbox
+   Hard / Gray Stone, ported from `ToonEngineOld`). **Still to do:** **ImGuizmo** transform
+   gizmos + the matrix **decompose** (world→local TRS) they need → **world-preserving
+   reparent**; light/sprite components.
 2. **Scene serialization** — save/load scenes to disk.
 
 **B. Environment & fidelity**

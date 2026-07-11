@@ -704,11 +704,36 @@ transform), Material (base + outline color, outline width, roughness — only fo
 The rotation display fights the spin animation for spinning entities (expected — it sticks
 when Spin is off).
 
-**Deferred → part 2:** ImGuizmo transform gizmos (vendored submodule; needs the view/proj
-exposed as `Mat4` + a row↔column-major transpose at the boundary) and the Diligent
-**decompose** it needs (world→local TRS matching `Scale·Rx·Ry·Rz`) → world-preserving
-reparent; custom **fonts** (the ImGui-Diligent backend builds the atlas inside `InitUI`, so a
-font needs an `InitUI` hook); light / sprite / animation entity components.
+**Fonts + themes (part 2, done).** The UI font is **Bai Jamjuree**
+(`assets/fonts/BaiJamjuree-Medium.ttf`) and there are **3 selectable themes** ported verbatim
+from `ToonEngineOld/src/ui/themes.cpp` — **Amber Yellow** (default), **Gruvbox Hard**, **Gray
+Stone** — chosen from a combo in the Debug panel.
+- **No seam change for the font.** The font hook I expected turned out unnecessary: the
+  Diligent ImGui renderer sets `ImGuiBackendFlags_RendererHasTextures` (imgui 1.92's dynamic
+  atlas — `ImGuiDiligentRenderer.cpp` `UpdateTexture`/`DestroyTexture` over `io.Textures`), so
+  a font added **after** `InitUI` (context exists) and **before** the first frame uploads its
+  glyph texture automatically. So `main.cpp` calls `io.Fonts->AddFontFromFileTTF(...)` directly
+  (ImGui is seam-exempt). Baked path via `TOON_FONTS_DIR` (CMake), like shaders/models.
+- **DPI.** Font is rasterized at `18 * dpiScale` (crisp — not `FontGlobalScale`, which blurs),
+  where `dpiScale = glfwGetWindowContentScale` (1.5 on the 150% dev monitor). `ApplyTheme`
+  ends with `ImGui::GetStyle().ScaleAllSizes(dpiScale)` so widget metrics match — the old
+  themes' padding/rounding were authored at 1×.
+- **`ApplyTheme(theme, dpiScale)`** resets `GetStyle() = ImGuiStyle()` (default metrics +
+  dark colors, so unset entries fall back sanely), applies the theme's colors/metrics, sets
+  `WindowMenuButtonPosition = ImGuiDir_None`, then `ScaleAllSizes`. Re-runs on every combo
+  switch (no compounding — the reset zeroes it first). Gray Stone authors colors as
+  `0xAARRGGBB` (a `FromARGB` helper) with two `LerpColor`-derived tab tints, and uses newer
+  `ImGuiCol_` enums (`InputTextCursor`, `TabSelectedOverline`, `TreeLines`, …) — all present in
+  imgui 1.92.9.
+
+**Still deferred → part 2 (ImGuizmo):** ImGuizmo transform gizmos (vendored submodule; needs
+the view/proj exposed as `Mat4`) and the Diligent **decompose** it needs (world→local TRS
+matching `Scale·Rx·Ry·Rz`) → world-preserving reparent; light / sprite / animation entity
+components. **Convention note for the gizmo:** the old engine drove ImGuizmo with glm
+(column-major, `world = parent·local`); ours is Diligent row-major (`world = local·parent`).
+The two are transposes, and column-major storage of one equals row-major storage of the other
+— so a Diligent `float4x4`'s raw 16 floats feed ImGuizmo (column-major) **without** an explicit
+transpose. The real work is the TRS decompose that matches our compose order.
 
 ## Verifying a Vulkan build
 

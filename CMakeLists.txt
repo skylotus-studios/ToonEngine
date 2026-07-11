@@ -97,7 +97,8 @@ target_compile_definitions(ToonEngine PRIVATE ENGINE_DLL=1)
 # build would copy assets/shaders next to the exe and use a relative path.
 target_compile_definitions(ToonEngine PRIVATE
     TOON_SHADERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders"
-    TOON_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models")
+    TOON_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
+    TOON_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts")
 
 # Convenience function from DiligentCore: copies the engine shared libraries
 # next to the executable so the OS can find and load them at runtime.
