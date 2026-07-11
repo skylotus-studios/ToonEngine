@@ -36,7 +36,7 @@ exercising the inverse-transpose normal matrix), a faceted **cube**, a **torus**
 loaded **glTF model** (`helmet.glb`), on a **ground plane**. The procedural primitives are
 cel-shaded with a **banded diffuse fill + inverted-hull silhouette outline** in their own
 colors (base + a **per-object outline**); the model is cel-shaded with its **albedo
-texture** (via DiligentTools' glTF loader). The scene renders into an **HDR offscreen
+texture** + an **inverted-hull outline** (via DiligentTools' glTF loader). The scene renders into an **HDR offscreen
 target + world-space normal + motion-vector G-buffers** (MRT); a **DiligentFX post
 chain** (via `PostFXContext`) applies **SSAO** (temporal-denoised contact shadows),
 optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bloom**,
@@ -157,9 +157,9 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
    DiligentTools' `GLTF::Model` (`LoadModel` / `DrawModel` behind the seam) and cel-shades
    with its **albedo texture** in the HDR/MRT/post pipeline (glTF/GLB only — the old
    cgltf/ufbx loader in `ToonEngineOld` is the FBX reference). See MEMORY.md → *glTF model
-   loading* for the loader gotchas. Follow-ups: model **outline** (inverted hull; needs a
-   generated smooth normal), normal / metallic-roughness maps, `fox.glb` / `dragon.gltf`;
-   procedural-mesh texturing if wanted.
+   loading* for the loader gotchas. The model also gets an **inverted-hull outline**
+   (extruded along the shading normal — smooth surfaces stay closed). Follow-ups: normal /
+   metallic-roughness maps, `fox.glb` / `dragon.gltf`; procedural-mesh texturing if wanted.
 
 **B. Scene & editor** (next)
 3. **Scene graph** — port `scene.{h,cpp}` (entity tree, world-matrix cache,

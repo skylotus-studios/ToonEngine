@@ -144,8 +144,10 @@ struct Renderer::Impl {
 
     // glTF models (DiligentTools loader). Each GLTF::Model owns its GPU vertex/index
     // buffers + textures; the cel-fill PSO + SRB draw them. handle N -> models[N-1].
-    RefCntAutoPtr<IPipelineState>             modelPSO;
+    RefCntAutoPtr<IPipelineState>             modelPSO;         // textured cel fill
     RefCntAutoPtr<IShaderResourceBinding>     modelSRB;
+    RefCntAutoPtr<IPipelineState>             modelOutlinePSO;  // inverted-hull outline
+    RefCntAutoPtr<IShaderResourceBinding>     modelOutlineSRB;
     std::vector<std::unique_ptr<GLTF::Model>> models;
 
     // HDR offscreen scene target + tone-map resolve to the back buffer.
@@ -836,7 +838,49 @@ bool Renderer::CreateModelPipeline() {
     if (auto* v = m_impl->modelPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) v->Set(m_impl->constants);
     if (auto* p = m_impl->modelPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL,  "Constants")) p->Set(m_impl->constants);
     m_impl->modelPSO->CreateShaderResourceBinding(&m_impl->modelSRB, true);
-    return m_impl->modelSRB != nullptr;
+    if (!m_impl->modelSRB) return false;
+
+    // --- Outline pass PSO (inverted hull) --- same vertex layout; cull FRONT to keep the
+    // enlarged back-facing shell; only the shared Constants CB (no albedo texture).
+    auto ovs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "model outline VS", "model_outline.hlsl", "VSMain");
+    auto ops = CreateToonShader(device, sf, SHADER_TYPE_PIXEL,  "model outline PS", "model_outline.hlsl", "PSMain");
+    if (!ovs || !ops) return false;
+
+    GraphicsPipelineStateCreateInfo oci;
+    oci.PSODesc.Name         = "model outline PSO";
+    oci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+    GraphicsPipelineDesc& ogp = oci.GraphicsPipeline;
+    ogp.NumRenderTargets                     = 3;
+    ogp.RTVFormats[0]                        = kHDRFormat;
+    ogp.RTVFormats[1]                        = kNormalFormat;
+    ogp.RTVFormats[2]                        = kMotionFormat;
+    ogp.DSVFormat                            = kSceneDepthFormat;
+    ogp.PrimitiveTopology                    = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    ogp.RasterizerDesc.CullMode              = CULL_MODE_FRONT;   // keep the enlarged back shell
+    ogp.RasterizerDesc.FrontCounterClockwise = False;            // model winding (matches the fill)
+    ogp.DepthStencilDesc.DepthEnable         = True;
+    ogp.DepthStencilDesc.DepthWriteEnable    = True;
+    ogp.DepthStencilDesc.DepthFunc           = COMPARISON_FUNC_LESS_EQUAL;
+    ogp.InputLayout.LayoutElements           = modelLayout;
+    ogp.InputLayout.NumElements              = sizeof(modelLayout) / sizeof(modelLayout[0]);
+
+    oci.pVS = ovs;
+    oci.pPS = ops;
+
+    ShaderResourceVariableDesc ovars[] = {
+        { SHADER_TYPE_VERTEX, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+        { SHADER_TYPE_PIXEL,  "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+    };
+    oci.PSODesc.ResourceLayout.Variables    = ovars;
+    oci.PSODesc.ResourceLayout.NumVariables = sizeof(ovars) / sizeof(ovars[0]);
+
+    device->CreateGraphicsPipelineState(oci, &m_impl->modelOutlinePSO);
+    if (!m_impl->modelOutlinePSO) return false;
+    if (auto* v = m_impl->modelOutlinePSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) v->Set(m_impl->constants);
+    if (auto* p = m_impl->modelOutlinePSO->GetStaticVariableByName(SHADER_TYPE_PIXEL,  "Constants")) p->Set(m_impl->constants);
+    m_impl->modelOutlinePSO->CreateShaderResourceBinding(&m_impl->modelOutlineSRB, true);
+    return m_impl->modelOutlineSRB != nullptr;
 }
 
 // --- Teardown ---------------------------------------------------------------
@@ -872,9 +916,11 @@ void Renderer::Shutdown() {
     m_impl->fillSRB.Release();
     m_impl->outlineSRB.Release();
     m_impl->modelSRB.Release();
+    m_impl->modelOutlineSRB.Release();
     m_impl->fillPSO.Release();
     m_impl->outlinePSO.Release();
     m_impl->modelPSO.Release();
+    m_impl->modelOutlinePSO.Release();
     m_impl->constants.Release();
     m_impl->shaderFactory.Release();
 
@@ -1171,7 +1217,25 @@ void Renderer::DrawModel(ModelHandle handle, const Transform& t, const Transform
     const Uint32 baseIndex  = model.GetFirstIndexLocation();
     const Uint32 baseVertex = model.GetBaseVertex();
 
-    m_impl->context->SetPipelineState(m_impl->modelPSO);
+    // One primitive's indexed (or non-indexed) draw with the loader's global offsets;
+    // issued once per pass (outline, then fill) after that pass's PSO + SRB are bound.
+    auto issueDraw = [&](const GLTF::Primitive& p) {
+        if (p.IndexCount > 0) {
+            DrawIndexedAttribs draw;
+            draw.IndexType          = VT_UINT32;
+            draw.NumIndices         = p.IndexCount;
+            draw.FirstIndexLocation = baseIndex + p.FirstIndex;
+            draw.BaseVertex         = baseVertex + p.FirstVertex;
+            draw.Flags              = DRAW_FLAG_VERIFY_ALL;
+            m_impl->context->DrawIndexed(draw);
+        } else {
+            DrawAttribs draw;
+            draw.NumVertices         = p.VertexCount;
+            draw.StartVertexLocation = baseVertex + p.FirstVertex;
+            draw.Flags               = DRAW_FLAG_VERIFY_ALL;
+            m_impl->context->Draw(draw);
+        }
+    };
 
     ITextureView*      whiteSRV = m_impl->modelWhite->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
     const float3&      L        = m_impl->lightDir;
@@ -1198,11 +1262,13 @@ void Renderer::DrawModel(ModelHandle handle, const Transform& t, const Transform
                 cb->lightDir          = float4(L.x, L.y, L.z, 0.0f);
                 cb->baseColor         = float4(bc.x * style.baseColor.x, bc.y * style.baseColor.y,
                                                bc.z * style.baseColor.z, bc.w);   // glTF factor * app tint
-                cb->outline           = float4(0.0f, 0.0f, 0.0f, 0.0f);           // unused for models
+                cb->outline           = float4(style.outlineColor.x, style.outlineColor.y,
+                                               style.outlineColor.z, style.outlineWidth);   // outline pass
                 cb->params            = float4(style.bands, style.ambient, style.roughness, 0.0f);
             }
 
-            // Base-color texture (or the 1x1 white fallback when the material has none).
+            // Fill-pass albedo: the material's base-color texture, or the 1x1 white
+            // 2D-array fallback when it has none.
             ITextureView* albedoSRV = whiteSRV;
             const int tid = mat.GetTextureId(GLTF::DefaultBaseColorTextureAttribId);
             if (tid >= 0)
@@ -1210,23 +1276,16 @@ void Renderer::DrawModel(ModelHandle handle, const Transform& t, const Transform
                     albedoSRV = tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
             if (auto* v = m_impl->modelSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_Albedo"))
                 v->Set(albedoSRV);
-            m_impl->context->CommitShaderResources(m_impl->modelSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
-            if (prim.IndexCount > 0) {
-                DrawIndexedAttribs draw;
-                draw.IndexType          = VT_UINT32;
-                draw.NumIndices         = prim.IndexCount;
-                draw.FirstIndexLocation = baseIndex + prim.FirstIndex;
-                draw.BaseVertex         = baseVertex + prim.FirstVertex;
-                draw.Flags              = DRAW_FLAG_VERIFY_ALL;
-                m_impl->context->DrawIndexed(draw);
-            } else {
-                DrawAttribs draw;
-                draw.NumVertices         = prim.VertexCount;
-                draw.StartVertexLocation = baseVertex + prim.FirstVertex;
-                draw.Flags               = DRAW_FLAG_VERIFY_ALL;
-                m_impl->context->Draw(draw);
-            }
+            // Outline first (enlarged back-facing shell), then the textured fill on top —
+            // the fill's nearer depth overwrites the shell everywhere but the silhouette rim.
+            m_impl->context->SetPipelineState(m_impl->modelOutlinePSO);
+            m_impl->context->CommitShaderResources(m_impl->modelOutlineSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+            issueDraw(prim);
+
+            m_impl->context->SetPipelineState(m_impl->modelPSO);
+            m_impl->context->CommitShaderResources(m_impl->modelSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+            issueDraw(prim);
         }
     }
 }

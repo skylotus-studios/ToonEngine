@@ -557,8 +557,11 @@ textures; we draw its primitives with our own toon cel-fill PSO (no DiligentFX /
 renderer). Seam: opaque `ModelHandle` + `LoadModel(path)` / `DrawModel(handle, xform,
 prevXform, style)`, all in `renderer.cpp`. `main.cpp` loads `helmet.glb` (path baked via
 `TOON_MODELS_DIR`) and draws it spinning; the model shares the toon `ShaderConstants` CB +
-`CelShade`/motion helpers with the procedural fill via a separate `model_fill.hlsl` (vertex
-`pos/normal/uv`; no smooth normal → no outline yet).
+`CelShade`/motion helpers with the procedural fill via `model_fill.hlsl` +
+`model_outline.hlsl` (vertex `pos/normal/uv`). The outline extrudes along the *shading*
+normal (models carry no smooth normal) so smooth surfaces stay closed and hard creases may
+gap slightly; `DrawModel` draws outline (cull FRONT, `FrontCounterClockwise = False`) then
+fill per primitive, like the procedural `DrawMesh`.
 
 **Two vertex formats coexist** (glTF has no "smoothNormal"): procedural
 `pos/normal/smoothNormal` (inverted-hull outline), model `pos/normal/uv` (textured fill). The

@@ -125,7 +125,8 @@ int main() {
     // the star of Phase A. Its glTF material carries the base color, so the app tint is white.
     const toon::ModelHandle helmet = renderer.LoadModel(TOON_MODELS_DIR "/helmet.glb");
     toon::Material modelStyle;
-    modelStyle.baseColor = { 1.0f, 1.0f, 1.0f };   // white = untinted
+    modelStyle.baseColor    = { 1.0f, 1.0f, 1.0f };    // white = untinted (glTF supplies the color)
+    modelStyle.outlineColor = { 0.02f, 0.02f, 0.03f }; // near-black inverted-hull outline
 
     toon::Camera camera;
     camera.distance = 10.0f;
@@ -202,9 +203,10 @@ int main() {
         // The loaded model, cel-shaded (textured fill), elevated above the primitive row
         // and spinning about Y like the rest (prev transform drives its motion vectors).
         if (helmet != toon::ModelHandle::Invalid) {
-            modelStyle.bands     = style.bands;
-            modelStyle.ambient   = style.ambient;
-            modelStyle.roughness = 0.5f;
+            modelStyle.bands        = style.bands;
+            modelStyle.ambient      = style.ambient;
+            modelStyle.roughness    = 0.5f;
+            modelStyle.outlineWidth = 0.04f * outlineScale;   // world-space; scales with the global slider
             toon::Transform mx;
             mx.position      = { 0.0f, 2.5f, 0.0f };
             mx.rotationEuler = { 0.0f, spinAngle, 0.0f };
