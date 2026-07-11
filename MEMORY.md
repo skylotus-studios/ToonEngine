@@ -758,8 +758,89 @@ camera matrices as `Mat4`.
   decomposing, and **`ReparentEntity`/`MoveEntityAsSibling` now preserve world** the same way
   (the object no longer jumps on reparent).
 
-**Still deferred:** light / sprite / animation entity components; gizmo snap + hotkeys (WASD is
-taken by the camera fly).
+**Still deferred:** light / sprite / animation entity components.
+
+**Gizmo snap + hotkeys.** MEMORY.md previously deferred hotkeys here because "WASD is taken by
+the camera fly" — but that fly only runs *while right-mouse is held* (`main.cpp`'s camera
+block, gated on `Input::IsMouseDown(Mouse::Right)`), so **W/E/R** are free the rest of the
+time. Added Unity-style bindings, all in `main.cpp` (no seam/renderer/shader/input-layer
+change — `gizmoOp`/`gizmoMode` are already plain locals there, and ImGui/ImGuizmo are
+seam-exempt):
+
+- **W/E/R** switch move/rotate/scale, **X** toggles local/world — `ImGui::IsKeyPressed(...,
+  false)` (edge-triggered, no-repeat; a hold must not re-toggle X every frame), gated on
+  `!io.WantCaptureKeyboard && !ImGui::IsMouseDown(ImGuiMouseButton_Right)` so typing in the
+  Name field or flying the camera doesn't also drive the gizmo. Placed right after
+  `ImGuizmo::BeginFrame()` (post-`NewFrame`, so `io.*` is the current frame's) — the changed op
+  is picked up the same frame by both the Inspector radios and `Manipulate`.
+- **Snap** — `ImGuizmo::Manipulate`'s optional `snap` param (`external/ImGuizmo/src/ImGuizmo.h`)
+  reads `snap[0]` for rotate/scale and `snap[0..2]` for translate; one `float step` per op
+  (rotate in degrees, translate/scale in world units / factor) is broadcast into a
+  `float[3]` at the call site and passed only `snapping ? snapVec : nullptr`. **Snapping
+  engages on a checkbox OR while Ctrl is held** (`gizmoSnap || io.KeyCtrl`) — Ctrl gives the
+  familiar momentary-snap gesture, the checkbox an always-on mode. Per-op step fields live in
+  the Inspector's "Gizmo" section (only the active op's step shows, to stay compact).
+
+**Bugs found dogfooding the above** (pre-existing — from the original gizmo commit, none
+caused by the snap/hotkey change; all surfaced because hotkeys made gizmo-dragging easy
+enough that this was the first time someone actually drove it hard):
+
+- **Gizmo rotate silently did nothing on a spinning entity, on any axis, whether Spin was
+  ticked or not — but worked fine on the (non-spinning) Ground; and re-enabling Spin after a
+  manual edit snapped back to the old trajectory instead of continuing from the new
+  orientation.** Root cause: the spin animation was an **absolute** function of one shared
+  clock — `for (spinners) e.transform->rotationEuler = axis * spinAngle;` — run
+  unconditionally every frame regardless of the `spin` checkbox (only advancing `spinAngle`
+  itself was gated). So the frame after any gizmo edit, this stomped `rotationEuler` right
+  back to `axis * spinAngle` for every entity in `spinners` (Sphere/Cube/Torus/Helmet — not
+  Ground, hence it alone worked); the whole `Vec3` gets replaced, not added to, so *every*
+  axis got wiped. And even gated on `if (spin)`, resuming would still snap to wherever the
+  shared clock said it "should" be — unrelated to the gizmo-set orientation. **Real fix:
+  made the animation incremental instead of absolute** — `rotationEuler = rotationEuler +
+  axis * (dt * kSpinRate)` each frame while `spin` is on, so it's always continuing from
+  whatever `rotationEuler` currently *is* (a natural continuation, or a gizmo-set baseline)
+  rather than recomputing from a shared clock. This let the shared `spinAngle` float be
+  deleted entirely — each entity is now self-contained. Mathematically equivalent to the
+  original formula for the untouched default scene (sum of per-frame increments == the old
+  closed form), so no visual change there; only a paused-then-edited-then-resumed spinner
+  differs, and only in the intended way.
+- **A faint trail ("screen burn-in") followed objects while gizmo-dragging them** (both
+  move and rotate). `Impl::RunPostFX` feeds `PostFXContext` the current depth buffer as
+  *both* curr and prev (`pPrevDepthBufferSRV = depthSRV; // no history — reuse current`, a
+  deliberate simplification from the original SSAO work, since nothing needed real depth
+  history at the time). That defeats depth-based disocclusion entirely, so both SSAO's
+  temporal AO reprojection *and* TAA's color-history accumulation lean solely on motion
+  vectors — fine for smooth camera/spin motion, not for a large discontinuous mouse-driven
+  jump (not what such reprojection heuristics are tuned for). Fix: a new **app-computed**
+  `PostParams::gizmoManipulating` (not a Debug-panel toggle — set from `ImGuizmo::IsUsing()`,
+  same 1-frame-lag pattern already used for the camera capture-gate, read at the top of the
+  frame before that frame's `Manipulate()` call happens) forces
+  `ScreenSpaceAmbientOcclusionAttribs::ResetAccumulation = 1` **and**
+  `TemporalAntiAliasingAttribs::ResetAccumulation = true` for the duration of a drag — SSAO
+  reuses the exact flag its `ssaoTemporal` off-toggle already sets for the same "no
+  ghosting" reason; TAA's was previously never set at all (always `FALSE`, i.e. always
+  accumulating — though TAA is off by default, so it likely wasn't the primary contributor
+  unless the Debug panel had it toggled on). AO/TAA are very slightly noisier for the
+  duration of a drag, then resume smooth accumulation the instant it ends. **Not fully
+  confirmed by the user as of the first fix attempt (SSAO-only)** — the TAA half was added
+  as a natural extension of the same confirmed-correct root cause, not yet independently
+  re-tested. A real fix (an actual double-buffered depth history) is bigger; deferred unless
+  this residual trail is still visible after the TAA extension too.
+- **The Helmet's outline has visible gaps at hard edges — NOT a regression, already
+  documented.** `model_outline.hlsl`'s own header comment (and this file's "glTF model
+  loading" section) already states the exact limitation: loaded models carry no smooth
+  normal (unlike procedural primitives' `Vertex::smoothNormal`), so the inverted-hull
+  outline extrudes along the plain shading normal and gaps at split-vertex hard creases.
+  The Helmet's dense mechanical panel lines make this far more visible than on smoother
+  models. A real fix needs computing an averaged normal per unique position across the
+  loaded glTF vertex buffer (a real geometry-processing task, not a quick patch) — worth a
+  future roadmap item, not folded into this dogfooding pass.
+
+**Not independently verified interactively by Claude** — this dev environment has no live
+input desktop, so synthetic keyboard/mouse (`SendInput`) reaches no window at all, proven and
+written up in `.claude/skills/verify/SKILL.md`. Both fixes above were made from a precise
+code trace (confirmed correct on read, both root-caused to an exact line), then confirmed
+working by the user after a manual test.
 
 ## Verifying a Vulkan build
 
@@ -1011,3 +1092,178 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   scroll zoom / WASD fly / F focus, suppressed over the UI. Action-map/rebinding deferred.
   Built clean; static render verified via `PrintWindow` (drag feel is interactive-only). See
   "Editor camera + input" above.
+- **2026-07-11** — **Gizmo snap + hotkeys** (roadmap A.1 follow-up, closing out the item that
+  shipped gizmos + world-preserving reparent): **W/E/R** switch move/rotate/scale, **X** toggles
+  local/world (edge-triggered `ImGui::IsKeyPressed`, gated on not-typing / not-flying), and
+  **snap** (checkbox or held Ctrl) feeds ImGuizmo's per-op `snap` param with editable
+  translate/rotate/scale step sizes. Resolved the "WASD is taken by the camera fly" deferral
+  by noticing the fly only runs while right-mouse is held. `main.cpp`-only (no seam/renderer/
+  shader/input-layer change). See "Gizmo snap + hotkeys" above.
+- **2026-07-11** — **Dogfooding bugfixes** found immediately after shipping the above (all
+  pre-existing, from the original gizmo commit, not the snap/hotkey change itself). Also
+  discovered and documented — the hard way — that this dev environment has **no live input
+  desktop**: `SendInput` reports success and focus APIs agree, but nothing actually receives
+  synthetic keyboard/mouse, proven decisively with an isolated WinForms textbox test.
+  Interactive UI/gizmo verification is therefore not possible from Claude here; every fix
+  below was code-traced to an exact root cause and reported back by the user manually.
+  Written up for reuse in `.claude/skills/verify/SKILL.md`.
+  - **Round 1** (user confirmed hotkeys/snap work; found two more issues while testing):
+    gizmo rotate on a spinning entity silently did nothing (`if (spin)`-gated the per-frame
+    spin write, which had been stomping `rotationEuler` unconditionally); a faint trail
+    followed move-dragged objects (new `PostParams::gizmoManipulating` forces SSAO
+    `ResetAccumulation` during a drag).
+  - **Round 2** (user reported round 1 incomplete): the trail persisted for *rotate* drags
+    too, and re-enabling Spin after a manual edit snapped back to the old trajectory instead
+    of continuing from the new orientation. Real fixes: made spin **incremental**
+    (`rotationEuler += axis*rate*dt`, deleting the shared `spinAngle` clock entirely) so a
+    paused-then-gizmo-edited orientation is the new baseline it resumes from; extended the
+    same `gizmoManipulating` reset to **TAA's** `ResetAccumulation` too (previously never
+    set — always accumulating), on the reasoning that TAA hits the exact same no-real-
+    depth-history gap SSAO does, just for full color instead of AO alone. Not yet
+    re-confirmed by the user. Also flagged (not fixed, not a regression): the Helmet's
+    outline has visible gaps at hard edges — an already-documented limitation
+    (`model_outline.hlsl`'s own header comment) of extruding along the plain shading normal
+    for glTF models, which carry no smooth normal. See "Gizmo snap + hotkeys" above for the
+    full root-cause writeups.
+  - **Round 3** (user: round 2 still very present, "pretty much any interaction" — including
+    dragging the **Outline-width slider**, no gizmo involved at all — shows a fading ghost of
+    the old width; rotate still keeps the silhouette visibly trailing). The outline-width
+    slider report was the key clue: it **proves** the trigger can't be gizmo-specific, since
+    `ImGuizmo::IsUsing()` is false for a plain Inspector drag — `gizmoManipulating` could
+    never have caught that case regardless of whether SSAO/TAA's reset was wired correctly.
+    Confirmed the exact mechanism by reading the outline shaders directly: both
+    `toon_outline.hlsl` and `model_outline.hlsl` build `CurrClip`/`PrevClip` from the *same*
+    (current-frame) extruded position, varying only the WorldViewProj — so if only outline
+    width changes (camera + object otherwise static), `g_WorldViewProj == g_PrevWorldViewProj`
+    and the reported motion is exactly zero even though the rendered shell visibly grew or
+    shrank. Renamed `PostParams::gizmoManipulating` → **`activeInteraction`**, now
+    `ImGuizmo::IsUsing() || ImGui::IsAnyItemActive()` — the latter is a real, general ImGui
+    query ("is any item active") that's true for ANY widget being dragged/typed/edited
+    anywhere in the UI, not just the gizmo. Key reasoning for *why* this alone should suffice
+    without also patching the outline shaders' motion-vector math: `ResetAccumulation` means
+    "ignore history and motion vectors entirely this frame" — so a wrong per-frame motion
+    vector is irrelevant precisely during the frames it's wrong (the interactive ones), since
+    reprojection isn't happening on those frames at all; the *shader* fix was scoped out as
+    unnecessary rather than skipped for expediency. Also found and fixed a real gap: **SSR has
+    no `ResetAccumulation` field at all** (unlike SSAO/TAA) and its own
+    `TemporalRadianceStabilityFactor` defaults to `1.0` — the most ghosting-prone end of its
+    documented range, per SSR's own doc comment ("higher values ... more likely to exhibit
+    ghosting artefacts"). Since SSR can't be reset for an interaction's duration, tuned it down
+    to `0.7f` defensively (SSR is off by default; unknown whether the user had toggled it on,
+    but cheap and safe to harden regardless). Not yet re-confirmed. If the trail *still*
+    persists after this, the next diagnostic is decisive: disable SSAO + TAA + SSR entirely and
+    check whether rotating still trails — if it does, the cause isn't a temporal post-effect at
+    all (candidates: the already-known outline-gap issue reading as a "trail" on the geometrically
+    complex Helmet, or something in the base render neither of us has considered yet), and the
+    real double-buffered depth history (deferred twice now) should be built rather than patched
+    around again.
+  - **Round 4 — the actual persistent root cause** (user: ghost is present from **startup**,
+    before any interaction at all, and doesn't clear on its own; toggling **"AO temporal
+    (motion-vector denoise)"** off makes it vanish, back on brings it right back; same for the
+    SSAO master toggle, "since denoise is a sub-feature of that"). This single report reframed
+    everything — it **can't** be interaction-driven (nothing is interacting at startup), so
+    every fix through Round 3 (`activeInteraction`-gated resets) was necessarily addressing a
+    different, smaller problem, not this one. The one thing always running from frame 1 by
+    default is **Spin**. Re-examined the Round-3-identified outline approximation with that in
+    mind: `toon_outline.hlsl`/`model_outline.hlsl` computed `PrevClip` by extruding along
+    *this frame's* rotation-derived normal (`g_NormalMatrix`) and only varying the
+    WorldViewProj between curr/prev — exact for pure translation, but the extrude direction
+    is itself rotation-dependent, so under continuous rotation this *always* slightly
+    under-reports motion, every single frame, forever (not a one-off transient — a permanent
+    steady-state error for as long as anything is spinning, which by default is always). That
+    fully explains every symptom: present at startup (spin starts immediately), never
+    self-clears (spin never stops), toggling `ssaoTemporal` off/on toggles it directly
+    (reset=1 makes the wrong motion vector irrelevant; reset=0 makes temporal blending —
+    and thus the error — resume immediately, not just once).
+    **Real fix, not another reset/mask**: added `g_PrevNormalMatrix` to the shared cbuffer
+    (grew 320→384 B) — the inverse-transpose of the *previous* frame's world matrix,
+    computed in `DrawMesh`/`DrawModel` from the `prevWorld`/`objPrevWorld` matrices those
+    functions already receive (no seam signature change needed — the data was already
+    threaded through, just not used for this). Both outline vertex shaders now redo the
+    extrude for `PrevClip` using `g_PrevNormalMatrix` instead of reusing `inflated`, so a
+    rotating shell's motion vector is now computed the same principled way as its position —
+    no more approximation. Verified: clean C++ build, and (the best check available without
+    live input here) launched the exe and confirmed a clean console log with no Diligent
+    validation errors — a cbuffer field mismatch fails loudly and immediately, so its absence
+    here means the C++/HLSL layouts genuinely agree — plus a normal-looking render (all five
+    objects, outlines, UI, steady 144 FPS). Not yet re-confirmed visually by the user.
+  - **Round 5 — the real fix (finally built, not patched around)**: user confirmed the ghost
+    *still* appeared at startup even after Round 4's mathematically-correct outline fix. Two
+    targeted fixes (interaction resets, outline rotation math) both individually did what they
+    were supposed to, and neither fully solved it — the pattern pointed at the architectural
+    gap flagged (and deferred) since Round 1: `PostFXContext` had **never** had a real
+    previous-frame depth buffer, only the current frame reused as a stand-in
+    (`pPrevDepthBufferSRV = depthSRV`). That defeats depth-based disocclusion entirely for
+    every effect (SSAO, TAA, SSR alike) — the exact mechanism that's supposed to catch a
+    moving silhouette edge and distrust stale history there, which no amount of motion-vector
+    accuracy can substitute for (a perfectly accurate motion vector still doesn't help if
+    nothing can independently confirm "does the depth here actually still match what I
+    remember"). Built the real thing: a new `Impl::prevSceneDepth` texture (D32_FLOAT, **same
+    full BindFlags as `sceneDepth`** — `BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE`, even
+    though it's never bound as a DSV; dropping DEPTH_STENCIL trips Vulkan validation errors
+    `VUID-VkImageViewCreateInfo-image-01762` / `-subresourceRange-09594` on the SRV's
+    depth→R32_FLOAT reinterpretation — the two textures need matching creation flags for
+    Diligent's Vulkan backend to set that up the same way for both), recreated alongside the
+    other offscreen targets (`CreateOffscreenTargets`, so resize is handled for free).
+    `EndScene` now `CopyTexture`s `sceneDepth` → `prevSceneDepth` at the very end, once
+    `RunPostFX` no longer needs the *old* `prevSceneDepth` (that call already used it
+    correctly as "previous" for this frame) — the copy makes it ready to be genuinely
+    "previous" for *next* frame. `RunPostFX` then feeds `prevSceneDepth`'s SRV as
+    `pfx.pPrevDepthBufferSRV` instead of reusing `depthSRV`. Undefined content for exactly one
+    frame on startup/resize (same class of harmless blip as `prevViewProj` starting as
+    identity). Verified: clean build; first attempt (BindFlags = SHADER_RESOURCE only) hit the
+    two VUIDs above on launch — real validation errors, not benign — fixed by matching
+    `sceneDepth`'s BindFlags exactly; second attempt ran clean (no errors/warnings beyond
+    DiligentFX's own pre-existing benign ones), steady 144 FPS, normal-looking render, clean
+    exit. Not yet re-confirmed by the user — if this *still* doesn't fully resolve it, the
+    remaining candidates are the already-documented Helmet outline-gap issue reading as a
+    "trail" (unrelated to any of this — a genuinely different bug), or something in
+    DiligentFX's own SSAO/TAA implementation neither of us has considered yet.
+  - **Round 6 — actually reading DiligentFX's algorithm (the real diagnosis)**: user
+    confirmed Round 5 didn't fix it either — the ghost specifically follows Spin, never
+    self-clears. Five rounds of increasingly-informed guessing from the *outside*
+    (attribute struct field names, doc comments) had each fixed something real but never
+    the actual cause, so this round stopped guessing and read the actual shader source:
+    `external/DiligentFX/Shaders/PostProcess/ScreenSpaceAmbientOcclusion/private/
+    SSAO_ComputeTemporalAccumulation.fx` + `.../public/
+    ScreenSpaceAmbientOcclusionStructures.fxh`. Two findings:
+    1. `ScreenSpaceAmbientOcclusionAttribs::TemporalStabilityFactor` — the one exposed
+       "tune the temporal aggressiveness" field, matching the README's documented API —
+       is declared in the struct but **never read by any SSAO shader**. Dead parameter;
+       not a lever we can use (confirmed by `grep -rl TemporalStabilityFactor` across
+       every `.fx` file — only the struct declaration matches).
+    2. The real algorithm (`ComputeTemporalAccumulationPS`) has a *correct*, real
+       depth-based disocclusion check (`IsCameraZSimilar`, which Round 5's real
+       `prevSceneDepth` now feeds properly) plus a **separate motion-magnitude-based
+       variance safety net**: it computes `MotionFactor` from the current pixel's motion
+       vector length, and scales down history trust when motion is large. All the actual
+       tuning constants (`SSAO_TEMPORAL_MIN/MAX_VARIANCE_GAMMA` = 0.5/2.5,
+       `SSAO_TEMPORAL_MOTION_VECTOR_DIFF_FACTOR` = 128, `SSAO_MAX_HISTORY_LENGTH` = 16)
+       are `#define`s compiled into the shader in `external/DiligentFX` — not exposed via
+       `ScreenSpaceAmbientOcclusionAttribs` at all, so unreachable from our side without
+       patching a vendored submodule (off-limits per the style guide).
+    **The actual root cause**: a rotating silhouette is a *view-dependent contour* — which
+    physical surface points satisfy "this is the silhouette" changes every frame as the
+    object turns — so no per-vertex motion vector, however correctly computed (Round 4's
+    fix included), can fully represent its true screen-space motion; there's always a
+    small residual error. At Spin's default rate (0.6 rad/sec, ~144 fps → a fraction of a
+    pixel of motion per frame) that residual error is small enough to slip under the
+    128-scaled motion threshold, so `MotionFactor` stays near 1.0 and the variance safety
+    net barely engages — meaning the system heavily trusts and accumulates the (slightly,
+    systematically wrong) reprojected silhouette AO across up to 16 frames of history,
+    compounding a small per-frame error into a visible, persistent ghost that never
+    resolves because the same error recurs every single frame for as long as anything is
+    continuously rotating (which, with Spin on by default, is always).
+    **Fix**: since the shader-internal thresholds are unreachable, and `ResetAccumulation`
+    is the one sanctioned lever DiligentFX exposes for "don't trust history this frame,"
+    renamed `PostParams::activeInteraction` → **`suppressTemporalHistory`** and folded in
+    a third trigger: `gizmoActive || ImGui::IsAnyItemActive() || spin`. While Spin is on,
+    SSAO/TAA never accumulate at all — every frame is a fresh, non-temporal computation
+    (slightly noisier AO, no temporal denoise), completely sidestepping the question of
+    whether the motion-based safety net engages correctly for slow rotation. The instant
+    Spin (and any interaction) stops, normal smooth accumulation resumes on an already-
+    static scene, converging cleanly within a few frames — matching the already-verified
+    "SSAO doesn't ghost on a static/orbiting-camera scene" behavior. Verified: clean
+    build, clean console log (no errors), steady ~144 FPS, AO contact shadows still
+    visible and correctly composited under all objects, clean exit. Not yet re-confirmed
+    by the user.

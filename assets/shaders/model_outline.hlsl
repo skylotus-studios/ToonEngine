@@ -37,7 +37,13 @@ OutlinePSInput VSMain(ModelVSInput vin)
     o.Pos         = mul(float4(inflated, 1.0), g_WorldViewProj);
     o.WorldNormal = mul(float4(vin.Normal, 0.0), g_NormalMatrix).xyz;
     o.CurrClip    = o.Pos;
-    o.PrevClip    = mul(float4(inflated, 1.0), g_PrevWorldViewProj);
+    // Redo the extrude with the PREVIOUS frame's normal matrix, not this frame's -- see
+    // toon_outline.hlsl's PrevClip for why (reusing `inflated` under-reports motion
+    // during rotation, since the extrude direction is itself rotation-dependent).
+    float3 prevWorldNormal = normalize(mul(float4(vin.Normal, 0.0), g_PrevNormalMatrix).xyz);
+    float3x3 prevWorldInv  = transpose((float3x3)g_PrevNormalMatrix);
+    float3 prevInflated    = vin.Pos + mul(prevWorldNormal, prevWorldInv) * g_Outline.w;
+    o.PrevClip    = mul(float4(prevInflated, 1.0), g_PrevWorldViewProj);
     return o;
 }
 

@@ -15,6 +15,12 @@ cbuffer Constants
                                             // g_World would skew them); its 3x3 transpose is
                                             // world^-1, used to keep the outline width uniform.
     row_major float4x4 g_PrevWorldViewProj; // object -> clip (previous frame), for motion vectors
+    row_major float4x4 g_PrevNormalMatrix;  // inverse-transpose of the PREVIOUS frame's world.
+                                            // The outline VS needs this to extrude the shell it
+                                            // rendered LAST frame for its own motion vector --
+                                            // reusing g_NormalMatrix (this frame's) for both
+                                            // under-reports motion during rotation, since the
+                                            // extrude direction itself is rotation-dependent.
 
     float4 g_LightDir;   // xyz: normalized direction TO the light;  w unused
     float4 g_BaseColor;  // rgb: material albedo;                    w unused

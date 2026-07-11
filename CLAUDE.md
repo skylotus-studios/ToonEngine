@@ -45,7 +45,8 @@ optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bl
 then an **ACES tone-map pass** resolves to the back buffer. A docked **Dear ImGui editor**
 (Bai Jamjuree font, 3 selectable themes) drives it live: a **Scene Hierarchy** panel (select /
 add-child / duplicate / delete / drag-drop reparent), an **Inspector** for the selected entity
-(name, transform, material, **ImGuizmo** move/rotate/scale gizmo), and a **Debug** panel (theme,
+(name, transform, material, **ImGuizmo** move/rotate/scale gizmo with **W/E/R/X hotkeys +
+snapping**), and a **Debug** panel (theme,
 light, band count, global style, and every post effect). An
 **editor camera** navigates the scene — right-drag orbit (+ WASD/QE fly), middle-drag pan,
 scroll zoom, F focus — with input suppressed while using the UI. HLSL shaders cross-compile to
@@ -162,15 +163,7 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
 
 **A. Editor**
 
-1. **Editor UI** — **part 1 done**: a **Scene Hierarchy** panel (flat indented entity list;
-   select / add-child / duplicate / delete / drag-drop reparent, via the deferred-mutation
-   pattern), an **Inspector** (name, transform — rotation in degrees, material), scene
-   **selection** (`Scene::selected`), a dark **theme**, and a `DockBuilder` layout (hierarchy
-   left, inspector + debug right, scene center). **Part 2 done:** the **Bai Jamjuree** UI font
-   (DPI-scaled) + **3 selectable themes** (Amber Yellow / Gruvbox Hard / Gray Stone, from
-   `ToonEngineOld`); **ImGuizmo** move/rotate/scale gizmos (vendored submodule) with the Diligent
-   **decompose** (world→local TRS) they need → **world-preserving reparent**. See MEMORY.md →
-   *Editor UI*. **Follow-ups:** light/sprite/animation entity components; gizmo snap + hotkeys.
+1. **Follow-ups:** light/sprite/animation entity components.
 2. **Scene serialization** — save/load scenes to disk.
 
 **B. Environment & fidelity**
@@ -178,7 +171,7 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
 2. **Cascaded shadow maps** — toon-friendly directional shadows (needs seam framebuffer /
    depth-array support).
 
-**D. Later**
+**C. Later**
 1. **Skeletal animation** (play the fox/dragon clips) 
 2. **2D / sprites** ·
 3. **Instancing** (deferred — a per-instance draw path for many-object scenes).
