@@ -48,16 +48,24 @@ struct Vertex {
     Vec3 smoothNormal;
 };
 
-// Turntable camera orbiting a target at the origin. The renderer builds the
-// view + (Vulkan-correct) projection from these; keeping the matrix math on the
-// Diligent side avoids leaking NDC/handedness conventions across the seam.
+// Editor camera: orbits a movable `pivot` at `distance`, yaw/pitch. The renderer builds
+// the view + (Vulkan-correct) projection from these; keeping the matrix math on the
+// Diligent side avoids leaking NDC/handedness conventions across the seam. The orbit /
+// pan / zoom / fly *controls* live in core/camera.h and mutate these fields.
 struct Camera {
-    float distance = 4.0f;      // orbit radius from the origin
+    Vec3  pivot    = { 0.0f, 0.0f, 0.0f };  // orbit target (pan + fly move it)
+    float distance = 10.0f;     // orbit radius from the pivot (zoom changes it)
     float yaw      = 0.0f;      // radians, around +Y
-    float pitch    = 0.0f;      // radians, around +X
+    float pitch    = 0.25f;     // radians, around +X
     float fovY     = 1.0472f;   // vertical field of view (~60 degrees)
     float nearZ    = 0.1f;
     float farZ     = 100.0f;
+
+    // Editor-control tuning (used by core/camera.h — not read by the renderer).
+    float lookSensitivity = 0.005f;    // radians per pixel (orbit)
+    float panSensitivity  = 0.0015f;   // world units per pixel, per unit of distance (pan)
+    float zoomSpeed       = 0.12f;     // fraction of distance per scroll notch (zoom)
+    float moveSpeed       = 6.0f;      // world units per second (fly)
 };
 
 // Per-object toon look, passed to DrawMesh. Lives in the seam so the debug UI

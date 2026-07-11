@@ -1055,9 +1055,11 @@ void Renderer::SetCamera(const Camera& cam) {
     const SwapChainDesc& sc = m_impl->swapChain->GetDesc();
     const float aspect = sc.Height > 0 ? static_cast<float>(sc.Width) / static_cast<float>(sc.Height) : 1.0f;
 
-    // Turntable: rotate the world about the origin, then push it `distance` down
-    // +Z in front of the (left-handed) camera at the origin.
-    const float4x4 view = float4x4::RotationY(cam.yaw) *
+    // Orbit the pivot: translate the world so the pivot sits at the origin, then the
+    // turntable (rotate about the origin, push `distance` down +Z in front of the
+    // left-handed camera at the origin). Pan/fly move the pivot; zoom changes distance.
+    const float4x4 view = float4x4::Translation(-cam.pivot.x, -cam.pivot.y, -cam.pivot.z) *
+                          float4x4::RotationY(cam.yaw) *
                           float4x4::RotationX(cam.pitch) *
                           float4x4::Translation(0.0f, 0.0f, cam.distance);
     // NegativeOneToOneZ = false -> [0,1] depth range for Vulkan/D3D.

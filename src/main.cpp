@@ -8,6 +8,8 @@
 #include "core/renderer.h"
 #include "core/primitives.h"
 #include "core/scene.h"
+#include "core/camera.h"
+#include "core/input.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -65,6 +67,10 @@ int main() {
         glfwTerminate();
         return 1;
     }
+
+    // Install input callbacks (scroll) BEFORE InitUI, so ImGui's GLFW backend chains ours
+    // instead of overwriting them.
+    toon::Input::Init(window);
 
     if (!renderer.InitUI(window)) {
         std::fprintf(stderr, "Renderer UI init failed\n");
@@ -160,9 +166,10 @@ int main() {
         e.material.roughness = 0.15f;
     }
 
+    // Editor camera — driven by the mouse/keyboard in the loop (defaults: pivot at the
+    // origin, distance 10, a slight downward pitch so the ground + its AO show).
     toon::Camera camera;
-    camera.distance = 10.0f;
-    camera.pitch    = 0.25f;      // look down a little so the ground + its AO show
+    const toon::Camera cameraDefault = camera;   // for the "Reset camera" button
 
     toon::Vec3 lightDir{ 0.5f, 0.8f, -0.3f };
 
@@ -198,6 +205,29 @@ int main() {
             if (scene.entities[s.entity].transform)
                 scene.entities[s.entity].transform->rotationEuler = s.axis * spinAngle;
         toon::UpdateWorldTransforms(scene);
+
+        // Editor camera: poll input, gate on ImGui's capture (last frame's UI state), then
+        // navigate. Right-drag orbits (+ WASD/QE = fly); middle-drag pans; scroll zooms;
+        // F focuses the origin. Dragging over the debug panel is suppressed by the gate.
+        toon::Input::BeginFrame();
+        const ImGuiIO& io = ImGui::GetIO();
+        toon::Input::SetCaptured(io.WantCaptureMouse, io.WantCaptureKeyboard);
+        {
+            using M = toon::Input::Mouse;
+            using K = toon::Input::Key;
+            float mdx = 0.0f, mdy = 0.0f;
+            toon::Input::MouseDelta(mdx, mdy);
+            if (toon::Input::IsMouseDown(M::Right)) {
+                toon::CameraOrbit(camera, mdx, mdy);
+                const float fwd = (toon::Input::IsKeyDown(K::W) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::S) ? 1.0f : 0.0f);
+                const float rgt = (toon::Input::IsKeyDown(K::D) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::A) ? 1.0f : 0.0f);
+                const float upv = (toon::Input::IsKeyDown(K::E) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::Q) ? 1.0f : 0.0f);
+                toon::CameraFly(camera, dt, fwd, rgt, upv);
+            }
+            if (toon::Input::IsMouseDown(M::Middle)) toon::CameraPan(camera, mdx, mdy);
+            if (const float s = toon::Input::ScrollDelta(); s != 0.0f) toon::CameraZoom(camera, s);
+            if (toon::Input::IsKeyDown(K::F))          toon::CameraFocus(camera, { 0.0f, 0.0f, 0.0f });
+        }
 
         renderer.BeginFrame(clearColor);
 
@@ -275,9 +305,10 @@ int main() {
             }
 
             ImGui::SeparatorText("Camera");
-            ImGui::SliderFloat("Distance", &camera.distance, 3.0f, 25.0f);
-            ImGui::SliderAngle("Yaw", &camera.yaw);
-            ImGui::SliderAngle("Pitch", &camera.pitch, -89.0f, 89.0f);
+            ImGui::TextDisabled("Right-drag: orbit (+WASD/QE fly)");
+            ImGui::TextDisabled("Mid-drag: pan | Scroll: zoom | F: focus");
+            ImGui::SliderAngle("FOV", &camera.fovY, 20.0f, 100.0f);
+            if (ImGui::Button("Reset camera")) camera = cameraDefault;
             ImGui::Checkbox("Spin", &spin);
 
             ImGui::SeparatorText("Post (HDR)");

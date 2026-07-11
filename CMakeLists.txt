@@ -54,6 +54,8 @@ add_executable(ToonEngine
     src/core/renderer.cpp
     src/core/primitives.cpp
     src/core/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
+    src/core/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
+    src/core/input.cpp          # GLFW input polling + capture gate
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
 )
 

@@ -43,8 +43,10 @@ target + world-space normal + motion-vector G-buffers** (MRT); a **DiligentFX po
 chain** (via `PostFXContext`) applies **SSAO** (temporal-denoised contact shadows),
 optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bloom**,
 then an **ACES tone-map pass** resolves to the back buffer, with a docked **Dear ImGui**
-debug overlay driving the look live (light, band count, per-object colors + outlines,
-camera, and every post effect). HLSL shaders cross-compile to SPIR-V at runtime.
+debug overlay driving the look live (light, band count, per-object colors + outlines, and
+every post effect). An **editor camera** navigates the scene — right-drag orbit (+ WASD/QE
+fly), middle-drag pan, scroll zoom, F focus — with input suppressed while using the UI.
+HLSL shaders cross-compile to SPIR-V at runtime.
 
 ## Build
 
@@ -169,9 +171,11 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
    overloads), not a hardcoded array. `scene.cpp` is a Diligent-using TU (composition math).
    The editor-triggered mutations (reparent / duplicate / topo-reorder / decompose) are
    deferred to item 5, which exercises them.
-4. **Editor camera + input** (next) — port the orbit/pan/zoom/fly `Camera` and the `Input`
-   layer (action maps + the ImGui capture gate).
-5. **Editor UI** — inspector + hierarchy panel + themes/fonts + ImGuizmo transform gizmos.
+4. **Editor camera + input** — **done**: an orbit-around-pivot `Camera` (extends the LH
+   turntable) + `core/camera.{h,cpp}` controls (orbit/pan/zoom/fly/focus) + `core/input.{h,cpp}`
+   (GLFW polling + ImGui capture gate). Right-drag orbit / mid-drag pan / scroll zoom / WASD
+   fly / F focus. The full action-map/rebinding system is deferred (see MEMORY.md).
+5. **Editor UI** (next) — inspector + hierarchy panel + themes/fonts + ImGuizmo transform gizmos.
 6. **Scene serialization** — save/load scenes to disk.
 
 **C. Environment & fidelity**

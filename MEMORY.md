@@ -636,6 +636,32 @@ inheriting the cube's world transform. **Deferred to the editor step (item 5):**
 world-preserving reparent (needs `float4x4.Inverse()` + a TRS decompose), and
 `Scene::selected` — all present in `ToonEngineOld/src/scene/scene.cpp` as the port reference.
 
+## Editor camera + input (Phase B, item 4)
+
+**Editor camera** — orbits a movable `pivot` at `distance`, yaw/pitch. Rather than port the
+old glm camera (right-handed `lookAt` / `perspective` — would mirror the view in our LH
+pipeline, and Diligent Core has no ready lookAt), the seam `Camera` gained a `pivot` and
+`SetCamera` prepends `Translation(-pivot)` to the proven LH turntable view. Controls in
+`core/camera.{h,cpp}` (a Diligent-using TU, like scene.cpp): orbit (yaw/pitch), zoom
+(geometric on `distance`), pan/fly (move the `pivot` along the camera's world basis), focus
+(set `pivot`). The **basis** is derived from the SAME Diligent `RotationX/Y` matrices the
+view uses — `worldAxis = viewAxis · RotationX(-pitch) · RotationY(-yaw)` = row k of that
+inverse — so it's correct-by-construction, with no hand-guessed LH signs.
+
+**Input** — `core/input.{h,cpp}`: GLFW polling (mouse buttons + cursor delta + keys) + a
+scroll callback (installed in `Input::Init` **before** `Renderer::InitUI`, so ImGui's GLFW
+backend *chains* it instead of overwriting) + a **capture gate** (`SetCaptured`, fed each
+frame from ImGui's `io.WantCaptureMouse/Keyboard` — a harmless 1-frame lag) so dragging over
+the debug panel doesn't move the camera. `g_lastX/Y` advance every frame even when captured,
+so releasing capture never yields a delta jump. Bindings (`main.cpp`): right-drag orbit
+(+ WASD/QE fly), middle-drag pan, scroll zoom, F focus (origin for now).
+
+**Deferred:** the full action-map / rebinding / serialization system + gamepad + file-drops
+(`ToonEngineOld/src/core/input/`), and F-focus on the *selected* entity (needs the editor
+selection). **Note:** the drag *directions* (orbit/pan signs) match common editor
+conventions but are only verifiable interactively — any inverted axis is a one-line sign
+flip in `camera.cpp`.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -866,3 +892,11 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   satellite parented to the cube orbits it. Editor-triggered mutations (reparent / duplicate
   / decompose / selection) deferred to the editor step. Built clean, verified via
   `PrintWindow`. See "Scene graph" above.
+- **2026-07-10** — **Editor camera + input** (Phase B, item 4): an orbit-around-pivot camera
+  (extends the LH turntable — `SetCamera` prepends `Translation(-pivot)`; did NOT port glm's
+  RH lookAt) + `core/camera.{h,cpp}` controls (orbit/pan/zoom/fly/focus; basis from the same
+  Diligent rotations as the view) + `core/input.{h,cpp}` (GLFW polling, scroll callback
+  chained by ImGui, capture gate from `io.WantCapture`). Right-drag orbit / mid-drag pan /
+  scroll zoom / WASD fly / F focus, suppressed over the UI. Action-map/rebinding deferred.
+  Built clean; static render verified via `PrintWindow` (drag feel is interactive-only). See
+  "Editor camera + input" above.
