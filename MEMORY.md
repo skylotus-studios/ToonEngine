@@ -549,6 +549,56 @@ hit confidence).
   a mirror floor would show it far better.
 - **Off by default** (opt-in) + UI (enable, strength).
 
+## glTF model loading (Phase A: real assets)
+
+Load + cel-shade real glTF/GLB models via **DiligentTools' `GLTF::Model`** (target
+`Diligent-AssetLoader`), not a hand-rolled loader — it owns the GPU vertex/index buffers +
+textures; we draw its primitives with our own toon cel-fill PSO (no DiligentFX / PBR
+renderer). Seam: opaque `ModelHandle` + `LoadModel(path)` / `DrawModel(handle, xform,
+prevXform, style)`, all in `renderer.cpp`. `main.cpp` loads `helmet.glb` (path baked via
+`TOON_MODELS_DIR`) and draws it spinning; the model shares the toon `ShaderConstants` CB +
+`CelShade`/motion helpers with the procedural fill via a separate `model_fill.hlsl` (vertex
+`pos/normal/uv`; no smooth normal → no outline yet).
+
+**Two vertex formats coexist** (glTF has no "smoothNormal"): procedural
+`pos/normal/smoothNormal` (inverted-hull outline), model `pos/normal/uv` (textured fill). The
+model PSO's input layout is a hardcoded `LayoutElement[]` (pos@0 / normal@12 / uv@24, stride
+32) matching the loader's buffer-0 packing from `ModelVertexAttribs` (POSITION/NORMAL/
+TEXCOORD_0 all → buffer 0). CMake links `Diligent-AssetLoader` + `Diligent-TextureLoader`
+(both built by the DiligentTools subdir; previously only reachable transitively via DiligentFX).
+
+**Gotchas — each cost a debugging cycle:**
+1. **`ModelCreateInfo::VertBufferBindFlags` defaults to `BIND_NONE`** (only `IndBufferBindFlags`
+   defaults to `BIND_INDEX_BUFFER`). Without `ci.VertBufferBindFlags[0] = BIND_VERTEX_BUFFER`
+   the vertex buffer isn't bindable and the draw faults.
+2. **Loader textures are `Texture2DArray`, not `Texture2D`** (one layer each in the non-atlas
+   path — for the PBR renderer's array binding). The shader must declare `Texture2DArray` and
+   sample slice 0 (`g_Albedo.Sample(s, float3(uv, 0))`), and the untextured fallback must be a
+   **2D-array** white (a plain-2D fallback trips `ValidateResourceViewDimension`: *"dimension
+   of resource view ... is Texture 2D Array, but ... expected ... Texture 2D."*).
+3. **`GetVertexBuffer` / `GetIndexBuffer` / `GetTexture` take `(idx, device, context)`** and
+   materialize lazily — pass device + context or they can hand back non-materialized resources.
+4. **A binding-validation failure (e.g. #2) manifests as a HANG, not a clean error** — the
+   assertion blocks, and Diligent logs it to `std::cout` (buffered → **lost when you force-kill
+   a hung app**). Diagnosis trick: `std::cout.setf(std::ios::unitbuf)` at `main()` start flushes
+   each message so the real error survives the kill; and the Windows Application event log
+   distinguishes hang from crash (a crash logs an *Application Error*, a hang doesn't).
+5. **Winding is flipped vs our own primitives.** glTF winds front faces **CCW in a
+   RIGHT-handed** space; our projection is **left-handed**, which flips screen-space winding,
+   so the model's outward faces come out **CW**. The model PSO needs
+   `FrontCounterClockwise = False` (the OPPOSITE of our procedurally-generated primitives,
+   which are authored CCW-front for the LH setup). With `True` the outward faces cull and you
+   see straight *through* the model to its textured inner surface (looks translucent, not a
+   normals bug — it's culling).
+
+**Draw:** iterate `Model.Scenes[DefaultSceneId].LinearNodes` → nodes with `pMesh` →
+`Primitives`; world = `ComputeTransforms(...).NodeGlobalMatrices[node.Index] * objectWorld`;
+per primitive bind `Materials[prim.MaterialId].Attribs.BaseColorFactor` + base-color texture
+(`GetTextureId(DefaultBaseColorTextureAttribId)` → `GetTexture(...)->GetDefaultView(SRV)`),
+`DrawIndexed(IndexCount, FirstIndexLocation = GetFirstIndexLocation()+prim.FirstIndex,
+BaseVertex = GetBaseVertex()+prim.FirstVertex)`. Verified: helmet renders cel-shaded with its
+albedo, SSAO/bloom apply, motion from the spin, clean exit. (Vendored API 256018/019.)
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -757,3 +807,12 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   never 1:1 abstraction) and generalized the seam rule: Diligent lives in the engine's
   implementation TUs, not just `renderer.cpp` — only the app layer + public headers stay
   Diligent-free.
+- **2026-07-10** — **glTF model loading** (Phase A / "real assets"): load + cel-shade real
+  models via DiligentTools' `GLTF::Model` (Diligent-first — no hand-rolled loader, no PBR
+  renderer). New seam `ModelHandle` / `LoadModel` / `DrawModel`; `model_fill.hlsl` reuses the
+  toon CB + `CelShade` helper; `helmet.glb` renders textured + cel-shaded in the HDR/post
+  pipeline. Linked `Diligent-AssetLoader` + `Diligent-TextureLoader`; baked `TOON_MODELS_DIR`.
+  Four loader gotchas cost cycles (VertBufferBindFlags = BIND_NONE default; textures are
+  Texture2DArray; the buffer/texture getters need device+context; a dimension-mismatch
+  assertion HANGS and logs to buffered cout). See "glTF model loading" above. Verified on the
+  RTX 3080 via `PrintWindow` (clean run, graceful exit).

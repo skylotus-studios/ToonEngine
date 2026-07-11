@@ -57,3 +57,15 @@ float2 ComputeMotion(float4 currClip, float4 prevClip)
     float2 prevNDC = prevClip.xy / prevClip.w;
     return currNDC - prevNDC;
 }
+
+// Cel (toon) shading: quantize the diffuse term N·L into `bands` flat levels spanning
+// [0,1], floored by an `ambient` shadow term (keeps the dark side off pure black), then
+// modulate the base color. Shared by the procedural fill and the glTF model fill.
+float3 CelShade(float3 baseRGB, float3 N, float3 L, float bands, float ambient)
+{
+    float NdotL = saturate(dot(normalize(N), normalize(L)));
+    float b     = max(bands, 1.0);
+    float ramp  = saturate(floor(NdotL * b) / max(b - 1.0, 1.0));
+    float shade = lerp(ambient, 1.0, ramp);
+    return baseRGB * shade;
+}

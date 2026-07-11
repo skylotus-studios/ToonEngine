@@ -121,6 +121,12 @@ int main() {
     groundMaterial.outlineWidth = 0.0f;
     groundMaterial.roughness    = 0.05f;   // smooth -> reflective (SSR); objects stay matte (0.9)
 
+    // A loaded glTF model (DiligentTools' loader), cel-shaded with its own albedo texture —
+    // the star of Phase A. Its glTF material carries the base color, so the app tint is white.
+    const toon::ModelHandle helmet = renderer.LoadModel(TOON_MODELS_DIR "/helmet.glb");
+    toon::Material modelStyle;
+    modelStyle.baseColor = { 1.0f, 1.0f, 1.0f };   // white = untinted
+
     toon::Camera camera;
     camera.distance = 10.0f;
     camera.pitch    = 0.25f;      // look down a little so the ground + its AO show
@@ -191,6 +197,21 @@ int main() {
             toon::Transform prevXform = xform;   // same scale/position; only the spin differs
             prevXform.rotationEuler = obj.spinAxis * prevSpinAngle;
             renderer.DrawMesh(obj.mesh, xform, prevXform, m);
+        }
+
+        // The loaded model, cel-shaded (textured fill), elevated above the primitive row
+        // and spinning about Y like the rest (prev transform drives its motion vectors).
+        if (helmet != toon::ModelHandle::Invalid) {
+            modelStyle.bands     = style.bands;
+            modelStyle.ambient   = style.ambient;
+            modelStyle.roughness = 0.5f;
+            toon::Transform mx;
+            mx.position      = { 0.0f, 2.5f, 0.0f };
+            mx.rotationEuler = { 0.0f, spinAngle, 0.0f };
+            mx.scale         = { 1.4f, 1.4f, 1.4f };
+            toon::Transform mprev = mx;
+            mprev.rotationEuler = { 0.0f, prevSpinAngle, 0.0f };
+            renderer.DrawModel(helmet, mx, mprev, modelStyle);
         }
 
         // Resolve the HDR scene to the back buffer (post effects + exposure + tone map).

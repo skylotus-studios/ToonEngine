@@ -43,6 +43,12 @@
 #include "TemporalAntiAliasing.hpp"
 #include "ScreenSpaceReflection.hpp"
 
+// DiligentTools asset loading: the glTF/GLB loader (Diligent::GLTF::Model owns the
+// vertex/index buffers + textures) and the texture-from-file helper. Self-contained in
+// DiligentTools — no DiligentFX / PBR renderer needed (we cel-shade with our own PSO).
+#include "GLTFLoader.hpp"
+#include "TextureUtilities.h"
+
 // Dear ImGui + Diligent's ImGui renderer backend (DiligentTools). The GLFW
 // platform backend (imgui_impl_glfw.cpp) is compiled directly into ToonEngine
 // by CMakeLists.txt, since DiligentTools doesn't ship a GLFW backend itself.
@@ -136,6 +142,12 @@ struct Renderer::Impl {
     };
     std::vector<GpuMesh> meshes;   // handle N -> meshes[N-1]; handle 0 = Invalid
 
+    // glTF models (DiligentTools loader). Each GLTF::Model owns its GPU vertex/index
+    // buffers + textures; the cel-fill PSO + SRB draw them. handle N -> models[N-1].
+    RefCntAutoPtr<IPipelineState>             modelPSO;
+    RefCntAutoPtr<IShaderResourceBinding>     modelSRB;
+    std::vector<std::unique_ptr<GLTF::Model>> models;
+
     // HDR offscreen scene target + tone-map resolve to the back buffer.
     RefCntAutoPtr<ITexture>               hdrColor;      // RGBA16F scene color
     RefCntAutoPtr<ITexture>               normalBuffer;  // RGBA16F world-space normals (SSAO G-buffer)
@@ -162,6 +174,7 @@ struct Renderer::Impl {
     RefCntAutoPtr<ITexture>        motionVectors;   // RG16F NDC velocity (scene-written)
     RefCntAutoPtr<ITexture>        aoWhite;         // 1x1 white = "fully visible" default
     RefCntAutoPtr<ITexture>        ssrBlack;        // 1x1 black = "no reflection" default
+    RefCntAutoPtr<ITexture>        modelWhite;      // 1x1 white 2D-ARRAY = untextured model albedo
     HLSL::CameraAttribs            postCamera{};
     Uint32                         frameIndex = 0;
 
@@ -399,6 +412,20 @@ static RefCntAutoPtr<IShader> CreateToonShader(IRenderDevice* device,
     return shader;
 }
 
+// Vertex attributes we ask the glTF loader to produce: POSITION / NORMAL / TEXCOORD_0,
+// all interleaved into buffer 0. The model PSO's input layout is built from this SAME
+// array (VertexAttributesToInputLayout), so the loader's buffer and the shader agree on
+// ATTRIB0/1/2. (No smooth normal — models get the fill pass only, no inverted hull.)
+static const GLTF::VertexAttributeDesc* ModelVertexAttribs(size_t& count) {
+    static const GLTF::VertexAttributeDesc kAttribs[] = {
+        { GLTF::PositionAttributeName,  0, VT_FLOAT32, 3 },
+        { GLTF::NormalAttributeName,    0, VT_FLOAT32, 3 },
+        { GLTF::Texcoord0AttributeName, 0, VT_FLOAT32, 2 },
+    };
+    count = sizeof(kAttribs) / sizeof(kAttribs[0]);
+    return kAttribs;
+}
+
 // --- Construction & device / swap-chain bring-up ----------------------------
 
 Renderer::Renderer()  : m_impl(new Impl) {}
@@ -435,6 +462,11 @@ bool Renderer::Init(GLFWwindow* window) {
 
     if (!CreateToonPipeline()) {
         std::fprintf(stderr, "Renderer: failed to create toon pipeline\n");
+        return false;
+    }
+
+    if (!CreateModelPipeline()) {
+        std::fprintf(stderr, "Renderer: failed to create model pipeline\n");
         return false;
     }
 
@@ -638,8 +670,27 @@ bool Renderer::CreatePostFX() {
     make1x1("AO white default", white, m_impl->aoWhite);
     make1x1("SSR black default", black, m_impl->ssrBlack);
 
+    // 1x1 white 2D-ARRAY albedo default: the glTF loader stores textures as 2D arrays, so
+    // the model fill's g_Albedo is a Texture2DArray — the untextured fallback must match
+    // that dimension (the plain-2D aoWhite would trip a view-dimension assertion).
+    {
+        const Uint8       white1[4] = { 255, 255, 255, 255 };
+        TextureSubResData sub{ white1, 4 };
+        TextureData       texData{ &sub, 1 };
+        TextureDesc td;
+        td.Name      = "model albedo white default";
+        td.Type      = RESOURCE_DIM_TEX_2D_ARRAY;
+        td.Width     = 1;
+        td.Height    = 1;
+        td.ArraySize = 1;
+        td.MipLevels = 1;
+        td.Format    = TEX_FORMAT_RGBA8_UNORM;
+        td.BindFlags = BIND_SHADER_RESOURCE;
+        m_impl->device->CreateTexture(td, &texData, &m_impl->modelWhite);
+    }
+
     return m_impl->postFX && m_impl->bloom && m_impl->ssao && m_impl->dof && m_impl->taa &&
-           m_impl->ssr && m_impl->aoWhite && m_impl->ssrBlack;
+           m_impl->ssr && m_impl->aoWhite && m_impl->ssrBlack && m_impl->modelWhite;
 }
 
 bool Renderer::CreateToonPipeline() {
@@ -715,6 +766,79 @@ bool Renderer::CreateToonPipeline() {
     return true;
 }
 
+bool Renderer::CreateModelPipeline() {
+    IRenderDevice*                   device = m_impl->device;
+    IShaderSourceInputStreamFactory* sf     = m_impl->shaderFactory;
+
+    auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "model fill VS", "model_fill.hlsl", "VSMain");
+    auto ps = CreateToonShader(device, sf, SHADER_TYPE_PIXEL,  "model fill PS", "model_fill.hlsl", "PSMain");
+    if (!vs || !ps) return false;
+
+    // Input layout matching the interleaved buffer the loader fills from ModelVertexAttribs
+    // (POSITION/NORMAL/TEXCOORD_0 in buffer 0). Auto offset/stride reproduce the loader's
+    // packing exactly (pos@0, normal@12, uv@24, stride 32), so we hardcode it — same idiom
+    // as CreateToonPipeline.
+    LayoutElement modelLayout[] = {
+        LayoutElement{0, 0, 3, VT_FLOAT32, False},   // ATTRIB0 position
+        LayoutElement{1, 0, 3, VT_FLOAT32, False},   // ATTRIB1 normal
+        LayoutElement{2, 0, 2, VT_FLOAT32, False},   // ATTRIB2 uv
+    };
+
+    GraphicsPipelineStateCreateInfo ci;
+    ci.PSODesc.Name         = "model fill PSO";
+    ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+    GraphicsPipelineDesc& gp = ci.GraphicsPipeline;
+    gp.NumRenderTargets                     = 3;             // MRT: color + normals + motion (same as toon)
+    gp.RTVFormats[0]                        = kHDRFormat;
+    gp.RTVFormats[1]                        = kNormalFormat;
+    gp.RTVFormats[2]                        = kMotionFormat;
+    gp.DSVFormat                            = kSceneDepthFormat;
+    gp.PrimitiveTopology                    = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    gp.RasterizerDesc.CullMode              = CULL_MODE_BACK;
+    // glTF winds front faces CCW in its RIGHT-handed space; our projection is LEFT-handed,
+    // which flips screen-space winding, so the model's outward faces are CW here. Hence
+    // FrontCounterClockwise = False — the OPPOSITE of our own primitives (authored CCW-front
+    // for the LH setup). With True, the outward faces cull and you see through the helmet to
+    // its inner surface.
+    gp.RasterizerDesc.FrontCounterClockwise = False;
+    gp.DepthStencilDesc.DepthEnable         = True;
+    gp.DepthStencilDesc.DepthWriteEnable    = True;
+    gp.DepthStencilDesc.DepthFunc           = COMPARISON_FUNC_LESS_EQUAL;
+    gp.InputLayout.LayoutElements           = modelLayout;
+    gp.InputLayout.NumElements              = sizeof(modelLayout) / sizeof(modelLayout[0]);
+
+    ci.pVS = vs;
+    ci.pPS = ps;
+
+    // Shared static Constants CB (like the toon PSOs); g_Albedo is DYNAMIC — DrawModel
+    // re-Sets it per primitive — with a linear-wrap immutable sampler (combined-sampler
+    // "g_Albedo", same pattern as tonemap's g_HDRColor).
+    ShaderResourceVariableDesc vars[] = {
+        { SHADER_TYPE_VERTEX, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC  },
+        { SHADER_TYPE_PIXEL,  "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC  },
+        { SHADER_TYPE_PIXEL,  "g_Albedo",  SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+    };
+    ci.PSODesc.ResourceLayout.Variables    = vars;
+    ci.PSODesc.ResourceLayout.NumVariables = sizeof(vars) / sizeof(vars[0]);
+
+    SamplerDesc linWrap;
+    linWrap.MinFilter = FILTER_TYPE_LINEAR; linWrap.MagFilter = FILTER_TYPE_LINEAR; linWrap.MipFilter = FILTER_TYPE_LINEAR;
+    linWrap.AddressU  = TEXTURE_ADDRESS_WRAP; linWrap.AddressV = TEXTURE_ADDRESS_WRAP; linWrap.AddressW = TEXTURE_ADDRESS_WRAP;
+    ImmutableSamplerDesc immSamplers[] = {
+        { SHADER_TYPE_PIXEL, "g_Albedo", linWrap },
+    };
+    ci.PSODesc.ResourceLayout.ImmutableSamplers    = immSamplers;
+    ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
+
+    device->CreateGraphicsPipelineState(ci, &m_impl->modelPSO);
+    if (!m_impl->modelPSO) return false;
+    if (auto* v = m_impl->modelPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) v->Set(m_impl->constants);
+    if (auto* p = m_impl->modelPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL,  "Constants")) p->Set(m_impl->constants);
+    m_impl->modelPSO->CreateShaderResourceBinding(&m_impl->modelSRB, true);
+    return m_impl->modelSRB != nullptr;
+}
+
 // --- Teardown ---------------------------------------------------------------
 
 void Renderer::Shutdown() {
@@ -728,6 +852,7 @@ void Renderer::Shutdown() {
 
     // Release scene/pipeline GPU objects before the device.
     m_impl->meshes.clear();
+    m_impl->models.clear();           // GLTF::Model objects own GPU buffers + textures
     m_impl->bloom.reset();            // DiligentFX effect objects own GPU resources
     m_impl->ssao.reset();
     m_impl->dof.reset();
@@ -737,6 +862,7 @@ void Renderer::Shutdown() {
     m_impl->motionVectors.Release();
     m_impl->aoWhite.Release();
     m_impl->ssrBlack.Release();
+    m_impl->modelWhite.Release();
     m_impl->tonemapSRB.Release();
     m_impl->tonemapPSO.Release();
     m_impl->postConstants.Release();
@@ -745,8 +871,10 @@ void Renderer::Shutdown() {
     m_impl->sceneDepth.Release();
     m_impl->fillSRB.Release();
     m_impl->outlineSRB.Release();
+    m_impl->modelSRB.Release();
     m_impl->fillPSO.Release();
     m_impl->outlinePSO.Release();
+    m_impl->modelPSO.Release();
     m_impl->constants.Release();
     m_impl->shaderFactory.Release();
 
@@ -977,6 +1105,130 @@ void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Transform& 
     m_impl->context->SetPipelineState(m_impl->fillPSO);
     m_impl->context->CommitShaderResources(m_impl->fillSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     m_impl->context->DrawIndexed(draw);
+}
+
+// --- Scene: glTF models -----------------------------------------------------
+
+ModelHandle Renderer::LoadModel(const char* path) {
+    if (!path) return ModelHandle::Invalid;
+
+    size_t attribCount = 0;
+    const GLTF::VertexAttributeDesc* attribs = ModelVertexAttribs(attribCount);
+
+    GLTF::ModelCreateInfo ci;
+    ci.FileName            = path;
+    ci.VertexAttributes    = attribs;
+    ci.NumVertexAttributes = static_cast<Uint32>(attribCount);
+    ci.IndexType           = VT_UINT32;
+    // The loader defaults vertex buffers to BIND_NONE (only the index buffer defaults to
+    // BIND_INDEX_BUFFER); without this the VB can't be bound/drawn. We pack everything into
+    // buffer 0, so flag slot 0.
+    ci.VertBufferBindFlags[0] = BIND_VERTEX_BUFFER;
+
+    // The loader parses + uploads GPU buffers/textures in its constructor; it throws on a
+    // bad/missing file, so guard the load.
+    std::unique_ptr<GLTF::Model> model;
+    try {
+        model = std::make_unique<GLTF::Model>(m_impl->device, m_impl->context, ci);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Renderer: failed to load model '%s': %s\n", path, e.what());
+        return ModelHandle::Invalid;
+    }
+    model->PrepareGPUResources(m_impl->device, m_impl->context);
+
+    m_impl->models.push_back(std::move(model));
+    return static_cast<ModelHandle>(m_impl->models.size());   // 1-based; 0 = Invalid
+}
+
+void Renderer::DrawModel(ModelHandle handle, const Transform& t, const Transform& prevT, const Material& style) {
+    const uint32_t idx = static_cast<uint32_t>(handle);
+    if (idx == 0 || idx > m_impl->models.size())
+        return;
+    GLTF::Model& model = *m_impl->models[idx - 1];
+    if (model.Scenes.empty())
+        return;
+    const int sceneId = model.DefaultSceneId;
+
+    // Object placement this frame + last (for motion vectors), composed with each node's
+    // transform inside the model.
+    const float4x4 objWorld     = WorldFromTransform(t);
+    const float4x4 objPrevWorld = WorldFromTransform(prevT);
+
+    GLTF::ModelTransforms xforms;
+    model.ComputeTransforms(sceneId, xforms);
+
+    // Bind the model's shared vertex + index buffers once; every primitive sub-ranges them.
+    IBuffer*     vbs[8] = {};
+    const Uint32 numVBs = static_cast<Uint32>(model.GetVertexBufferCount());
+    for (Uint32 i = 0; i < numVBs; ++i)
+        vbs[i] = model.GetVertexBuffer(i, m_impl->device, m_impl->context);
+    m_impl->context->SetVertexBuffers(0, numVBs, vbs, nullptr,
+                                      RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+    IBuffer* ib = model.GetIndexBuffer(m_impl->device, m_impl->context);
+    if (ib)
+        m_impl->context->SetIndexBuffer(ib, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+    const Uint32 baseIndex  = model.GetFirstIndexLocation();
+    const Uint32 baseVertex = model.GetBaseVertex();
+
+    m_impl->context->SetPipelineState(m_impl->modelPSO);
+
+    ITextureView*      whiteSRV = m_impl->modelWhite->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+    const float3&      L        = m_impl->lightDir;
+    const GLTF::Scene& scene    = model.Scenes[sceneId];
+
+    for (const GLTF::Node* node : scene.LinearNodes) {
+        if (node->pMesh == nullptr) continue;
+        const float4x4 nodeGlobal = xforms.NodeGlobalMatrices[node->Index];
+        const float4x4 world      = nodeGlobal * objWorld;
+        const float4x4 prevWorld  = nodeGlobal * objPrevWorld;   // static model: node xform is constant
+        const float4x4 normalMat  = world.Inverse().Transpose();
+
+        for (const GLTF::Primitive& prim : node->pMesh->Primitives) {
+            if (prim.VertexCount == 0 && prim.IndexCount == 0) continue;
+            const GLTF::Material& mat = model.Materials[prim.MaterialId];
+            const float4          bc  = mat.Attribs.BaseColorFactor;
+
+            {
+                MapHelper<ShaderConstants> cb(m_impl->context, m_impl->constants, MAP_WRITE, MAP_FLAG_DISCARD);
+                cb->worldViewProj     = world * m_impl->viewProj;
+                cb->world             = world;
+                cb->normalMatrix      = normalMat;
+                cb->prevWorldViewProj = prevWorld * m_impl->prevViewProj;
+                cb->lightDir          = float4(L.x, L.y, L.z, 0.0f);
+                cb->baseColor         = float4(bc.x * style.baseColor.x, bc.y * style.baseColor.y,
+                                               bc.z * style.baseColor.z, bc.w);   // glTF factor * app tint
+                cb->outline           = float4(0.0f, 0.0f, 0.0f, 0.0f);           // unused for models
+                cb->params            = float4(style.bands, style.ambient, style.roughness, 0.0f);
+            }
+
+            // Base-color texture (or the 1x1 white fallback when the material has none).
+            ITextureView* albedoSRV = whiteSRV;
+            const int tid = mat.GetTextureId(GLTF::DefaultBaseColorTextureAttribId);
+            if (tid >= 0)
+                if (ITexture* tex = model.GetTexture(static_cast<Uint32>(tid), m_impl->device, m_impl->context))
+                    albedoSRV = tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+            if (auto* v = m_impl->modelSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_Albedo"))
+                v->Set(albedoSRV);
+            m_impl->context->CommitShaderResources(m_impl->modelSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+            if (prim.IndexCount > 0) {
+                DrawIndexedAttribs draw;
+                draw.IndexType          = VT_UINT32;
+                draw.NumIndices         = prim.IndexCount;
+                draw.FirstIndexLocation = baseIndex + prim.FirstIndex;
+                draw.BaseVertex         = baseVertex + prim.FirstVertex;
+                draw.Flags              = DRAW_FLAG_VERIFY_ALL;
+                m_impl->context->DrawIndexed(draw);
+            } else {
+                DrawAttribs draw;
+                draw.NumVertices         = prim.VertexCount;
+                draw.StartVertexLocation = baseVertex + prim.FirstVertex;
+                draw.Flags               = DRAW_FLAG_VERIFY_ALL;
+                m_impl->context->Draw(draw);
+            }
+        }
+    }
 }
 
 // --- Debug UI (Dear ImGui) --------------------------------------------------

@@ -76,6 +76,8 @@ target_link_libraries(ToonEngine
         Diligent-GraphicsEngineVk-shared   # Vulkan: Windows, Linux, macOS (via MoltenVK)
         Diligent-Common                    # RefCntAutoPtr.hpp + other Common/interface utilities
         Diligent-GraphicsTools             # MapHelper.hpp (dynamic CB updates) + graphics utilities
+        Diligent-AssetLoader               # GLTF::Model — glTF/GLB loading (self-contained; no PBR renderer)
+        Diligent-TextureLoader             # CreateTextureFromFile + image decode (PNG/JPG)
         Diligent-Imgui                     # ImGuiImplDiligent renderer backend + vendored Dear ImGui
         DiligentFX                         # post-processing effects (bloom, tone mapping, ...)
         glfw
@@ -91,7 +93,8 @@ target_compile_definitions(ToonEngine PRIVATE ENGINE_DLL=1)
 # finds them regardless of the working directory (dev convenience). A shipped
 # build would copy assets/shaders next to the exe and use a relative path.
 target_compile_definitions(ToonEngine PRIVATE
-    TOON_SHADERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders")
+    TOON_SHADERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders"
+    TOON_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models")
 
 # Convenience function from DiligentCore: copies the engine shared libraries
 # next to the executable so the OS can find and load them at runtime.

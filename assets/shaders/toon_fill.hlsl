@@ -18,20 +18,11 @@ PSInput VSMain(VSInput vin)
 
 PSOutput PSMain(PSInput pin)
 {
-    float3 N     = normalize(pin.WorldNormal);
-    float3 L     = normalize(g_LightDir.xyz);
-    float  NdotL = saturate(dot(N, L));
-
-    // Quantize the diffuse term into `bands` distinct levels spanning [0, 1].
-    float bands = max(g_Params.x, 1.0);
-    float ramp  = saturate(floor(NdotL * bands) / max(bands - 1.0, 1.0));
-
-    // Ambient floor keeps the shadow side from crushing to pure black.
-    float ambient = g_Params.y;
-    float shade   = lerp(ambient, 1.0, ramp);
+    float3 N = normalize(pin.WorldNormal);
 
     PSOutput o;
-    o.Color  = float4(g_BaseColor.rgb * shade, 1.0);
+    // Banded (cel) diffuse; g_Params.x = bands, .y = ambient floor.
+    o.Color  = float4(CelShade(g_BaseColor.rgb, N, g_LightDir.xyz, g_Params.x, g_Params.y), 1.0);
     o.Normal = float4(N, g_Params.z);   // world normal (SSAO) + roughness in w (SSR)
     o.Motion = ComputeMotion(pin.CurrClip, pin.PrevClip);
     return o;

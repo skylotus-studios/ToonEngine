@@ -29,6 +29,7 @@ enum class BufferHandle   : uint32_t { Invalid = 0 };
 enum class ShaderHandle   : uint32_t { Invalid = 0 };
 enum class PipelineHandle : uint32_t { Invalid = 0 };
 enum class MeshHandle     : uint32_t { Invalid = 0 };
+enum class ModelHandle    : uint32_t { Invalid = 0 };   // a loaded glTF/GLB asset
 
 struct Color { float r = 0.0f, g = 0.0f, b = 0.0f, a = 1.0f; };
 
@@ -170,6 +171,18 @@ public:
     void DrawMesh(MeshHandle mesh, const Transform& transform, const Transform& prevTransform,
                   const Material& material);
 
+    // --- Scene: glTF models -------------------------------------------------
+    // Load a glTF/GLB model via DiligentTools' loader (Diligent::GLTF::Model owns the
+    // GPU buffers + textures). Returns ModelHandle::Invalid on failure.
+    ModelHandle LoadModel(const char* path);
+
+    // Draw a loaded model cel-shaded (textured fill; no inverted-hull outline yet).
+    // `style` supplies the shared look — bands / ambient / roughness — and its
+    // `baseColor` is a global tint over each primitive's glTF base color (default white
+    // = untinted). Motion vectors come from transform vs prevTransform, like DrawMesh.
+    void DrawModel(ModelHandle model, const Transform& transform, const Transform& prevTransform,
+                   const Material& style);
+
     // Post-processing. Set params, then EndScene() resolves the HDR scene to the
     // back buffer (call after the DrawMesh calls, before the UI overlay).
     void SetPostParams(const PostParams& params);
@@ -190,6 +203,7 @@ private:
     // Internal setup steps (called from Init/Resize). Plain signatures so the
     // header stays Diligent-free.
     bool CreateToonPipeline();                                // toon fill/outline PSOs + shared CB
+    bool CreateModelPipeline();                               // glTF model cel-fill PSO (+ albedo)
     bool CreatePostPipeline();                                // HDR tone-map resolve PSO
     bool CreatePostFX();                                      // PostFXContext + Bloom + SSAO effects
     bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + normal + depth + motion
