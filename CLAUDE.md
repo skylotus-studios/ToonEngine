@@ -73,11 +73,11 @@ automatically (the Windows SDK tools clang-cl needs — otherwise configure fail
 `CMAKE_MT-NOTFOUND`), and CLion reads `CMakePresets.json` for the `windows-debug` /
 `windows-release` profiles.
 
-**Command line / CI** needs that environment too — dot-source `scripts/vsenv.ps1`
-(portable via vswhere + VsDevCmd.bat), then use the presets:
+**Command line / CI** needs that environment too — open a **Developer PowerShell for VS
+2022** (Start Menu shortcut, installed by Visual Studio itself — no repo script for this,
+see MEMORY.md → *Build gotchas*), then use the presets:
 
 ```
-. .\scripts\vsenv.ps1
 cmake --preset windows-debug
 cmake --build --preset windows-debug
 ./build/windows-debug/ToonEngine.exe
@@ -93,20 +93,26 @@ src/
   core/
     renderer.h            The seam: opaque handles + scene types (Vertex/Camera/ToonParams/Transform) + PIMPL Renderer
     renderer.cpp          Diligent (Vulkan) backend behind the seam: toon PSOs/shaders/mesh buffers + DiligentFX post chain + ImGui-Diligent glue
-    math.h                Minimal Diligent-free vector types for the seam's public API
+    math.h                Minimal Diligent-free vector/matrix types for the seam's public API
     primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus/plane) -> toon::MeshData
-assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + tonemap.hlsl (HLSL->SPIR-V at runtime)
+    scene.{h,cpp}         Entity-tree scene graph: hierarchy, world-transform composition, editor mutations
+    camera.{h,cpp}        Editor camera controls: orbit/pan/zoom/fly/focus
+    input.{h,cpp}         GLFW input polling + ImGui capture gate
+assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + model_fill/model_outline + tonemap.hlsl
 assets/models/            glTF/GLB/FBX test models (helmet/fox/dragon) — Git LFS
 assets/fonts/             UI fonts (BaiJamjuree, OpenSans) for the editor overlay
 external/                 Git submodules (see .gitmodules): DiligentCore/Tools/FX, glfw, ImGuizmo
 CMakeLists.txt            add_subdirectory the submodules; disables unused Diligent backends
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
-scripts/vsenv.ps1         Imports the VS Developer env for command-line builds
+.clangd                   Points clangd at build/windows-debug's compile_commands.json
 docs/clion-setup-windows.md  CLion toolchain + preset + debug setup (Windows, active)
 docs/clion-setup-linux.md    CLion setup notes for Linux (planned)
 docs/clion-setup-macos.md    CLion setup notes for macOS (planned)
-docs/style-guide.md          C++ house style (formatting + comments + seam rules)
+docs/cpp-style-guide.md      C++ house style (formatting + comments + seam rules)
+docs/md-style-guide.md       Prose/writing style (no puffery, no em-dash spam, no AI tells)
 .claude/skills/tidy-cpp/     Skill: clean src/** to the style guide (/tidy-cpp)
+.claude/skills/tidy-md/      Skill: keep CLAUDE.md/README.md/docs/** accurate + right-sized (/tidy-md)
+.claude/skills/verify/       Skill: build/launch/screenshot-verify (no live input desktop here)
 ```
 
 ## The renderer seam (load-bearing rule)

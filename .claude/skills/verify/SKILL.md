@@ -8,13 +8,24 @@ description: Build, launch, and screenshot-verify ToonEngine.exe. Documents a ha
 ## Build + launch (works reliably)
 
 ```
-. .\scripts\vsenv.ps1          # only needed for a fresh configure; usually unnecessary --
-                                # `cmake --build --preset windows-debug` alone works even when
-                                # vsenv sourcing fails, because ninja caches tool paths from the
-                                # last successful configure (scripts/vsenv.ps1 itself may not
-                                # exist on disk -- see repo MEMORY.md "Diligent build gotchas").
 cmake --build --preset windows-debug
 Start-Process build\windows-debug\ToonEngine.exe
+```
+
+Works from a bare shell as long as `build/windows-debug` is already configured: ninja caches
+tool paths from the last successful configure, so the VS Developer environment doesn't need
+importing for an incremental build. A from-scratch *configure* does need it, and there's no
+repo script for this (deliberately; see repo MEMORY.md → "Build gotchas", don't recreate
+one). Import it inline for that one command instead:
+
+```powershell
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
+cmd /c "`"$devCmd`" -arch=x64 -host_arch=x64 -no_logo && set" | ForEach-Object {
+    if ($_ -match '^([^=]+)=(.*)$') { Set-Item "Env:$($matches[1])" $matches[2] }
+}
+cmake --preset windows-debug
 ```
 
 **Cold start is slow on a debug build — wait ~10-12s before trusting any capture.**

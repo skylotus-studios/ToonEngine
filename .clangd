@@ -1,0 +1,14 @@
+# .clangd -- points clangd at the generated compile database so it gets the
+# exact per-file include paths / defines CMake+Ninja+clang-cl used, instead of
+# guessing (this project's include graph -- Diligent's Core/Tools/FX plus
+# their own nested submodules -- is too deep for clangd's fallback heuristics
+# to resolve on its own).
+#
+# windows-debug is the canonical build dir (see CLAUDE.md -> Build). Configure
+# it at least once -- `cmake --preset windows-debug` (CLion does this for you;
+# from a plain shell, see MEMORY.md -> "Build gotchas" for the VS environment
+# it needs first) -- before expecting real diagnostics/completion; until then
+# clangd falls back to generic parsing and most Diligent/GLFW/ImGui includes
+# won't resolve.
+CompileFlags:
+  CompilationDatabase: build/windows-debug

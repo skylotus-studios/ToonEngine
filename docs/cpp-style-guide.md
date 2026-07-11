@@ -1,3 +1,5 @@
+<!-- tidy-md:locked — hand-authored house style; revise deliberately, not via routine tidying -->
+
 # ToonEngine C++ Style Guide
 
 House style for **our** code under `src/` (and any future engine modules). External

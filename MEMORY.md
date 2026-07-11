@@ -13,10 +13,25 @@ Ninja + clang-cl need `mt.exe`/`rc.exe` and the MSVC libs on `PATH`. A plain
 terminal doesn't have these; configure fails with the cryptic
 `CMAKE_MT-NOTFOUND`. In CLion this is handled by a **Visual Studio toolchain**,
 which sources the VS Developer environment automatically (see
-`docs/clion-setup-windows.md`). For command-line builds, `scripts/vsenv.ps1` does the
-same: it locates the VS install via `vswhere` and imports the environment by
-sourcing `VsDevCmd.bat -arch=x64 -host_arch=x64` and copying the resulting env
-vars into the session.
+`docs/clion-setup-windows.md`). For a plain shell (no CLion), open a **Developer
+PowerShell for VS 2022** (Start Menu shortcut, installed by Visual Studio itself) or
+import it inline:
+
+```powershell
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
+cmd /c "`"$devCmd`" -arch=x64 -host_arch=x64 -no_logo && set" | ForEach-Object {
+    if ($_ -match '^([^=]+)=(.*)$') { Set-Item "Env:$($matches[1])" $matches[2] }
+}
+```
+
+There used to be a `scripts/vsenv.ps1` wrapping exactly this. It was **removed
+deliberately**: vestigial from an earlier VS Code-based workflow this repo no longer uses,
+and CLion needs none of it. Don't recreate it; inline the snippet above the one time a fresh
+configure genuinely needs it from a bare shell. (A prior session did recreate it, from the
+doc references below that still described it as if it existed. This section is what should
+have been fixed instead. See "History" for the full correction.)
 
 **Do not use `Launch-VsDevShell.ps1 -DevCmdArguments ...`** — that parameter
 doesn't exist on all VS builds (confirmed broken on this machine's VS 2022
@@ -71,6 +86,19 @@ preserve already-compiled objects whose command line didn't change.
 
 `git submodule update --init` alone won't populate DiligentTools' own
 submodules (imgui, zlib, libpng, stb, json, args) — use `--recursive`.
+
+### LSP (clangd) setup
+
+`CMAKE_EXPORT_COMPILE_COMMANDS` is now set explicitly in `CMakePresets.json`'s
+`windows-base` preset. Previously it was only emitted implicitly by CLion's own indexing,
+so a pure command-line configure never produced one. A root `.clangd` points
+`CompileFlags.CompilationDatabase` at `build/windows-debug`; clangd auto-detects the
+`clang-cl` driver from the compile command (`--driver-mode=cl`) on its own, no
+`--query-driver` needed. Verified with `clangd --check=<file>` on both `renderer.cpp` (the
+deepest include graph: DiligentCore/Tools/FX + ImGui) and `main.cpp`: preamble + AST build
+clean, zero real diagnostic errors (the only "errors" `--check` reports are its own
+`ExtractFunction` tweak self-test failing on a `break`/`continue`, a clangd-internal
+artifact, not a code problem).
 
 ## Window + device bring-up (GLFW + Vulkan)
 
@@ -992,8 +1020,9 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   backend?"); also built the ImGui PSO with depth = `TEX_FORMAT_UNKNOWN` (kills a
   per-frame DSV-mismatch warning) and `WaitForIdle()` before teardown. Verified via a
   close test (exit 0). (3) Added section dividers to `renderer.cpp`, plus
-  **`docs/style-guide.md`** and a **`.claude/skills/tidy-cpp`** skill for future
-  cleanups. See the Dear ImGui + Bloom "Gotchas" above.
+  **`docs/style-guide.md`** (renamed `docs/cpp-style-guide.md` on 2026-07-11) and a
+  **`.claude/skills/tidy-cpp`** skill for future cleanups. See the Dear ImGui + Bloom
+  "Gotchas" above.
 - **2026-07-10** — **SSAO** (roadmap #1): DiligentFX `ScreenSpaceAmbientOcclusion` via
   the shared `PostFXContext`, which now gets *real* inputs (unlike Bloom): a
   world-space **normal G-buffer** (scene pass is now MRT; toon shaders write
@@ -1267,3 +1296,16 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
     build, clean console log (no errors), steady ~144 FPS, AO contact shadows still
     visible and correctly composited under all objects, clean exit. Not yet re-confirmed
     by the user.
+- **2026-07-11** — **Tooling correction: `scripts/vsenv.ps1` should not exist.** A session
+  building a `tidy-md` doc-maintenance skill + LSP setup found CLAUDE.md, this file, and the
+  `verify` skill all describing `scripts/vsenv.ps1` as if it were present, confirmed it
+  wasn't (twice), and wrongly concluded the file was the bug, then recreated it. It wasn't:
+  the user had deliberately deleted it as vestigial from the pre-CLion VS Code
+  workflow (see the 2026-07-10 CLion-migration entry above) and explicitly did not want it
+  recreated. Corrected by deleting the file again and fixing every doc that referenced it
+  (CLAUDE.md, this file's "Build gotchas", the `verify` and `tidy-md` skills, `.clangd`,
+  `docs/clion-setup-windows.md`, `README.md`) to describe the VS-environment import as an
+  inline snippet or the stock "Developer PowerShell for VS 2022" shortcut instead of a repo
+  script. General lesson (folded into the `tidy-md` skill): a doc referencing a missing file
+  is stale in one of *two* directions — the file may need restoring, or the doc may need to
+  stop claiming it exists — check which before acting, don't assume the first.

@@ -1,11 +1,11 @@
 ---
 name: tidy-cpp
-description: Clean up ToonEngine's own C++ source (src/**) to the house style in docs/style-guide.md — formatting, section structure, comment clarity/onboarding, and removing cruft. Use when the user asks to tidy, clean up, neaten, reorganize, or improve the readability of ToonEngine source files. Quality/readability only; it does not change behavior.
+description: Clean up ToonEngine's own C++ source (src/**) to the house style in docs/cpp-style-guide.md — formatting, section structure, comment clarity/onboarding, and removing cruft. Use when the user asks to tidy, clean up, neaten, reorganize, or improve the readability of ToonEngine source files. Quality/readability only; it does not change behavior.
 ---
 
 # tidy-cpp — clean ToonEngine source to house style
 
-Tidy **our** C++ under `src/**` to `docs/style-guide.md`. Read that guide first —
+Tidy **our** C++ under `src/**` to `docs/cpp-style-guide.md`. Read that guide first —
 it is the source of truth; this skill is the procedure for applying it.
 
 ## Scope

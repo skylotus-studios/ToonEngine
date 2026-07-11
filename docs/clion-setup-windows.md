@@ -6,8 +6,9 @@ CMake presets, and run/debug. After it, `Ctrl+F9` builds and `Shift+F9` debugs.
 The build uses **Ninja + clang-cl**, which target the MSVC ABI and therefore need
 the **Visual Studio Developer environment** on `PATH` — the Windows SDK's `mt.exe` /
 `rc.exe` and the MSVC CRT/import libs. CLion's **Visual Studio toolchain** sets that
-environment up automatically for every configure/build/run, so (unlike a plain
-shell) you never run `scripts/vsenv.ps1` by hand.
+environment up automatically for every configure/build/run, so (unlike a plain shell, which
+needs it imported manually; see MEMORY.md → *Build gotchas*) you never have to think about
+it here.
 
 ## Prerequisites
 
@@ -40,10 +41,10 @@ git submodule update --init --recursive
 | C Compiler / C++ Compiler | `clang-cl` (full path if not on `PATH`, e.g. `C:\Program Files\LLVM\bin\clang-cl.exe`) |
 | Debugger                  | *Bundled LLDB* (default — it reads the PDBs clang-cl emits)       |
 
-This toolchain is what replaces `scripts/vsenv.ps1`: CLion runs `VsDevCmd`
-internally, so the SDK tools and MSVC libs are always present. (The compiler is also
-driven by the preset in the next step; setting it here too is belt-and-braces and
-lets CLion resolve the toolchain correctly.)
+CLion runs `VsDevCmd` internally for this toolchain, so the SDK tools and MSVC libs are
+always present without any manual environment setup. (The compiler is also driven by the
+preset in the next step; setting it here too is belt-and-braces and lets CLion resolve the
+toolchain correctly.)
 
 ## 3. Enable the CMake presets
 
