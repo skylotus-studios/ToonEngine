@@ -33,7 +33,9 @@ re-implements it.
 The app opens a window, creates a Vulkan device + swap chain, and each frame draws a
 small spinning scene — a smooth **sphere** (non-uniformly scaled into an **ellipsoid**,
 exercising the inverse-transpose normal matrix), a faceted **cube**, a **torus**, and a
-loaded **glTF model** (`helmet.glb`), on a **ground plane**. The procedural primitives are
+loaded **glTF model** (`helmet.glb`), on a **ground plane**. Everything is a node in an
+**entity-tree scene graph** (`core/scene.h`) with hierarchy-composed world transforms — a
+small satellite is parented to the cube and orbits it. The procedural primitives are
 cel-shaded with a **banded diffuse fill + inverted-hull silhouette outline** in their own
 colors (base + a **per-object outline**); the model is cel-shaded with its **albedo
 texture** + an **inverted-hull outline** (via DiligentTools' glTF loader). The scene renders into an **HDR offscreen
@@ -161,11 +163,14 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
    (extruded along the shading normal — smooth surfaces stay closed). Follow-ups: normal /
    metallic-roughness maps, `fox.glb` / `dragon.gltf`; procedural-mesh texturing if wanted.
 
-**B. Scene & editor** (next)
-3. **Scene graph** — port `scene.{h,cpp}` (entity tree, world-matrix cache,
-   add/delete/reparent/duplicate); drive `DrawMesh` from the scene, not a hardcoded array.
-4. **Editor camera + input** — port the orbit/pan/zoom/fly `Camera` and the `Input` layer
-   (action maps + the ImGui capture gate).
+**B. Scene & editor**
+3. **Scene graph** — **done**: `core/scene.{h,cpp}` — an entity tree with hierarchy-composed
+   world matrices; the render loop walks the scene (via the new `Mat4` `DrawMesh`/`DrawModel`
+   overloads), not a hardcoded array. `scene.cpp` is a Diligent-using TU (composition math).
+   The editor-triggered mutations (reparent / duplicate / topo-reorder / decompose) are
+   deferred to item 5, which exercises them.
+4. **Editor camera + input** (next) — port the orbit/pan/zoom/fly `Camera` and the `Input`
+   layer (action maps + the ImGui capture gate).
 5. **Editor UI** — inspector + hierarchy panel + themes/fonts + ImGuizmo transform gizmos.
 6. **Scene serialization** — save/load scenes to disk.
 

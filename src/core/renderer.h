@@ -171,6 +171,11 @@ public:
     void DrawMesh(MeshHandle mesh, const Transform& transform, const Transform& prevTransform,
                   const Material& material);
 
+    // Draw with a pre-composed world matrix (+ last frame's, for motion vectors) — the
+    // path the scene graph uses, since it composes world transforms down the hierarchy.
+    void DrawMesh(MeshHandle mesh, const Mat4& world, const Mat4& prevWorld,
+                  const Material& material);
+
     // --- Scene: glTF models -------------------------------------------------
     // Load a glTF/GLB model via DiligentTools' loader (Diligent::GLTF::Model owns the
     // GPU buffers + textures). Returns ModelHandle::Invalid on failure.
@@ -181,6 +186,10 @@ public:
     // `baseColor` is a global tint over each primitive's glTF base color (default white
     // = untinted). Motion vectors come from transform vs prevTransform, like DrawMesh.
     void DrawModel(ModelHandle model, const Transform& transform, const Transform& prevTransform,
+                   const Material& style);
+
+    // Draw a loaded model with a pre-composed world matrix (see DrawMesh's Mat4 overload).
+    void DrawModel(ModelHandle model, const Mat4& world, const Mat4& prevWorld,
                    const Material& style);
 
     // Post-processing. Set params, then EndScene() resolves the HDR scene to the

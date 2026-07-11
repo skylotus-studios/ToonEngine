@@ -602,6 +602,40 @@ per primitive bind `Materials[prim.MaterialId].Attribs.BaseColorFactor` + base-c
 BaseVertex = GetBaseVertex()+prim.FirstVertex)`. Verified: helmet renders cel-shaded with its
 albedo, SSAO/bloom apply, motion from the spin, clean exit. (Vendored API 256018/019.)
 
+## Scene graph (Phase B)
+
+`core/scene.{h,cpp}` — an entity tree replacing `main.cpp`'s hardcoded array. `Scene` is a
+flat `std::vector<Entity>` with **parents always before children**, so one forward pass
+composes world matrices. `Entity` holds a name, a `parent` index (-1 = root at index 0), an
+optional local `Transform`, cached `worldMatrix` / `prevWorldMatrix` (plain `Mat4`), and a
+renderable — a `MeshHandle` (primitive) OR a `ModelHandle` (glTF) — plus a `Material`
+(primitive material / model tint + style). Ops: `EnsureSceneRoot`, `AddEntity`,
+`UpdateWorldTransforms`, `DestroyScene`.
+
+**Where the 4x4 math lives (the design call).** The hierarchy needs compose/inverse math;
+`math.h` deliberately stops at vectors. Per build-on-Diligent:
+- **`scene.cpp` is a Diligent-using engine TU** (the 2nd after `renderer.cpp`) — it uses
+  Diligent's `float4x4` for composition (no hand-rolled 4x4 math).
+- **`math.h` gained a plain, math-free `Mat4`** (16 floats, row-major = Diligent's layout)
+  as the seam vocabulary for a composed world transform; `scene.cpp` / `renderer.cpp`
+  convert to/from `float4x4` at the boundary (a straight element copy). `scene.h` +
+  `main.cpp` stay Diligent-free.
+- The seam grew **`Mat4` overloads** of `DrawMesh` / `DrawModel`; the existing `Transform`
+  overloads now just build a world `Mat4` and delegate.
+
+**Composition** (row-vector, v' = v·M): `worldMatrix = local * parentWorld` — local FIRST,
+then parent (the reverse of glm's column-vector `parentW * local`). `LocalFromTransform` in
+`scene.cpp` MUST match `renderer.cpp`'s `WorldFromTransform`
+(`Scale·Rx·Ry·Rz·Translation`). `UpdateWorldTransforms` snapshots
+`prevWorldMatrix = worldMatrix` first, so **motion vectors come from the scene's
+double-buffered world matrices** — no per-object prev-angle bookkeeping in `main.cpp` anymore.
+
+**Demo:** a small satellite entity is parented to the (spinning) cube and orbits it,
+inheriting the cube's world transform. **Deferred to the editor step (item 5):**
+`ReparentEntity` / `MoveEntityAsSibling` / `DuplicateEntity`, the topo-reorder helpers,
+world-preserving reparent (needs `float4x4.Inverse()` + a TRS decompose), and
+`Scene::selected` — all present in `ToonEngineOld/src/scene/scene.cpp` as the port reference.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -819,3 +853,16 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   Texture2DArray; the buffer/texture getters need device+context; a dimension-mismatch
   assertion HANGS and logs to buffered cout). See "glTF model loading" above. Verified on the
   RTX 3080 via `PrintWindow` (clean run, graceful exit).
+- **2026-07-10** — **Model outline**: models get the inverted-hull silhouette too, via
+  `model_outline.hlsl` (extrude along the shading normal, no smooth normal) + a cull-FRONT
+  outline PSO; `DrawModel` draws outline→fill per primitive. The helmet now matches the toon
+  look. See "glTF model loading".
+- **2026-07-10** — **Scene graph** (Phase B): `core/scene.{h,cpp}` — an entity tree with
+  hierarchy-composed world matrices; the render loop walks the scene instead of a hardcoded
+  array. Design call: `scene.cpp` is a Diligent-using TU (composition via `float4x4`, no
+  reinvented 4x4 math) and `math.h` gained a plain `Mat4` (seam vocabulary) with new `Mat4`
+  `DrawMesh`/`DrawModel` overloads; the `Transform` overloads delegate. Motion vectors now
+  come from the scene's double-buffered world matrices (no prev-angle bookkeeping). Demo: a
+  satellite parented to the cube orbits it. Editor-triggered mutations (reparent / duplicate
+  / decompose / selection) deferred to the editor step. Built clean, verified via
+  `PrintWindow`. See "Scene graph" above.

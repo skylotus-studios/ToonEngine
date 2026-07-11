@@ -7,10 +7,11 @@
 //============================================================================
 #include "core/renderer.h"
 #include "core/primitives.h"
+#include "core/scene.h"
 
-#include <array>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -24,15 +25,11 @@
 #endif
 
 namespace {
-// A scene object: name (for the UI), which mesh, how it looks (its own material,
-// including its own outline), where it sits, its spin axis, and scale.
-struct Object {
-    const char*      name;
-    toon::MeshHandle mesh;
-    toon::Material   material;
-    toon::Vec3       position;
-    toon::Vec3       spinAxis;                  // rotationEuler = spinAxis * angle
-    toon::Vec3       scale{ 1.0f, 1.0f, 1.0f }; // per-object scale (may be non-uniform)
+// A spinning entity: which scene entity, and the axis its local rotation animates around
+// (each frame, rotationEuler = axis * angle).
+struct Spinner {
+    int        entity;
+    toon::Vec3 axis;
 };
 
 // Upload a CPU mesh and return its handle (logs on failure).
@@ -92,41 +89,76 @@ int main() {
             r->Resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
         });
 
-    // --- Scene ---------------------------------------------------------------
-    // Three primitives in a row: a smooth sphere — non-uniformly scaled into a
-    // spinning ellipsoid, which exercises the inverse-transpose normal matrix (its
-    // cel bands stay locked to the true surface instead of skewing) — a faceted cube
-    // (per-face shading, smooth-normal outline hull), and a torus.
-    //
-    // Each carries its OWN outline (color + width), not a shared one: the sphere a
-    // thin dark-red rim, the cube a bold near-black edge, the torus a mid dark-bronze
-    // line. Material{ baseColor, outlineColor, outlineWidth }; a global multiplier
-    // (below) scales every width together, and the debug UI tunes each live.
-    std::array<Object, 3> objects{ {
-        { "Sphere", Upload(renderer, toon::MakeUVSphere(1.0f, 32, 48),      "sphere"),
-          toon::Material{ {0.85f, 0.30f, 0.35f}, {0.24f, 0.05f, 0.08f}, 0.030f },
-          {-2.8f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.5f, 0.8f, 1.0f} },
-        { "Cube", Upload(renderer, toon::MakeCube(0.9f),                    "cube"),
-          toon::Material{ {0.30f, 0.45f, 0.85f}, {0.02f, 0.02f, 0.05f}, 0.050f },
-          { 0.0f, 0.0f, 0.0f}, {0.5f, 1.0f, 0.0f} },
-        { "Torus", Upload(renderer, toon::MakeTorus(0.75f, 0.32f, 48, 24),  "torus"),
-          toon::Material{ {0.90f, 0.70f, 0.25f}, {0.32f, 0.20f, 0.03f}, 0.022f },
-          { 2.8f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f} },
-    } };
+    // --- Scene graph ---------------------------------------------------------
+    // A real entity tree (core/scene.h) instead of a hardcoded array. Root at index 0;
+    // everything is a child of the root EXCEPT the satellite, which is parented to the cube
+    // to demonstrate hierarchy composition (it orbits the cube as the cube spins).
+    toon::Scene scene;
+    toon::EnsureSceneRoot(scene);
+    std::vector<Spinner> spinners;   // entities whose local rotation animates each frame
 
-    // Ground plane beneath the trio, so SSAO has a surface to catch their contact
-    // shadows (drawn separately below — it doesn't spin and wants no outline).
-    const toon::MeshHandle groundMesh = Upload(renderer, toon::MakePlane(5.0f), "ground");
-    toon::Material groundMaterial{ {0.60f, 0.60f, 0.63f} };
-    groundMaterial.outlineWidth = 0.0f;
-    groundMaterial.roughness    = 0.05f;   // smooth -> reflective (SSR); objects stay matte (0.9)
-
-    // A loaded glTF model (DiligentTools' loader), cel-shaded with its own albedo texture —
-    // the star of Phase A. Its glTF material carries the base color, so the app tint is white.
+    // Ground plane beneath the objects (catches their SSAO contact shadows; no spin/outline).
+    {
+        toon::Entity& e = scene.entities[toon::AddEntity(scene, 0, "Ground")];
+        e.mesh = Upload(renderer, toon::MakePlane(5.0f), "ground");
+        e.transform->position   = { 0.0f, -1.05f, 0.0f };
+        e.material.baseColor     = { 0.60f, 0.60f, 0.63f };
+        e.material.outlineWidth  = 0.0f;
+        e.material.roughness     = 0.05f;   // smooth -> reflective (SSR)
+    }
+    // Sphere — non-uniformly scaled into a spinning ellipsoid (exercises the normal matrix).
+    {
+        const int i = toon::AddEntity(scene, 0, "Sphere");
+        toon::Entity& e = scene.entities[i];
+        e.mesh = Upload(renderer, toon::MakeUVSphere(1.0f, 32, 48), "sphere");
+        e.transform->position = { -2.8f, 0.0f, 0.0f };
+        e.transform->scale    = {  1.5f, 0.8f, 1.0f };
+        e.material = toon::Material{ {0.85f, 0.30f, 0.35f}, {0.24f, 0.05f, 0.08f}, 0.030f };
+        e.material.roughness = 0.15f;   // lightly glossy so SSR reflects on it
+        spinners.push_back({ i, { 0.0f, 1.0f, 0.0f } });
+    }
+    // Cube — the satellite's parent.
+    const int cubeIdx = toon::AddEntity(scene, 0, "Cube");
+    {
+        toon::Entity& e = scene.entities[cubeIdx];
+        e.mesh = Upload(renderer, toon::MakeCube(0.9f), "cube");
+        e.material = toon::Material{ {0.30f, 0.45f, 0.85f}, {0.02f, 0.02f, 0.05f}, 0.050f };
+        e.material.roughness = 0.15f;
+        spinners.push_back({ cubeIdx, { 0.5f, 1.0f, 0.0f } });
+    }
+    // Torus.
+    {
+        const int i = toon::AddEntity(scene, 0, "Torus");
+        toon::Entity& e = scene.entities[i];
+        e.mesh = Upload(renderer, toon::MakeTorus(0.75f, 0.32f, 48, 24), "torus");
+        e.transform->position = { 2.8f, 0.0f, 0.0f };
+        e.material = toon::Material{ {0.90f, 0.70f, 0.25f}, {0.32f, 0.20f, 0.03f}, 0.022f };
+        e.material.roughness = 0.15f;
+        spinners.push_back({ i, { 1.0f, 0.0f, 0.0f } });
+    }
+    // Loaded glTF model (DiligentTools' loader): cel-shaded albedo + inverted-hull outline.
     const toon::ModelHandle helmet = renderer.LoadModel(TOON_MODELS_DIR "/helmet.glb");
-    toon::Material modelStyle;
-    modelStyle.baseColor    = { 1.0f, 1.0f, 1.0f };    // white = untinted (glTF supplies the color)
-    modelStyle.outlineColor = { 0.02f, 0.02f, 0.03f }; // near-black inverted-hull outline
+    if (helmet != toon::ModelHandle::Invalid) {
+        const int i = toon::AddEntity(scene, 0, "Helmet");
+        toon::Entity& e = scene.entities[i];
+        e.model = helmet;
+        e.transform->position = { 0.0f, 2.5f, 0.0f };
+        e.transform->scale    = { 1.4f, 1.4f, 1.4f };
+        e.material.baseColor    = { 1.0f, 1.0f, 1.0f };    // white tint (glTF supplies the color)
+        e.material.outlineColor = { 0.02f, 0.02f, 0.03f };
+        e.material.outlineWidth = 0.04f;
+        e.material.roughness    = 0.5f;
+        spinners.push_back({ i, { 0.0f, 1.0f, 0.0f } });
+    }
+    // Satellite — a small sphere PARENTED to the cube (the hierarchy demo). It has no spin of
+    // its own; it orbits the cube purely by inheriting the cube's spinning world transform.
+    {
+        toon::Entity& e = scene.entities[toon::AddEntity(scene, cubeIdx, "Satellite")];
+        e.mesh = Upload(renderer, toon::MakeUVSphere(0.22f, 16, 24), "satellite");
+        e.transform->position = { 1.7f, 0.0f, 0.0f };   // offset from the cube (its parent)
+        e.material = toon::Material{ {0.40f, 0.90f, 0.55f}, {0.03f, 0.07f, 0.04f}, 0.014f };
+        e.material.roughness = 0.15f;
+    }
 
     toon::Camera camera;
     camera.distance = 10.0f;
@@ -157,8 +189,15 @@ int main() {
         const double now = glfwGetTime();
         const float  dt  = static_cast<float>(now - lastTime);
         lastTime = now;
-        const float prevSpinAngle = spinAngle;      // last frame's angle (for motion vectors)
         if (spin) spinAngle += dt * 0.6f;
+
+        // Animate the spinning entities' local rotation, then compose the hierarchy's world
+        // matrices (parents before children). Motion vectors come from the cached previous
+        // world matrices, so no prev-angle bookkeeping is needed here.
+        for (const Spinner& s : spinners)
+            if (scene.entities[s.entity].transform)
+                scene.entities[s.entity].transform->rotationEuler = s.axis * spinAngle;
+        toon::UpdateWorldTransforms(scene);
 
         renderer.BeginFrame(clearColor);
 
@@ -169,51 +208,20 @@ int main() {
         renderer.SetCamera(camera);
         renderer.SetLight(lightDir);
 
-        // Ground plane, just below the objects (fixed; catches their AO contact
-        // shadows). It never moves, so its previous transform equals its current one.
-        {
-            groundMaterial.bands   = style.bands;
-            groundMaterial.ambient = style.ambient;
-            toon::Transform groundXform;
-            groundXform.position = { 0.0f, -1.05f, 0.0f };   // just under the sphere/torus
-            renderer.DrawMesh(groundMesh, groundXform, groundXform, groundMaterial);
-        }
+        // Walk the scene, drawing every renderable entity with its hierarchy-composed world
+        // matrix (+ last frame's, for motion vectors). The shared style overlays band count,
+        // ambient, and the global outline-width multiplier onto each entity's own material.
+        for (const toon::Entity& e : scene.entities) {
+            const bool isMesh  = e.mesh  != toon::MeshHandle::Invalid;
+            const bool isModel = e.model != toon::ModelHandle::Invalid;
+            if (!isMesh && !isModel) continue;   // root / non-renderable
 
-        for (Object& obj : objects) {
-            // The object's own material is the source of truth (base color + its own
-            // outline color/width, all editable live in the UI). Copy it per-draw and
-            // overlay the shared style: global band count + ambient, a fixed gloss for
-            // SSR, and the global outline-width multiplier over this object's own width.
-            toon::Material m = obj.material;
+            toon::Material m = e.material;
             m.bands        = style.bands;
             m.ambient      = style.ambient;
-            m.roughness    = 0.15f;   // lightly glossy so SSR reflects on them
-            m.outlineWidth = obj.material.outlineWidth * outlineScale;
-
-            // Current + previous placement — the delta is this object's motion vector.
-            toon::Transform xform;
-            xform.position      = obj.position;
-            xform.rotationEuler = obj.spinAxis * spinAngle;
-            xform.scale         = obj.scale;
-            toon::Transform prevXform = xform;   // same scale/position; only the spin differs
-            prevXform.rotationEuler = obj.spinAxis * prevSpinAngle;
-            renderer.DrawMesh(obj.mesh, xform, prevXform, m);
-        }
-
-        // The loaded model, cel-shaded (textured fill), elevated above the primitive row
-        // and spinning about Y like the rest (prev transform drives its motion vectors).
-        if (helmet != toon::ModelHandle::Invalid) {
-            modelStyle.bands        = style.bands;
-            modelStyle.ambient      = style.ambient;
-            modelStyle.roughness    = 0.5f;
-            modelStyle.outlineWidth = 0.04f * outlineScale;   // world-space; scales with the global slider
-            toon::Transform mx;
-            mx.position      = { 0.0f, 2.5f, 0.0f };
-            mx.rotationEuler = { 0.0f, spinAngle, 0.0f };
-            mx.scale         = { 1.4f, 1.4f, 1.4f };
-            toon::Transform mprev = mx;
-            mprev.rotationEuler = { 0.0f, prevSpinAngle, 0.0f };
-            renderer.DrawModel(helmet, mx, mprev, modelStyle);
+            m.outlineWidth = e.material.outlineWidth * outlineScale;
+            if (isMesh) renderer.DrawMesh(e.mesh,   e.worldMatrix, e.prevWorldMatrix, m);
+            else        renderer.DrawModel(e.model, e.worldMatrix, e.prevWorldMatrix, m);
         }
 
         // Resolve the HDR scene to the back buffer (post effects + exposure + tone map).
@@ -251,15 +259,18 @@ int main() {
             ImGui::SliderFloat("Ambient", &style.ambient, 0.0f, 1.0f);
             ImGui::SliderFloat("Outline width x", &outlineScale, 0.0f, 3.0f);
 
-            // Per-object material: base color + this object's own outline (color + width).
+            // Per-entity material: base color + outline (color + width). Walks the scene's
+            // renderable entities (skips the root / non-renderables).
             ImGui::SeparatorText("Objects");
-            for (int i = 0; i < static_cast<int>(objects.size()); ++i) {
-                Object& o = objects[i];
+            for (int i = 0; i < static_cast<int>(scene.entities.size()); ++i) {
+                toon::Entity& e = scene.entities[i];
+                if (e.mesh == toon::MeshHandle::Invalid && e.model == toon::ModelHandle::Invalid)
+                    continue;
                 ImGui::PushID(i);
-                ImGui::Text("%s", o.name);
-                ImGui::ColorEdit3("Base color",     &o.material.baseColor.x);
-                ImGui::SliderFloat("Outline width", &o.material.outlineWidth, 0.0f, 0.15f);
-                ImGui::ColorEdit3("Outline color",  &o.material.outlineColor.x);
+                ImGui::Text("%s", e.name.c_str());
+                ImGui::ColorEdit3("Base color",     &e.material.baseColor.x);
+                ImGui::SliderFloat("Outline width", &e.material.outlineWidth, 0.0f, 0.15f);
+                ImGui::ColorEdit3("Outline color",  &e.material.outlineColor.x);
                 ImGui::PopID();
             }
 

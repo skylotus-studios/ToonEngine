@@ -1098,23 +1098,39 @@ static float4x4 WorldFromTransform(const Transform& t) {
            float4x4::Translation(t.position.x, t.position.y, t.position.z);
 }
 
-void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Transform& prevT, const Material& mat) {
+// Plain Mat4 (seam vocabulary) <-> Diligent float4x4 — both row-major, so a straight
+// element copy. The scene graph composes world matrices on the Diligent side and hands
+// them across the seam as Mat4.
+static Mat4 ToMat4(const float4x4& m) {
+    Mat4 out;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+            out.m[r * 4 + c] = m[r][c];
+    return out;
+}
+static float4x4 ToFloat4x4(const Mat4& in) {
+    float4x4 out;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+            out[r][c] = in.m[r * 4 + c];
+    return out;
+}
+
+// The toon draw, given a pre-composed object->world matrix (+ last frame's, for motion
+// vectors). The scene graph passes hierarchy-composed world matrices straight in; the
+// Transform overload below builds them from a single object's placement.
+void Renderer::DrawMesh(MeshHandle handle, const Mat4& worldM, const Mat4& prevWorldM, const Material& mat) {
     const uint32_t idx = static_cast<uint32_t>(handle);
     if (idx == 0 || idx > m_impl->meshes.size())
         return;
     const Impl::GpuMesh& mesh = m_impl->meshes[idx - 1];
 
-    // This frame's and last frame's clip transforms — the pair the motion-vector pass
-    // differences. Camera motion rides in via viewProj/prevViewProj; object motion via
-    // the two world matrices.
-    const float4x4 world   = WorldFromTransform(t);
+    const float4x4 world   = ToFloat4x4(worldM);
     const float4x4 wvp     = world * m_impl->viewProj;
-    const float4x4 prevWvp = WorldFromTransform(prevT) * m_impl->prevViewProj;
+    const float4x4 prevWvp = ToFloat4x4(prevWorldM) * m_impl->prevViewProj;
 
-    // Normal matrix = inverse-transpose of the world matrix. For rotation + uniform
-    // scale this is proportional to world itself, but non-uniform scale needs the real
-    // inverse-transpose or normals skew (and the shading/AO/SSR read them wrong). Its
-    // 3x3 transpose is world^-1, which the outline VS uses to keep its width uniform.
+    // Normal matrix = inverse-transpose of the world matrix (correct normals under
+    // non-uniform scale; its 3x3 transpose is world^-1, used by the outline VS).
     const float4x4 normalMat = world.Inverse().Transpose();
 
     {
@@ -1153,6 +1169,12 @@ void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Transform& 
     m_impl->context->DrawIndexed(draw);
 }
 
+// Convenience: a single object's placement. Builds world matrices from the transforms
+// (no parent) and delegates to the Mat4 overload above.
+void Renderer::DrawMesh(MeshHandle handle, const Transform& t, const Transform& prevT, const Material& mat) {
+    DrawMesh(handle, ToMat4(WorldFromTransform(t)), ToMat4(WorldFromTransform(prevT)), mat);
+}
+
 // --- Scene: glTF models -----------------------------------------------------
 
 ModelHandle Renderer::LoadModel(const char* path) {
@@ -1186,7 +1208,7 @@ ModelHandle Renderer::LoadModel(const char* path) {
     return static_cast<ModelHandle>(m_impl->models.size());   // 1-based; 0 = Invalid
 }
 
-void Renderer::DrawModel(ModelHandle handle, const Transform& t, const Transform& prevT, const Material& style) {
+void Renderer::DrawModel(ModelHandle handle, const Mat4& worldM, const Mat4& prevWorldM, const Material& style) {
     const uint32_t idx = static_cast<uint32_t>(handle);
     if (idx == 0 || idx > m_impl->models.size())
         return;
@@ -1197,8 +1219,8 @@ void Renderer::DrawModel(ModelHandle handle, const Transform& t, const Transform
 
     // Object placement this frame + last (for motion vectors), composed with each node's
     // transform inside the model.
-    const float4x4 objWorld     = WorldFromTransform(t);
-    const float4x4 objPrevWorld = WorldFromTransform(prevT);
+    const float4x4 objWorld     = ToFloat4x4(worldM);
+    const float4x4 objPrevWorld = ToFloat4x4(prevWorldM);
 
     GLTF::ModelTransforms xforms;
     model.ComputeTransforms(sceneId, xforms);
@@ -1288,6 +1310,11 @@ void Renderer::DrawModel(ModelHandle handle, const Transform& t, const Transform
             issueDraw(prim);
         }
     }
+}
+
+// Convenience: a single model instance's placement (no scene parent).
+void Renderer::DrawModel(ModelHandle handle, const Transform& t, const Transform& prevT, const Material& style) {
+    DrawModel(handle, ToMat4(WorldFromTransform(t)), ToMat4(WorldFromTransform(prevT)), style);
 }
 
 // --- Debug UI (Dear ImGui) --------------------------------------------------

@@ -53,6 +53,7 @@ add_executable(ToonEngine
     src/main.cpp
     src/core/renderer.cpp
     src/core/primitives.cpp
+    src/core/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
 )
 
