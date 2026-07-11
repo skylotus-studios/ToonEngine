@@ -172,6 +172,10 @@ public:
     void SetCamera(const Camera& camera);
     void SetLight(const Vec3& directionToLight);  // world-space direction TO the light
 
+    // Current view + projection (as of the last SetCamera), for the editor's transform gizmo
+    // (ImGuizmo). Handed out as plain Mat4 so the app/gizmo stay Diligent-free.
+    void GetViewProj(Mat4& view, Mat4& proj) const;
+
     // Draw a mesh with the toon pipeline (outline pass + banded fill pass).
     // `prevTransform` is the object's placement *last* frame — it drives the motion
     // vectors SSAO temporal accumulation / DoF consume. Pass the same value as

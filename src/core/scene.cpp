@@ -11,6 +11,7 @@
 #include "BasicMath.hpp"   // Diligent float4x4
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,48 @@ float4x4 ToFloat4x4(const Mat4& in) {
         for (int c = 0; c < 4; ++c)
             out[r][c] = in.m[r * 4 + c];
     return out;
+}
+
+// Decompose a local (object->parent) matrix back into a Transform — the exact inverse of
+// LocalFromTransform (Scale · Rx · Ry · Rz, row-vector), derived from Diligent's RotationX/Y/Z.
+// Used by the gizmo write-back + world-preserving reparent, so a matrix round-trips to the
+// same TRS the renderer would rebuild.
+void DecomposeToTransform(const float4x4& m, Transform& out) {
+    // Translation is the 4th row (row-vector convention: local = S·R·T).
+    out.position = { m[3][0], m[3][1], m[3][2] };
+
+    // The upper-left 3x3 rows are s_i · R.row(i) (scale is leftmost, so it scales each row).
+    float3 r0{ m[0][0], m[0][1], m[0][2] };
+    float3 r1{ m[1][0], m[1][1], m[1][2] };
+    float3 r2{ m[2][0], m[2][1], m[2][2] };
+    float  sx = length(r0), sy = length(r1), sz = length(r2);
+
+    // A negative determinant means a mirrored axis; fold the sign into X so what's left is a
+    // proper rotation (the usual decompose convention).
+    if (dot(cross(r0, r1), r2) < 0.0f) { sx = -sx; r0 = -r0; }
+    out.scale = { sx, sy, sz };
+
+    if (std::abs(sx) > 1e-8f) r0 = r0 / sx;
+    if (sy > 1e-8f)           r1 = r1 / sy;
+    if (sz > 1e-8f)           r2 = r2 / sz;
+
+    // Now [r0;r1;r2] = R = Rx(a)·Ry(b)·Rz(g), for which (see the derivation in MEMORY.md):
+    //   R[0][2] = -sin b,  R[1][2] = sin a·cos b,  R[2][2] = cos a·cos b,
+    //   R[0][0] = cos b·cos g,  R[0][1] = cos b·sin g.
+    const float sinB = r0.z < -1.0f ? 1.0f : (r0.z > 1.0f ? -1.0f : -r0.z);
+    const float b    = std::asin(sinB);
+    const float cosB = std::cos(b);
+    float a, g;
+    if (std::abs(cosB) > 1e-4f) {
+        a = std::atan2(r1.z, r2.z);   // atan2(sin a·cos b, cos a·cos b)
+        g = std::atan2(r0.y, r0.x);   // atan2(cos b·sin g, cos b·cos g)
+    } else {
+        // Gimbal lock (cos b ~ 0, pitch ~ ±90°): a and g are coupled — pin g = 0.
+        g = 0.0f;
+        a = (r0.z < 0.0f) ? std::atan2(r1.x, r1.y)    // b ~ +90°
+                          : std::atan2(-r1.x, r1.y);  // b ~ -90°
+    }
+    out.rotationEuler = { a, b, g };
 }
 
 // --- Hierarchy re-ordering helpers (plain index/vector work) ---------------
@@ -96,6 +139,17 @@ void ApplyReorder(Scene& scene, const std::vector<int>& newForOld) {
     scene.entities = std::move(reordered);
 }
 
+// Rewrite entity `idx`'s local transform so its WORLD transform is unchanged after moving
+// under `newParent`: newLocal = currentWorld · newParentWorld⁻¹. Uses the cached world
+// matrices (valid between UpdateWorldTransforms calls). No-op for a transform-less anchor.
+void PreserveWorldOnReparent(Scene& scene, int idx, int newParent) {
+    Entity& e = scene.entities[idx];
+    if (!e.transform) return;
+    const float4x4 childWorld     = ToFloat4x4(e.worldMatrix);
+    const float4x4 newParentWorld = ToFloat4x4(scene.entities[newParent].worldMatrix);
+    DecomposeToTransform(childWorld * newParentWorld.Inverse(), *e.transform);
+}
+
 } // namespace
 
 void EnsureSceneRoot(Scene& scene) {
@@ -145,6 +199,21 @@ void UpdateWorldTransforms(Scene& scene) {
                                             : float4x4::Identity();
         e.worldMatrix = ToMat4(local * parentW);
     }
+}
+
+void SetEntityWorldMatrix(Scene& scene, int idx, const Mat4& world) {
+    const int n = static_cast<int>(scene.entities.size());
+    if (idx < 0 || idx >= n) return;
+    Entity& e = scene.entities[idx];
+    if (!e.transform) return;   // a pure anchor has no local placement to write
+
+    // world = local · parent  =>  local = world · parent⁻¹, then decompose to TRS. The gizmo
+    // edits the entity's world matrix; this folds the parent back out so the stored local
+    // Transform (which the renderer recomposes) matches what the gizmo showed.
+    const float4x4 parentW =
+        (e.parent >= 0 && e.parent < n) ? ToFloat4x4(scene.entities[e.parent].worldMatrix)
+                                        : float4x4::Identity();
+    DecomposeToTransform(ToFloat4x4(world) * parentW.Inverse(), *e.transform);
 }
 
 // --- Hierarchy mutations ----------------------------------------------------
@@ -257,7 +326,8 @@ bool ReparentEntity(Scene& scene, int idx, int newParent) {
     if (IsAncestorOrSelf(scene, newParent, idx)) return false;   // would create a cycle
     if (scene.entities[idx].parent == newParent) return false;   // no-op
 
-    scene.entities[idx].parent = newParent;   // simple: keep the local transform (part 2 preserves world)
+    PreserveWorldOnReparent(scene, idx, newParent);   // rewrite local so the object stays put
+    scene.entities[idx].parent = newParent;
     ApplyReorder(scene, BuildTopoOrder(scene));
     return true;
 }
@@ -272,7 +342,8 @@ bool MoveEntityAsSibling(Scene& scene, int idx, int target, bool before) {
     const int newParent = scene.entities[target].parent;
     if (newParent < 0) return false;   // target is the root
 
-    scene.entities[idx].parent = newParent;   // simple reparent (keep local transform)
+    PreserveWorldOnReparent(scene, idx, newParent);   // rewrite local so the object stays put
+    scene.entities[idx].parent = newParent;
 
     // Tweak newParent's child order so idx sits just before/after target.
     int  root = -1;

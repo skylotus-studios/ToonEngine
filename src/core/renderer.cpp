@@ -1118,6 +1118,15 @@ static float4x4 ToFloat4x4(const Mat4& in) {
     return out;
 }
 
+// Expose the current view + projection (as of the last SetCamera) for the editor's transform
+// gizmo. ImGuizmo (in main.cpp) needs them to project the gizmo onto the selected entity; the
+// seam hands them out as plain Mat4 so ImGuizmo stays Diligent-free. (The proj may carry the
+// sub-pixel TAA jitter — negligible for a UI overlay, and TAA is off by default.)
+void Renderer::GetViewProj(Mat4& view, Mat4& proj) const {
+    view = ToMat4(m_impl->view);
+    proj = ToMat4(m_impl->proj);
+}
+
 // The toon draw, given a pre-composed object->world matrix (+ last frame's, for motion
 // vectors). The scene graph passes hierarchy-composed world matrices straight in; the
 // Transform overload below builds them from a single object's placement.

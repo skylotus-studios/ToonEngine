@@ -10,3 +10,6 @@
 [submodule "external/DiligentFX"]
 	path = external/DiligentFX
 	url = https://github.com/DiligentGraphics/DiligentFX.git
+[submodule "external/ImGuizmo"]
+	path = external/ImGuizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo.git

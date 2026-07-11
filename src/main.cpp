@@ -25,6 +25,7 @@
 #ifdef IMGUI_HAS_DOCK
 #include "imgui_internal.h"   // DockBuilder API, for the one-time default layout
 #endif
+#include "ImGuizmo.h"         // editor transform gizmos (built on ImGui; seam-exempt like it)
 
 namespace {
 // A spinning entity: which scene entity, and the axis its local rotation animates around
@@ -312,6 +313,10 @@ int main() {
     Theme uiTheme = Theme::AmberYellow;
     ApplyTheme(uiTheme, uiScale);
 
+    // Transform-gizmo state (ImGuizmo): which handle is active + local/world space.
+    ImGuizmo::OPERATION gizmoOp   = ImGuizmo::TRANSLATE;
+    ImGuizmo::MODE      gizmoMode = ImGuizmo::WORLD;
+
     // Route framebuffer resizes to the renderer's swap chain.
     glfwSetWindowUserPointer(window, &renderer);
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int width, int height) {
@@ -440,7 +445,8 @@ int main() {
         // F focuses the origin. Dragging over the debug panel is suppressed by the gate.
         toon::Input::BeginFrame();
         const ImGuiIO& io = ImGui::GetIO();
-        toon::Input::SetCaptured(io.WantCaptureMouse, io.WantCaptureKeyboard);
+        // Gate the camera on ImGui capture OR an in-progress gizmo drag (both from last frame).
+        toon::Input::SetCaptured(io.WantCaptureMouse || ImGuizmo::IsUsing(), io.WantCaptureKeyboard);
         {
             using M = toon::Input::Mouse;
             using K = toon::Input::Key;
@@ -487,6 +493,7 @@ int main() {
         renderer.EndScene();
 
         renderer.BeginUI();
+        ImGuizmo::BeginFrame();   // must follow ImGui's NewFrame (inside BeginUI), before Manipulate
 
 #ifdef IMGUI_HAS_DOCK
         // Full-window dock space with a see-through center so the scene shows
@@ -629,9 +636,40 @@ int main() {
                     ImGui::DragFloat("Outline width", &e.material.outlineWidth, 0.001f, 0.0f, 0.5f, "%.3f");
                     ImGui::SliderFloat("Roughness", &e.material.roughness, 0.0f, 1.0f);
                 }
+
+                // Transform-gizmo controls (the gizmo itself draws over the scene, below).
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Gizmo");
+                    if (ImGui::RadioButton("Move",   gizmoOp == ImGuizmo::TRANSLATE)) gizmoOp = ImGuizmo::TRANSLATE;
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton("Rotate", gizmoOp == ImGuizmo::ROTATE))    gizmoOp = ImGuizmo::ROTATE;
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton("Scale",  gizmoOp == ImGuizmo::SCALE))     gizmoOp = ImGuizmo::SCALE;
+                    bool localSpace = (gizmoMode == ImGuizmo::LOCAL);
+                    if (ImGui::Checkbox("Local space", &localSpace))
+                        gizmoMode = localSpace ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+                }
             }
         }
         ImGui::End();
+
+        // --- Transform gizmo over the scene (ImGuizmo) -----------------------------------
+        // Manipulate the selected entity's world matrix; on edit, fold the parent back out and
+        // decompose to its local TRS (SetEntityWorldMatrix). Diligent's row-major matrices feed
+        // ImGuizmo (column-major) directly — the conventions are transposes, so the raw 16
+        // floats already match, no explicit transpose needed.
+        if (scene.selected > 0 && scene.selected < static_cast<int>(scene.entities.size()) &&
+            scene.entities[scene.selected].transform) {
+            toon::Mat4 view, proj;
+            renderer.GetViewProj(view, proj);
+            ImGuizmo::SetOrthographic(false);
+            ImGuizmo::AllowAxisFlip(false);   // show true axis directions (don't auto-face camera)
+            ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList());
+            ImGuizmo::SetRect(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
+            toon::Mat4 world = scene.entities[scene.selected].worldMatrix;
+            if (ImGuizmo::Manipulate(view.m, proj.m, gizmoOp, gizmoMode, world.m))
+                toon::SetEntityWorldMatrix(scene, scene.selected, world);
+        }
 
         if (ImGui::Begin("ToonEngine Debug")) {
             ImGui::Text("%.1f FPS (%.3f ms/frame)", ImGui::GetIO().Framerate,

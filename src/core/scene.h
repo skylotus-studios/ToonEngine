@@ -53,6 +53,11 @@ int AddEntity(Scene& scene, int parent, const char* name);
 // per frame before drawing.
 void UpdateWorldTransforms(Scene& scene);
 
+// Set entity `idx`'s transform from a WORLD matrix (the editor gizmo edits in world space):
+// folds out the parent's world and decomposes to the local TRS the renderer recomposes. No-op
+// on a transform-less anchor. Call between UpdateWorldTransforms passes (uses cached worlds).
+void SetEntityWorldMatrix(Scene& scene, int idx, const Mat4& world);
+
 // --- Hierarchy mutations (editor operations; defined in scene.cpp) ----------
 // All keep the parents-before-children invariant (re-ordering as needed) and fix up
 // `selected`. They mutate the vector, so never call them mid-iteration over `entities`.
@@ -71,12 +76,13 @@ void DeleteEntity(Scene& scene, int idx);
 // models stay shared by handle). Returns the duplicate root's new index, or -1 on failure.
 int DuplicateEntity(Scene& scene, int idx);
 
-// Re-parent `idx` under `newParent`. Simple: sets the parent + keeps the local transform
-// (so the object moves into the new parent's frame — world-preserving reparent comes with
-// the decompose in part 2). Refuses the root, cycles, and no-ops. Returns true on success.
+// Re-parent `idx` under `newParent`, preserving its WORLD transform — the local TRS is
+// rewritten (via the decompose) so the object doesn't jump. Refuses the root, cycles, and
+// no-ops. Returns true on success.
 bool ReparentEntity(Scene& scene, int idx, int newParent);
 
-// Move `idx` to be a sibling just before/after `target` (re-parenting first if needed).
+// Move `idx` to be a sibling just before/after `target` (re-parenting first if needed, also
+// world-preserving).
 bool MoveEntityAsSibling(Scene& scene, int idx, int target, bool before);
 
 // Drop all entities. GPU meshes/models are owned by the Renderer and freed at its Shutdown,

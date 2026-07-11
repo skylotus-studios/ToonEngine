@@ -57,10 +57,15 @@ add_executable(ToonEngine
     src/core/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
     src/core/input.cpp          # GLFW input polling + capture gate
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
+    external/ImGuizmo/src/ImGuizmo.cpp   # editor transform gizmos (compiled against Diligent's imgui)
 )
 
 # src/ is the include root: cross-directory includes read "core/renderer.h".
-target_include_directories(ToonEngine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# ImGuizmo/src so main.cpp (and ImGuizmo.cpp) can #include "ImGuizmo.h"; ImGuizmo itself
+# pulls in imgui.h/imgui_internal.h, which come transitively from the Diligent-Imgui link.
+target_include_directories(ToonEngine PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/ImGuizmo/src)
 
 # core/renderer.cpp includes DiligentFX's C++-side shader-structure headers
 # (BasicStructures.fxh -> CameraAttribs, BloomStructures.fxh -> BloomAttribs) to

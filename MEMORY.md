@@ -726,14 +726,40 @@ Stone** — chosen from a combo in the Debug panel.
   `ImGuiCol_` enums (`InputTextCursor`, `TabSelectedOverline`, `TreeLines`, …) — all present in
   imgui 1.92.9.
 
-**Still deferred → part 2 (ImGuizmo):** ImGuizmo transform gizmos (vendored submodule; needs
-the view/proj exposed as `Mat4`) and the Diligent **decompose** it needs (world→local TRS
-matching `Scale·Rx·Ry·Rz`) → world-preserving reparent; light / sprite / animation entity
-components. **Convention note for the gizmo:** the old engine drove ImGuizmo with glm
-(column-major, `world = parent·local`); ours is Diligent row-major (`world = local·parent`).
-The two are transposes, and column-major storage of one equals row-major storage of the other
-— so a Diligent `float4x4`'s raw 16 floats feed ImGuizmo (column-major) **without** an explicit
-transpose. The real work is the TRS decompose that matches our compose order.
+**Gizmos (part 2, done).** ImGuizmo is vendored as a submodule at `external/ImGuizmo`
+(`src/ImGuizmo.cpp` added to the target; its `imgui.h`/`imgui_internal.h` resolve transitively
+from the `Diligent-Imgui` link). `main.cpp` draws a translate/rotate/scale gizmo on the
+selected entity (op/space toolbar in the Inspector), and `Renderer::GetViewProj` exposes the
+camera matrices as `Mat4`.
+
+- **No transpose, no Y-flip.** ImGuizmo's `matrix_t` is **row-major, row-vector** (`right, up,
+  dir, position` = rows 0–3) — the *same* convention as Diligent. So `view`/`proj`/`world` feed
+  in as their raw 16 floats and `mViewProjection = view*proj` matches our `viewProj` exactly.
+  I initially "fixed" a suspected Vulkan Y-flip by negating the projection's Y column — that
+  was **wrong** and mirrored the gizmo. ImGuizmo's `worldToPos` already does the screen
+  `y = 1 - y` flip, and it expects `[0,1]` depth (its ray uses `zNear=0`), so Diligent's LH
+  `[0,1]` projection drops straight in. Verified with a one-shot dump: the world origin →
+  `ndc=(0,0)` (exact screen centre). The gizmo only *looked* offset at the world origin because
+  that spot is small and cluttered by the helmet/ground — moving the cube to a clear position
+  showed the gizmo dead-on. **Lesson: don't calibrate a gizmo by eye against a busy origin;
+  dump the projected NDC and/or move the target somewhere unambiguous.**
+- `AllowAxisFlip(false)` so axes show their true directions (no auto-facing the camera). The
+  gizmo draws on `ImGui::GetForegroundDrawList()` with `SetRect(0,0,DisplaySize)`; `IsUsing()`
+  feeds the input capture gate (so a drag doesn't also orbit the camera). Blue **+Z pointing
+  down** at the default view is correct — the camera sits below the origin looking up, so world
+  +Z foreshortens downward.
+- **Decompose (`scene.cpp DecomposeToTransform`)** is the real work: the exact inverse of
+  `LocalFromTransform` (`Scale·Rx·Ry·Rz`, row-vector), derived from Diligent's `RotationX/Y/Z`.
+  Translation = row 3; scale = the upper-3×3 row lengths (with a determinant-sign fold into X
+  for mirrors); then Euler from the normalised rows (`ry = asin(-R[0][2])`, `rx =
+  atan2(R[1][2],R[2][2])`, `rz = atan2(R[0][1],R[0][0])`, with a gimbal fallback). Self-consistent
+  by construction, so gizmo edits round-trip through the stored Euler `Transform` without drift.
+  `SetEntityWorldMatrix` folds the parent world back out (`local = world · parent⁻¹`) before
+  decomposing, and **`ReparentEntity`/`MoveEntityAsSibling` now preserve world** the same way
+  (the object no longer jumps on reparent).
+
+**Still deferred:** light / sprite / animation entity components; gizmo snap + hotkeys (WASD is
+taken by the camera fly).
 
 ## Verifying a Vulkan build
 
