@@ -1,0 +1,123 @@
+{
+  "actions": {
+    "camera.focus": [
+      {
+        "key": "F",
+        "type": "key"
+      }
+    ]
+  },
+  "axes": {
+    "camera.fly.forward": {
+      "negative": [
+        {
+          "key": "S",
+          "type": "key"
+        },
+        {
+          "axis": "LeftY",
+          "deadzone": 0.15000000596046448,
+          "negative": false,
+          "pad": 0,
+          "type": "gamepad_axis"
+        }
+      ],
+      "positive": [
+        {
+          "key": "W",
+          "type": "key"
+        },
+        {
+          "axis": "LeftY",
+          "deadzone": 0.15000000596046448,
+          "negative": true,
+          "pad": 0,
+          "type": "gamepad_axis"
+        }
+      ]
+    },
+    "camera.fly.right": {
+      "negative": [
+        {
+          "key": "A",
+          "type": "key"
+        },
+        {
+          "axis": "LeftX",
+          "deadzone": 0.15000000596046448,
+          "negative": true,
+          "pad": 0,
+          "type": "gamepad_axis"
+        }
+      ],
+      "positive": [
+        {
+          "key": "D",
+          "type": "key"
+        },
+        {
+          "axis": "LeftX",
+          "deadzone": 0.15000000596046448,
+          "negative": false,
+          "pad": 0,
+          "type": "gamepad_axis"
+        }
+      ]
+    },
+    "camera.fly.up": {
+      "negative": [
+        {
+          "key": "Q",
+          "type": "key"
+        }
+      ],
+      "positive": [
+        {
+          "key": "E",
+          "type": "key"
+        }
+      ]
+    },
+    "camera.orbit.x": {
+      "negative": [
+        {
+          "axis": "RightX",
+          "deadzone": 0.15000000596046448,
+          "negative": true,
+          "pad": 0,
+          "type": "gamepad_axis"
+        }
+      ],
+      "positive": [
+        {
+          "axis": "RightX",
+          "deadzone": 0.15000000596046448,
+          "negative": false,
+          "pad": 0,
+          "type": "gamepad_axis"
+        }
+      ]
+    },
+    "camera.orbit.y": {
+      "negative": [
+        {
+          "axis": "RightY",
+          "deadzone": 0.15000000596046448,
+          "negative": true,
+          "pad": 0,
+          "type": "gamepad_axis"
+        }
+      ],
+      "positive": [
+        {
+          "axis": "RightY",
+          "deadzone": 0.15000000596046448,
+          "negative": false,
+          "pad": 0,
+          "type": "gamepad_axis"
+        }
+      ]
+    }
+  },
+  "context": "editor"
+}

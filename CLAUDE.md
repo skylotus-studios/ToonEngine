@@ -49,9 +49,10 @@ add-child / duplicate / delete / drag-drop reparent), an **Inspector** for the s
 (name, transform, material or light color/intensity, **ImGuizmo** move/rotate/scale gizmo
 with **W/E/R/X hotkeys + snapping**), and a **Debug** panel (theme, **scene save/load** to a
 text `.scene` file, band count, global style, and every post effect). An
-**editor camera** navigates the scene — right-drag orbit (+ WASD/QE fly), middle-drag pan,
-scroll zoom, F focus — with input suppressed while using the UI. HLSL shaders cross-compile to
-SPIR-V at runtime.
+**editor camera** navigates the scene via mouse + keyboard (right-drag orbit/WASD/QE fly,
+middle-drag pan, scroll zoom, F focus) or a **gamepad** (left-stick fly, right-stick orbit),
+all through a rebindable **action-map input system** (`assets/input.json`) — with input
+suppressed while using the UI. HLSL shaders cross-compile to SPIR-V at runtime.
 
 ## Build
 
@@ -98,7 +99,7 @@ src/
     primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus/plane) -> toon::MeshData
     scene.{h,cpp}         Entity-tree scene graph: hierarchy, world-transform composition, editor mutations
     camera.{h,cpp}        Editor camera controls: orbit/pan/zoom/fly/focus
-    input.{h,cpp}         GLFW input polling + ImGui capture gate
+    input/                 GLFW device/gamepad polling, action maps + rebinding (assets/input.json)
     serializer.{h,cpp}    Scene save/load — entity/camera state to a text .scene file
 assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + model_fill/model_outline + tonemap.hlsl
 assets/models/            glTF/GLB/FBX test models (helmet/fox/dragon) — Git LFS
@@ -164,15 +165,15 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-The renderer core is done (toon fill + outline, HDR, full DiligentFX post stack). Most of
-the **engine/editor layer** — `ToonEngineOld`'s scene graph, model loading, inspector,
-camera, and serialization — has been ported too; the real **input system** is what's left.
-See MEMORY.md → *ToonEngineOld carry-over* for the survey + per-system porting notes.
+The renderer core is done (toon fill + outline, HDR, full DiligentFX post stack). The
+**engine/editor layer** — `ToonEngineOld`'s scene graph, model loading, inspector, camera,
+serialization, and input (action maps, rebinding, gamepad) — has been ported too; an asset
+browser is what's left. See MEMORY.md → *ToonEngineOld carry-over* for the survey +
+per-system porting notes.
 
 **A. Editor**
 
-1. **Input system** — action maps, rebinding, gamepad (port `ToonEngineOld/src/core/input/`).
-2. **Asset browser panel** — `assets/` browser + texture/model thumbnails (port
+1. **Asset browser panel** — `assets/` browser + texture/model thumbnails (port
    `ui/file_browser` + `ui/thumbnail_cache`, via the linked `Diligent-TextureLoader`).
 
 **B. Environment & fidelity**

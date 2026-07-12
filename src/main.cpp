@@ -9,10 +9,13 @@
 #include "core/primitives.h"
 #include "core/scene.h"
 #include "core/camera.h"
-#include "core/input.h"
+#include "core/input/action_map.h"
+#include "core/input/binding_io.h"
+#include "core/input/input_system.h"
 #include "core/serializer.h"
 
-#define GLFW_INCLUDE_NONE
+// GLFW_INCLUDE_NONE is set engine-wide (CMakeLists.txt) since core/input/input_device.h now
+// also pulls <GLFW/glfw3.h>, ahead of this file's own include below.
 #include <GLFW/glfw3.h>
 
 // Dear ImGui is a plain UI library, not a Diligent type, so engine/game code
@@ -314,9 +317,20 @@ int main() {
         return 1;
     }
 
-    // Install input callbacks (scroll) BEFORE InitUI, so ImGui's GLFW backend chains ours
-    // instead of overwriting them.
+    // Install input callbacks BEFORE InitUI, so ImGui's GLFW backend chains ours instead of
+    // overwriting them (see core/input/input_system.h's Init banner).
     toon::Input::Init(window);
+
+    // Seed the default editor bindings (camera fly/orbit + focus — see action_map.cpp's
+    // RegisterDefaultEditorBindings), then let a saved assets/input.json override them if one
+    // exists; otherwise write the defaults so the file exists next time. Same "load or create"
+    // shape as scene save/load (core/serializer.h).
+    toon::Input::RegisterDefaultEditorBindings();
+    if (auto *editorBindings = toon::Input::GetContext("editor")) {
+        if (!toon::Input::BindingIO::Load(TOON_INPUT_JSON, *editorBindings)) {
+            toon::Input::BindingIO::Save(TOON_INPUT_JSON, *editorBindings);
+        }
+    }
 
     if (!renderer.InitUI(window)) {
         std::fprintf(stderr, "Renderer UI init failed\n");
@@ -482,6 +496,11 @@ int main() {
 
     const toon::Color clearColor{0.10f, 0.11f, 0.13f, 1.0f};
     while (!glfwWindowShouldClose(window)) {
+        // BeginFrame BEFORE PollEvents: it snapshots previous state and clears this frame's
+        // mouse/scroll deltas, so the callbacks PollEvents fires (key/mouse/scroll) accumulate
+        // into a clean frame and WasPressed/WasReleased edge-detect correctly. See
+        // core/input/input_system.h.
+        toon::Input::BeginFrame();
         glfwPollEvents();
 
         const double now = glfwGetTime();
@@ -509,7 +528,6 @@ int main() {
         // Editor camera: poll input, gate on ImGui's capture (last frame's UI state), then
         // navigate. Right-drag orbits (+ WASD/QE = fly); middle-drag pans; scroll zooms;
         // F focuses the origin. Dragging over the debug panel is suppressed by the gate.
-        toon::Input::BeginFrame();
         const ImGuiIO &io = ImGui::GetIO();
         // Gate the camera on ImGui capture OR an in-progress gizmo drag (both from last frame).
         const bool gizmoActive = ImGuizmo::IsUsing();
@@ -519,23 +537,43 @@ int main() {
         // post-fx temporal history shouldn't be trusted this frame.
         const bool suppressTemporalHistory = gizmoActive || ImGui::IsAnyItemActive() || spin;
         {
-            using M = toon::Input::Mouse;
-            using K = toon::Input::Key;
+            using M = toon::Input::MouseButton;
             float mdx = 0.0f, mdy = 0.0f;
             toon::Input::MouseDelta(mdx, mdy);
             if (toon::Input::IsMouseDown(M::Right)) {
                 toon::CameraOrbit(camera, -mdx, -mdy);
-                const float fwd =
-                    (toon::Input::IsKeyDown(K::W) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::S) ? 1.0f : 0.0f);
-                const float rgt =
-                    (toon::Input::IsKeyDown(K::D) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::A) ? 1.0f : 0.0f);
-                const float upv =
-                    (toon::Input::IsKeyDown(K::E) ? 1.0f : 0.0f) - (toon::Input::IsKeyDown(K::Q) ? 1.0f : 0.0f);
-                toon::CameraFly(camera, dt, fwd, rgt, upv);
+                // Fly axes go through the action map (camera.fly.*) so keyboard AND a gamepad
+                // stick drive the same names — see action_map.cpp's RegisterDefaultEditorBindings.
+                // Guarded on WantCaptureKeyboard because GetAxis reads raw device state (it
+                // bypasses SetCaptured, like the rest of the action-map layer) — without the
+                // guard, typing in an ImGui field while right-dragging would also fly the camera.
+                if (!io.WantCaptureKeyboard) {
+                    const float fwd = toon::Input::GetAxis("camera.fly.forward");
+                    const float rgt = toon::Input::GetAxis("camera.fly.right");
+                    const float upv = toon::Input::GetAxis("camera.fly.up");
+                    toon::CameraFly(camera, dt, fwd, rgt, upv);
+                }
             }
             if (toon::Input::IsMouseDown(M::Middle)) { toon::CameraPan(camera, mdx, mdy); }
             if (const float s = toon::Input::ScrollDelta(); s != 0.0f) { toon::CameraZoom(camera, s); }
-            if (toon::Input::IsKeyDown(K::F)) { toon::CameraFocus(camera, {0.0f, 0.0f, 0.0f}); }
+            if (!io.WantCaptureKeyboard && toon::Input::WasActionPressed("camera.focus")) {
+                toon::CameraFocus(camera, {0.0f, 0.0f, 0.0f});
+            }
+
+            // Gamepad orbit (right stick) — a new capability the action map adds; ungated
+            // (unlike the keyboard-sourced queries above) since a physical stick is never
+            // ambiguous with ImGui text entry. Scaled by dt so the turn rate is frame-rate
+            // independent, unlike the per-frame pixel deltas CameraOrbit otherwise expects from
+            // a mouse drag.
+            const float gpOrbitX = toon::Input::GetAxis("camera.orbit.x");
+            const float gpOrbitY = toon::Input::GetAxis("camera.orbit.y");
+            if (gpOrbitX != 0.0f || gpOrbitY != 0.0f) {
+                // Pixel-equivalents/sec at full stick deflection. An untested starting point —
+                // no controller in this environment to feel-tune it against (see the verify
+                // skill); adjust if a full stick push turns too fast or too slow.
+                constexpr float kGamepadOrbitRate = 150.0f;
+                toon::CameraOrbit(camera, gpOrbitX * kGamepadOrbitRate * dt, -gpOrbitY * kGamepadOrbitRate * dt);
+            }
         }
 
         renderer.BeginFrame(clearColor);
@@ -865,6 +903,10 @@ int main() {
             ImGui::SeparatorText("Camera");
             ImGui::TextDisabled("Right-drag: orbit (+WASD/QE fly)");
             ImGui::TextDisabled("Mid-drag: pan | Scroll: zoom | F: focus");
+            ImGui::TextDisabled(toon::Input::GamepadCount() > 0
+                                     ? "Gamepad: left stick fly, right stick orbit"
+                                     : "Gamepad: left stick fly, right stick orbit (none connected)");
+            ImGui::TextDisabled("Rebind: edit assets/input.json, then relaunch.");
             ImGui::SliderAngle("FOV", &camera.fovY, 20.0f, 100.0f);
             if (ImGui::Button("Reset camera")) { camera = cameraDefault; }
             ImGui::Checkbox("Spin", &spin);
@@ -906,6 +948,7 @@ int main() {
         renderer.EndFrame();
     }
 
+    toon::Input::Shutdown();
     renderer.Shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();

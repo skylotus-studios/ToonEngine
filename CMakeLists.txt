@@ -70,7 +70,9 @@ add_executable(ToonEngine
     src/core/primitives.cpp
     src/core/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
     src/core/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
-    src/core/input.cpp          # GLFW input polling + capture gate
+    src/core/input/input_system.cpp   # GLFW device polling + capture gate + callback wiring
+    src/core/input/action_map.cpp     # named actions/axes, context stack, default bindings
+    src/core/input/binding_io.cpp     # JSON save/load for bindings (assets/input.json)
     src/core/serializer.cpp     # scene save/load (.scene text files)
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
     external/ImGuizmo/src/ImGuizmo.cpp   # editor transform gizmos (compiled against Diligent's imgui)
@@ -105,6 +107,14 @@ target_include_directories(ToonEngine PRIVATE
 target_include_directories(ToonEngine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/external/DiligentFX/Shaders/Common/public)
 
+# core/input/binding_io.cpp persists key bindings as JSON via the nlohmann/json library
+# DiligentTools already vendors (external/DiligentTools/ThirdParty/json). Diligent-JSON's own
+# INTERFACE include dir only exposes the "nlohmann" leaf (single_include/nlohmann), which
+# would give #include <json.hpp>; adding the parent directory too keeps the conventional
+# #include <nlohmann/json.hpp> spelling.
+target_include_directories(ToonEngine PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/DiligentTools/ThirdParty/json/single_include)
+
 # Diligent-BuildSettings is an INTERFACE target that propagates the platform
 # defines (PLATFORM_WIN32 / PLATFORM_LINUX / PLATFORM_MACOS) and compiler flags
 # the headers need. Link it first.
@@ -117,6 +127,9 @@ target_link_libraries(ToonEngine
         Diligent-AssetLoader               # GLTF::Model — glTF/GLB loading (self-contained; no PBR renderer)
         Diligent-TextureLoader             # CreateTextureFromFile + image decode (PNG/JPG)
         Diligent-Imgui                     # ImGuiImplDiligent renderer backend + vendored Dear ImGui
+        Diligent-JSON                      # nlohmann/json for input-bindings persistence (see below).
+                                            # Diligent-AssetLoader links this PRIVATE, so it does NOT
+                                            # propagate transitively — must be linked explicitly here.
         DiligentFX                         # post-processing effects (bloom, tone mapping, ...)
         glfw
 )
@@ -135,7 +148,12 @@ target_compile_definitions(ToonEngine PRIVATE
     TOON_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
     TOON_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
     TOON_ICON_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png"
-    TOON_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes")
+    TOON_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes"
+    TOON_INPUT_JSON="${CMAKE_CURRENT_SOURCE_DIR}/assets/input.json"
+    # core/input/input_device.h needs <GLFW/glfw3.h> (GLFW_RELEASE, GLFWgamepadstate) and is
+    # reachable from main.cpp before main.cpp's own local #define would run. Set engine-wide
+    # instead of per-TU so it's correct regardless of #include order.
+    GLFW_INCLUDE_NONE)
 
 # Convenience function from DiligentCore: copies the engine shared libraries
 # next to the executable so the OS can find and load them at runtime.

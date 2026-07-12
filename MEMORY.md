@@ -119,6 +119,20 @@ clean, zero real diagnostic errors (the only "errors" `--check` reports are its 
 `ExtractFunction` tweak self-test failing on a `break`/`continue`, a clangd-internal
 artifact, not a code problem).
 
+### Implicit `cmake --build` reconfigure can silently under-apply a `CMakeLists.txt` edit
+
+Editing `CMakeLists.txt` forces `cmake --build` to reconfigure as its first step (see
+above) — but that *implicit* reconfigure isn't always fully reliable: it's been observed to
+pick up a source-file-list change while silently dropping other same-sitting edits to the
+same file (new `target_include_directories`/`target_compile_definitions`/
+`target_link_libraries` calls), with no error at configure time — the build just fails later
+on a missing header or symbol that *should* have been reachable. Diagnosis: grep the
+generated `build.ninja` for content unique to the edit; if it's genuinely absent despite
+`CMakeLists.txt` on disk having it (confirm with a fresh `Read`), an **explicit
+`cmake --preset windows-debug`** (not `--build`) reconfigure resolves it — matches this
+file's existing "explicit reconfigure > wipe" guidance below, now with a concrete incident
+behind it. See "Input system" below for the full incident.
+
 ## Window + device bring-up (GLFW + Vulkan)
 
 `main.cpp` creates the GLFW window with `GLFW_NO_API` (Vulkan owns the surface,
@@ -739,19 +753,22 @@ pipeline, and Diligent Core has no ready lookAt), the seam `Camera` gained a `pi
 view uses — `worldAxis = viewAxis · RotationX(-pitch) · RotationY(-yaw)` = row k of that
 inverse — so it's correct-by-construction, with no hand-guessed LH signs.
 
-**Input** — `core/input.{h,cpp}`: GLFW polling (mouse buttons + cursor delta + keys) + a
-scroll callback (installed in `Input::Init` **before** `Renderer::InitUI`, so ImGui's GLFW
-backend *chains* it instead of overwriting) + a **capture gate** (`SetCaptured`, fed each
-frame from ImGui's `io.WantCaptureMouse/Keyboard` — a harmless 1-frame lag) so dragging over
-the debug panel doesn't move the camera. `g_lastX/Y` advance every frame even when captured,
-so releasing capture never yields a delta jump. Bindings (`main.cpp`): right-drag orbit
-(+ WASD/QE fly), middle-drag pan, scroll zoom, F focus (origin for now).
+**Input** — `core/input.{h,cpp}` (**superseded 2026-07-12** by `core/input/`, a full
+action-map system — see "Input system" below): GLFW polling (mouse buttons + cursor delta +
+keys) + a scroll callback (installed in `Input::Init` **before** `Renderer::InitUI`, so
+ImGui's GLFW backend *chains* it instead of overwriting) + a **capture gate** (`SetCaptured`,
+fed each frame from ImGui's `io.WantCaptureMouse/Keyboard` — a harmless 1-frame lag) so
+dragging over the debug panel doesn't move the camera. `g_lastX/Y` advance every frame even
+when captured, so releasing capture never yields a delta jump. Bindings (`main.cpp`):
+right-drag orbit (+ WASD/QE fly), middle-drag pan, scroll zoom, F focus (origin for now).
 
-**Deferred:** the full action-map / rebinding / serialization system + gamepad + file-drops
-(`ToonEngineOld/src/core/input/`), and F-focus on the *selected* entity (needs the editor
-selection). **Note:** the drag *directions* (orbit/pan signs) match common editor
-conventions but are only verifiable interactively — any inverted axis is a one-line sign
-flip in `camera.cpp`.
+**Deferred (still, after "Input system" below):** F-focus on the *selected* entity (needs
+the editor selection — unrelated to the input layer); an in-editor rebind UI (bindings are
+rebindable today via `assets/input.json`, just not from a panel); the event queue / char
+callback / file-drops (`input_event.h`'s `std::span`-based stream is C++20 — this project
+targets C++17 — and has no consumer yet; first one is the asset-browser roadmap item).
+**Note:** the drag *directions* (orbit/pan signs) match common editor conventions but are
+only verifiable interactively — any inverted axis is a one-line sign flip in `camera.cpp`.
 
 ## Editor UI (Phase B, item 5 — part 1)
 
@@ -1067,6 +1084,160 @@ clean, matches the format above, human-readable. Screenshot-confirmed (before an
 reverting the temp code) that the Debug panel's new Scene section renders correctly and
 nothing else regressed.
 
+## Input system (roadmap A.1)
+
+Ported `ToonEngineOld/src/core/input/` into `core/input/` — action maps, an input-context
+stack, gamepad, and JSON-bound rebinding — replacing the minimal polling-only
+`core/input.{h,cpp}` documented in "Editor camera + input" above. Checked first against the
+guiding principle (build *on* Diligent): confirmed nothing to build on — see "Diligent
+overlap check" above, which already established DiligentCore/Tools have no input/camera
+abstraction and DiligentSamples' `InputController` isn't vendored here.
+
+**Six files, all under `namespace toon::Input`** (the reference left the action-query free
+functions and enums at global scope; unified here): `keycodes.h` (Key/MouseButton/
+GamepadButton/GamepadAxis/MouseAxis — Key mirrors GLFW's own codes), `input_device.h`
+(Keyboard/Mouse/Gamepad — current/previous arrays for edge detection), `input_system.{h,cpp}`
+(GLFW callback wiring, the capture gate, the polling API), `action_map.{h,cpp}`
+(FNV-1a-hashed actions/axes, the context stack, `RegisterDefaultEditorBindings`),
+`binding_io.{h,cpp}` (JSON save/load). `input_device.cpp` was dropped — the reference's own
+version was a stub whose only content was a comment admitting all its methods are inline in
+the header; CMake doesn't need a `.cpp` per header, so there was nothing to port.
+
+**Adaptations from the reference (ToonEngineOld had glm + vcpkg; this engine has neither):**
+- **`glm::dvec2` → `toon::Vec2`** in the device layer, with component-wise arithmetic written
+  out by hand rather than adding operators to `math.h`'s otherwise-operator-free `Vec2` (a
+  one-off, not worth growing the seam's math vocabulary for).
+- **No event queue.** `input_event.h`'s `Events()`/`EachEvent()` stream (plus the char and
+  drop callbacks that feed it) wasn't ported — it has no consumer yet (its first is the
+  asset-browser roadmap item, for drag-drop + text input), and **`std::span` — the only
+  C++20 feature anywhere in the reference — lives in exactly that API**, so dropping it is
+  what keeps this a clean C++17 port rather than a standard bump. Confirmed via
+  `action_map.cpp`: it only reads `RawKeyboard()/RawMouse()/GetGamepad()`, never the event
+  stream, so nothing else depends on it.
+- **JSON via the already-vendored `Diligent-JSON`, not a new dependency** — but it must be
+  **linked explicitly**: `Diligent-AssetLoader` links `Diligent-JSON` as `PRIVATE`, so its
+  include dir does *not* propagate transitively to `ToonEngine` even though
+  `Diligent-AssetLoader` is already linked. `CMakeLists.txt` needs its own
+  `target_link_libraries(... Diligent-JSON)` plus a `target_include_directories` for
+  `ThirdParty/json/single_include` (the `Diligent-JSON` INTERFACE target's own include dir
+  only exposes the `nlohmann` leaf, i.e. bare `#include <json.hpp>`; the extra dir keeps the
+  conventional `#include <nlohmann/json.hpp>` spelling working).
+- **Scroll semantics simplified, not just ported.** The reference double-buffers
+  `scrollAccum`/`scrollDelta` (`BeginFrame` latches `scrollDelta = scrollAccum` from the
+  *previous* frame's accumulation) — a real one-frame lag given the reference's own
+  `BeginFrame()`-before-`glfwPollEvents()` loop order (the same order this engine now uses,
+  see below). This engine's device layer collapses that to a single live `scrollDelta`
+  accumulator, mirroring how `Mouse::delta` already worked: `BeginFrame` clears it,
+  `OnScroll` (fired during the poll, which runs *after* `BeginFrame`) accumulates into it
+  directly, and it's read live by that same frame's queries. Simpler than the reference and
+  removes a latency bug rather than reproducing it.
+- **Capture-gate parameter order kept as `(mouseCaptured, keyboardCaptured)`** — this
+  engine's existing convention, the reverse of the reference's `(keyboardCaptured,
+  mouseCaptured)`. `main.cpp`'s existing `SetCaptured(io.WantCaptureMouse || gizmoActive,
+  io.WantCaptureKeyboard)` call needed no change.
+
+**`main.cpp` integration is a hybrid, matching the reference's own pattern — not a blind
+route-everything-through-actions rewrite.** The reference's own `main.cpp` (not just its
+`action_map.cpp`) keeps mouse-drag orbit/pan/zoom on **raw** `Input::IsMouseDown`/
+`WasMousePressed`/`MouseDelta`/`ScrollDelta` queries — never through the action map — while
+routing only the fly axes (which need to merge keyboard *and* gamepad into one named value)
+and discrete actions (focus, gizmo ops, quit) through it. Ported that same split rather than
+inventing a different one: right-drag orbit/middle-drag pan/scroll zoom stay raw; fly
+(`camera.fly.forward/right/up`) and focus (`camera.focus`) go through `GetAxis`/
+`WasActionPressed`.
+
+- **Default bindings keep E/Q for fly up/down**, not the reference's Space/LeftShift — this
+  engine's existing scheme (`main.cpp` already used E/Q before this port), preserved so the
+  port doesn't change today's feel.
+- **Dropped `gizmo.*` and `app.quit` from the defaults.** The reference bound these too, but
+  gizmo hotkeys stay on ImGui's own key routing here (`main.cpp`'s `ImGui::IsKeyPressed`,
+  unchanged — see "Gizmo snap + hotkeys" above) and nothing calls
+  `WasActionPressed("app.quit")`, so shipping them would be dead config baked into every
+  generated `assets/input.json`.
+- **New capability: gamepad orbit** (right stick, `camera.orbit.x/y`) — ungated (a physical
+  stick is never ambiguous with ImGui text focus) and scaled by `dt` (frame-rate
+  independent, unlike the mouse path's per-frame pixel deltas), rather than the reference's
+  flat per-frame multiplier, since this engine's loop is variable-rate with no fixed-
+  timestep accumulator (see the roadmap's unscheduled fixed-timestep item). The tuning
+  constant (150 px-equivalent/sec at full deflection) is an untested starting point — no
+  controller here to feel-tune it against.
+- **Capture-gate bypass, made explicit.** The action-map query functions read `RawKeyboard/
+  RawMouse/GetGamepad`, which — like the reference — bypass `SetCaptured` entirely. Routing
+  fly/focus through them without a guard would let W both type in an ImGui field *and* fly
+  the camera during a right-drag. `main.cpp` wraps both call sites in
+  `!io.WantCaptureKeyboard`; gamepad orbit stays deliberately ungated.
+
+**Frame-order fix (the one real behavior change to `main.cpp`'s existing loop).**
+`Input::BeginFrame()` moved from its old spot (right before the camera block, *after*
+`glfwPollEvents()`) to immediately *before* `glfwPollEvents()`. Callback-driven edge
+detection needs the previous-state snapshot to happen before the callbacks that mutate
+current state fire; the reference's own loop was already ordered this way.
+`SetCaptured`/the camera queries stay where they were, after the poll.
+
+**Startup wiring.** `RegisterDefaultEditorBindings()` builds and pushes the "editor"
+context; `action_map.h` gained a `GetContext(name)` accessor (not in the reference, which
+never needed to hand the just-pushed context to anything else) so `main.cpp` can fetch it
+and feed it to `BindingIO::Load(TOON_INPUT_JSON, ...)` — the same "load or write the
+defaults on first run" shape as scene save/load. `BindingIO::Load`'s failure contract was
+tightened versus the reference (which cleared and repopulated the caller's `InputContext`
+in place, so a mid-populate exception could leave it partially overwritten): this port
+parses into a side buffer under one `try`/`catch` and only assigns on full success, the same
+"side-copy, swap on success" pattern `serializer.cpp`'s `LoadScene` already uses.
+
+**A real, non-obvious build gotcha found here — see "Build gotchas" above for the general
+lesson now folded in there.** After adding four `target_*` calls to `CMakeLists.txt` (new
+sources, the JSON include dir, the `Diligent-JSON` link, two compile defs) in one sitting,
+`cmake --build --preset windows-debug` forced a reconfigure and got most of the way through
+a full DiligentCore/Tools/FX rebuild before failing on `binding_io.cpp(6,10): fatal error:
+'nlohmann/json.hpp' file not found`. The file exists exactly where the new include dir
+points (confirmed on disk); the actual cause, found by extracting the real compiler
+invocation from `compile_commands.json`, was that **the include dir (and the two new
+compile defs) were simply absent from the generated command** — despite `CMakeLists.txt` on
+disk having all four edits, confirmed via a fresh `Read` immediately before the build.
+Grepping the generated `build.ninja` directly for the new content confirmed zero matches:
+the implicit reconfigure genuinely hadn't processed those lines, even though it *had*
+picked up the new source-file list (the three new `.cpp`s did compile). Root cause not
+fully isolated — `build.ninja`/`compile_commands.json`'s timestamps were only 2 seconds
+after `CMakeLists.txt`'s own last-write time, so this reads as the implicit
+regenerate-if-stale check running, but CMake's own configure pass not fully applying every
+`target_*` call from the edited file. **Fix: an *explicit* `cmake --preset windows-debug`
+reconfigure** (not `--build`) picked up all twelve new references immediately (confirmed via
+the same `build.ninja` grep), and the subsequent build succeeded.
+
+**Verified:**
+- **Clean build** (`cmake --preset windows-debug` then `cmake --build`, exit 0, 663/663
+  steps) after the reconfigure fix above.
+- **Persistence round-trip — the strongest evidence available without live input.** First
+  launch printed `Bindings saved: .../assets/input.json` (the file didn't exist before);
+  reading it back confirmed the exact expected schema — `camera.fly.up` bound to E/Q,
+  `camera.orbit.x/y` present as gamepad-only axes, no `gizmo.*`/`app.quit` keys anywhere.
+  This exercises `RegisterDefaultEditorBindings` → `GetContext` → `BindingIO::Load` (miss)
+  → `BindingIO::Save`, the action-map's binding→JSON serialization, and the
+  `Diligent-JSON` link, all in one observable artifact — not just "it compiled."
+- **Launch + `PrintWindow` screenshot** (cold-start wait, DPI-aware capture — see
+  "Screenshotting the window" below): the full scene rendered normally at 144 FPS (helmet,
+  cube+satellite, sphere, torus, ground, gizmo, all panels), confirming the moved
+  `BeginFrame` and the new startup load/save path didn't crash or hang. The Debug panel's
+  new Camera-section lines rendered correctly, including the conditional gamepad-count
+  text — which read as *connected* on this machine. Cross-checked via `Get-PnpDevice`: the
+  only matching HID entries are "HID-compliant system controller" collections under Razer/
+  keyboard vendor IDs, which look like a peripheral's extra HID interface rather than a
+  dedicated controller — reported as an unconfirmed, likely-benign detection, not a
+  verified real gamepad.
+- **Graceful close** — `CloseMainWindow()` + `WaitForExit` returned within 5s, no hang, no
+  abort dialog (the ImGui shutdown-order fix from "Dear ImGui integration" above is
+  untouched by this change).
+- **Blocked, reported as such rather than glossed over:** live interactive behavior (does a
+  held key actually fly the camera, does editing `assets/input.json` change the feel) can't
+  be driven synthetically here (`SendInput` reaches no window in this environment — see the
+  `verify` skill), and there's no confirmed physical gamepad to test the new stick bindings
+  against. Both need a manual check on the user's own machine.
+
+**Still deferred** (see the "Editor camera + input" update above): F-focus on the selected
+entity, an interactive in-editor rebind panel (rebinding today is edit-the-JSON-and-
+relaunch), and the event queue / file-drops (first consumer: the asset-browser roadmap item,
+next up).
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -1077,6 +1248,14 @@ it first. If it's a **stuck / elevated** instance that won't die (`Stop-Process`
 exe aside** — Windows allows renaming a running executable (it's a metadata op) —
 then re-link creates a fresh one. The renamed file can't be deleted until that
 process finally exits.
+
+**Same failure, a DLL instead of the exe.** A running instance also locks the engine DLLs it
+loaded — `lld-link: error: failed to write output 'GraphicsEngineVk_64d.dll': permission
+denied` fails identically and for the same reason. `Get-Process | Where-Object { $_.Path
+-like '*ToonEngine*' }` finds the culprit. **Check whether it's actually yours before
+killing it** — a window you didn't just launch this session may be the user's own live
+session (see the `verify` skill's "don't assume a process you didn't just launch is yours");
+ask first unless durably authorized to close it.
 
 ### Screenshotting the window (GDI `CopyFromScreen` returns black)
 
@@ -1616,3 +1795,22 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   pass-through center — not floating windows), and re-running `git submodule update --init
   --recursive` afterward left `external/imgui` pinned and `external/DiligentTools` clean —
   the exact command that used to silently revert docking now leaves it intact.
+- **2026-07-12** — **Input system** (roadmap A.1, now shipped — see "Input system" above
+  for the full writeup). Ported `ToonEngineOld/src/core/input/` into `core/input/`: action
+  maps (FNV-1a hashed, keyboard/mouse/gamepad bindings, an axis type merging keyboard +
+  gamepad into one named value), an input-context stack, and JSON-bound rebinding
+  (`assets/input.json`, via the already-vendored `Diligent-JSON` — had to be linked
+  explicitly, since `Diligent-AssetLoader` links it `PRIVATE`). Replaces the minimal
+  polling-only `core/input.{h,cpp}`. Checked against the guiding principle first (nothing
+  in DiligentCore/Tools to build on; DiligentSamples' `InputController` isn't vendored —
+  already established in "Diligent overlap check"). `main.cpp`'s camera controls now split
+  cleanly between raw mouse-drag polling (orbit/pan/zoom, unchanged) and the new action map
+  (fly axes + focus, gated on `WantCaptureKeyboard` since the action queries bypass the
+  capture gate by design); gamepad right-stick orbit is a genuinely new capability. Found
+  and fixed a real build-system gotcha along the way: `cmake --build`'s implicit reconfigure
+  can silently under-apply a multi-call `CMakeLists.txt` edit — an explicit
+  `cmake --preset` resolved it (see "Build gotchas" above). Verified: clean build (663/663
+  steps), a generated `assets/input.json` matching the exact expected binding schema, a
+  clean launch/render/graceful-close via screenshot, and honestly-reported limits (no live
+  input desktop here to drive interactively, no confirmed physical gamepad to test the new
+  stick bindings against).

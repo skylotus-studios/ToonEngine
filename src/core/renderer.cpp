@@ -8,7 +8,8 @@
 
 // GLFW with native access — extracting the OS window handle is a backend
 // concern, so it lives behind the seam here. main.cpp includes only plain GLFW.
-#define GLFW_INCLUDE_NONE
+// GLFW_INCLUDE_NONE is set engine-wide (CMakeLists.txt), not per-file here, since
+// core/input/input_device.h also needs it ahead of any single TU's own #define.
 #include <GLFW/glfw3.h>
 #if defined(_WIN32)
 #define GLFW_EXPOSE_NATIVE_WIN32
