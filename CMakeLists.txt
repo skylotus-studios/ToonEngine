@@ -56,6 +56,7 @@ add_executable(ToonEngine
     src/core/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
     src/core/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
     src/core/input.cpp          # GLFW input polling + capture gate
+    src/core/serializer.cpp     # scene save/load (.scene text files)
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
     external/ImGuizmo/src/ImGuizmo.cpp   # editor transform gizmos (compiled against Diligent's imgui)
 )
@@ -103,7 +104,8 @@ target_compile_definitions(ToonEngine PRIVATE ENGINE_DLL=1)
 target_compile_definitions(ToonEngine PRIVATE
     TOON_SHADERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders"
     TOON_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
-    TOON_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts")
+    TOON_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
+    TOON_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes")
 
 # Convenience function from DiligentCore: copies the engine shared libraries
 # next to the executable so the OS can find and load them at runtime.

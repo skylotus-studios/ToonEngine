@@ -47,8 +47,8 @@ then an **ACES tone-map pass** resolves to the back buffer. A docked **Dear ImGu
 (Bai Jamjuree font, 3 selectable themes) drives it live: a **Scene Hierarchy** panel (select /
 add-child / duplicate / delete / drag-drop reparent), an **Inspector** for the selected entity
 (name, transform, material or light color/intensity, **ImGuizmo** move/rotate/scale gizmo
-with **W/E/R/X hotkeys + snapping**), and a **Debug** panel (theme, band count, global
-style, and every post effect). An
+with **W/E/R/X hotkeys + snapping**), and a **Debug** panel (theme, **scene save/load** to a
+text `.scene` file, band count, global style, and every post effect). An
 **editor camera** navigates the scene — right-drag orbit (+ WASD/QE fly), middle-drag pan,
 scroll zoom, F focus — with input suppressed while using the UI. HLSL shaders cross-compile to
 SPIR-V at runtime.
@@ -99,17 +99,18 @@ src/
     scene.{h,cpp}         Entity-tree scene graph: hierarchy, world-transform composition, editor mutations
     camera.{h,cpp}        Editor camera controls: orbit/pan/zoom/fly/focus
     input.{h,cpp}         GLFW input polling + ImGui capture gate
+    serializer.{h,cpp}    Scene save/load — entity/camera state to a text .scene file
 assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + model_fill/model_outline + tonemap.hlsl
 assets/models/            glTF/GLB/FBX test models (helmet/fox/dragon) — Git LFS
 assets/fonts/             UI fonts (BaiJamjuree, OpenSans) for the editor overlay
+assets/scenes/            Saved .scene text files (core/serializer.h); created on first Save
 external/                 Git submodules (see .gitmodules): DiligentCore/Tools/FX, glfw, ImGuizmo
 CMakeLists.txt            add_subdirectory the submodules; disables unused Diligent backends
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
 .clangd                   Points clangd at build/windows-debug's compile_commands.json
-docs/clion-setup-windows.md  CLion toolchain + preset + debug setup (Windows, active)
-docs/clion-setup-linux.md    CLion setup notes for Linux (planned)
-docs/clion-setup-macos.md    CLion setup notes for macOS (planned)
-docs/cpp-style-guide.md      C++ house style (formatting + comments + seam rules)
+docs/clion-setup-windows.md    CLion toolchain + preset + debug setup (Windows, active)
+docs/clion-setup-{linux,macos}.md  Setup notes for those platforms (planned)
+docs/cpp-style-guide.md        C++ house style (formatting + comments + seam rules)
 docs/md-style-guide.md       Prose/writing style (no puffery, no em-dash spam, no AI tells)
 .claude/skills/tidy-cpp/     Skill: clean src/** to the style guide (/tidy-cpp)
 .claude/skills/tidy-md/      Skill: keep CLAUDE.md/README.md/docs/** accurate + right-sized (/tidy-md)
@@ -163,15 +164,16 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-The renderer core is done (toon fill + outline, HDR, full DiligentFX post stack). The next
-arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven systems
-(scene graph, model loading, inspector, input, camera) onto the Vulkan seam. See MEMORY.md
-→ *ToonEngineOld carry-over* for the survey + per-system porting notes.
+The renderer core is done (toon fill + outline, HDR, full DiligentFX post stack). Most of
+the **engine/editor layer** — `ToonEngineOld`'s scene graph, model loading, inspector,
+camera, and serialization — has been ported too; the real **input system** is what's left.
+See MEMORY.md → *ToonEngineOld carry-over* for the survey + per-system porting notes.
 
 **A. Editor**
 
-1. **Follow-ups:** sprite/animation entity components.
-2. **Scene serialization** — save/load scenes to disk.
+1. **Input system** — action maps, rebinding, gamepad (port `ToonEngineOld/src/core/input/`).
+2. **Asset browser panel** — `assets/` browser + texture/model thumbnails (port
+   `ui/file_browser` + `ui/thumbnail_cache`, via the linked `Diligent-TextureLoader`).
 
 **B. Environment & fidelity**
 1. **Grid + sky gradient** — HLSL ports of the old editor backdrop.
@@ -179,13 +181,16 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
    depth-array support).
 
 **C. Later**
-1. **Skeletal animation** (play the fox/dragon clips) 
-2. **2D / sprites** ·
+1. **Skeletal animation** (play the fox/dragon clips), plus the animation entity component
+2. **2D / sprites**, plus the sprite entity component
 3. **Instancing** (deferred — a per-instance draw path for many-object scenes).
 
 **Infra / cross-cutting** (unscheduled): Linux (Vulkan) then macOS (MoltenVK, needs the
 GLFW Cocoa `NSView` `.mm` helper); durable docking fix (fork DiligentTools, pin imgui to a
-`docking` commit — see MEMORY.md → *Docking*); re-enable D3D11 for older Windows devices.
+`docking` commit — see MEMORY.md → *Docking*); re-enable D3D11 for older Windows devices;
+**fixed-timestep** sim loop (`main.cpp` runs a plain variable `dt` today); **shader
+hot-reload** via Diligent's `IRenderStateCache` (`EnableHotReload` + `Reload()`, already
+reachable through the linked `Diligent-GraphicsTools`), not a hand-rolled file-watcher.
 
 ## Constraints
 

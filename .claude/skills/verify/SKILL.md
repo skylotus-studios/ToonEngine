@@ -12,11 +12,16 @@ cmake --build --preset windows-debug
 Start-Process build\windows-debug\ToonEngine.exe
 ```
 
-Works from a bare shell as long as `build/windows-debug` is already configured: ninja caches
-tool paths from the last successful configure, so the VS Developer environment doesn't need
-importing for an incremental build. A from-scratch *configure* does need it, and there's no
-repo script for this (deliberately; see repo MEMORY.md → "Build gotchas", don't recreate
-one). Import it inline for that one command instead:
+Works from a bare shell as long as `build/windows-debug` is already configured *and*
+`CMakeLists.txt` hasn't changed since: ninja caches tool paths from the last successful
+configure, so the VS Developer environment doesn't need importing for a source-only
+incremental build. A from-scratch *configure* does need it, and so does any build that
+edits `CMakeLists.txt` (e.g. adding a new source file) — that forces a reconfigure as the
+build's first step, and DiligentTools' library-combining step invokes `lib.exe` by bare
+name at build time, which fails with `'lib.exe' is not recognized` from a plain shell (see
+repo MEMORY.md → "Build gotchas"). There's no repo script for importing the VS env
+(deliberately; don't recreate one). Import it inline, chained into the *same* shell
+invocation as the build itself (env vars set in one tool call don't persist to the next):
 
 ```powershell
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -25,7 +30,7 @@ $devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
 cmd /c "`"$devCmd`" -arch=x64 -host_arch=x64 -no_logo && set" | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item "Env:$($matches[1])" $matches[2] }
 }
-cmake --preset windows-debug
+cmake --build --preset windows-debug
 ```
 
 **Cold start is slow on a debug build — wait ~10-12s before trusting any capture.**

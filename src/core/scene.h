@@ -8,7 +8,8 @@
 //  actual 4x4 math) lives in scene.cpp, which IS allowed to use Diligent
 //  (build-on-Diligent — see CLAUDE.md). Adapted from ToonEngineOld/src/scene.
 //============================================================================
-#include "core/renderer.h"   // Transform, Material, Mesh/ModelHandle, Mat4 (via math.h)
+#include "core/renderer.h"    // Transform, Material, Mesh/ModelHandle, Mat4 (via math.h)
+#include "core/primitives.h"  // PrimitiveDesc — mesh-regeneration params for serialization
 
 #include <optional>
 #include <string>
@@ -40,6 +41,13 @@ struct Entity {
     MeshHandle  mesh     = MeshHandle::Invalid;   // a procedural primitive, or...
     ModelHandle model    = ModelHandle::Invalid;  // ...a loaded glTF model
     Material    material;                          // primitive material / model tint + style
+
+    // Provenance for `mesh`/`model`, so a saved scene can rebuild the GPU resource on load
+    // (see core/serializer.h): a procedural mesh has no source file, so `primitive.kind` +
+    // params regenerate it via MakePrimitiveMesh; a loaded model does, so `modelPath` re-feeds
+    // Renderer::LoadModel. Both stay empty/None on a non-renderable (grouping/light) entity.
+    PrimitiveDesc primitive;
+    std::string   modelPath;
 
     std::optional<LightComponent> light;    // set -> this entity is a (directional) light
 };

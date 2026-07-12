@@ -27,6 +27,9 @@ panels](docs/screenshots/editor-overview.png)
 - Real scene graph: an entity tree with hierarchy-composed world transforms, parent/child
   relationships, and world-preserving reparenting, so dragging an object under a new parent
   doesn't move it in world space.
+- Scene serialization: save/load the full hierarchy, transforms, materials, and lighting to
+  a human-readable text file. Procedural geometry round-trips from its generator parameters
+  (radius, segment counts), not baked mesh data, so a saved scene has no binary blobs.
 - Editor UI built from scratch on Dear ImGui: a docked layout with 3 selectable themes, a
   scene hierarchy with drag-drop reparenting, an inspector with live material, transform,
   and light editing, and ImGuizmo move/rotate/scale gizmos with Unity-style hotkeys

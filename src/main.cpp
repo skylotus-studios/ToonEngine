@@ -10,6 +10,7 @@
 #include "core/scene.h"
 #include "core/camera.h"
 #include "core/input.h"
+#include "core/serializer.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -25,6 +26,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace {
@@ -41,6 +43,13 @@ namespace {
                                                 m.indices.data(), static_cast<uint32_t>(m.indices.size()));
         if (h == toon::MeshHandle::Invalid) { std::fprintf(stderr, "Failed to create mesh '%s'\n", name); }
         return h;
+    }
+
+    // Create + upload a procedural mesh from `desc`, and record `desc` on the entity so a
+    // saved scene can regenerate this mesh on load (a procedural mesh has no source file).
+    void SetPrimitive(toon::Renderer &r, toon::Entity &e, const toon::PrimitiveDesc &desc) {
+        e.primitive = desc;
+        e.mesh = Upload(r, toon::MakePrimitiveMesh(desc), e.name.c_str());
     }
 
     // --- Editor themes (ported from ToonEngineOld/src/ui/themes.cpp) --------------
@@ -367,7 +376,7 @@ int main() {
     // Ground plane beneath the objects (catches their SSAO contact shadows; no spin/outline).
     {
         toon::Entity &e = scene.entities[toon::AddEntity(scene, 0, "Ground")];
-        e.mesh = Upload(renderer, toon::MakePlane(5.0f), "ground");
+        SetPrimitive(renderer, e, toon::PrimitiveDesc::Plane(5.0f));
         e.transform->position = {0.0f, -1.05f, 0.0f};
         e.material.baseColor = {0.60f, 0.60f, 0.63f};
         e.material.outlineWidth = 0.0f;
@@ -377,7 +386,7 @@ int main() {
     {
         const int i = toon::AddEntity(scene, 0, "Sphere");
         toon::Entity &e = scene.entities[i];
-        e.mesh = Upload(renderer, toon::MakeUVSphere(1.0f, 32, 48), "sphere");
+        SetPrimitive(renderer, e, toon::PrimitiveDesc::Sphere(1.0f, 32, 48));
         e.transform->position = {-2.8f, 0.0f, 0.0f};
         e.transform->scale = {1.5f, 0.8f, 1.0f};
         e.material = toon::Material{{0.85f, 0.30f, 0.35f}, {0.24f, 0.05f, 0.08f}, 0.030f};
@@ -388,7 +397,7 @@ int main() {
     const int cubeIdx = toon::AddEntity(scene, 0, "Cube");
     {
         toon::Entity &e = scene.entities[cubeIdx];
-        e.mesh = Upload(renderer, toon::MakeCube(0.9f), "cube");
+        SetPrimitive(renderer, e, toon::PrimitiveDesc::Cube(0.9f));
         e.material = toon::Material{{0.30f, 0.45f, 0.85f}, {0.02f, 0.02f, 0.05f}, 0.050f};
         e.material.roughness = 0.15f;
         spinners.push_back({cubeIdx, {0.5f, 1.0f, 0.0f}});
@@ -399,7 +408,7 @@ int main() {
     // its parent — keeping the scripted scene in pre-order, as the editor mutations always are.
     {
         toon::Entity &e = scene.entities[toon::AddEntity(scene, cubeIdx, "Satellite")];
-        e.mesh = Upload(renderer, toon::MakeUVSphere(0.22f, 16, 24), "satellite");
+        SetPrimitive(renderer, e, toon::PrimitiveDesc::Sphere(0.22f, 16, 24));
         e.transform->position = {1.7f, 0.0f, 0.0f}; // offset from the cube (its parent)
         e.material = toon::Material{{0.40f, 0.90f, 0.55f}, {0.03f, 0.07f, 0.04f}, 0.014f};
         e.material.roughness = 0.15f;
@@ -408,18 +417,20 @@ int main() {
     {
         const int i = toon::AddEntity(scene, 0, "Torus");
         toon::Entity &e = scene.entities[i];
-        e.mesh = Upload(renderer, toon::MakeTorus(0.75f, 0.32f, 48, 24), "torus");
+        SetPrimitive(renderer, e, toon::PrimitiveDesc::Torus(0.75f, 0.32f, 48, 24));
         e.transform->position = {2.8f, 0.0f, 0.0f};
         e.material = toon::Material{{0.90f, 0.70f, 0.25f}, {0.32f, 0.20f, 0.03f}, 0.022f};
         e.material.roughness = 0.15f;
         spinners.push_back({i, {1.0f, 0.0f, 0.0f}});
     }
     // Loaded glTF model (DiligentTools' loader): cel-shaded albedo + inverted-hull outline.
-    const toon::ModelHandle helmet = renderer.LoadModel(TOON_MODELS_DIR "/helmet.glb");
+    const char *helmetPath = TOON_MODELS_DIR "/helmet.glb";
+    const toon::ModelHandle helmet = renderer.LoadModel(helmetPath);
     if (helmet != toon::ModelHandle::Invalid) {
         const int i = toon::AddEntity(scene, 0, "Helmet");
         toon::Entity &e = scene.entities[i];
         e.model = helmet;
+        e.modelPath = helmetPath;   // so a saved scene can reload it (see core/serializer.h)
         e.transform->position = {0.0f, 2.5f, 0.0f};
         e.transform->scale = {1.4f, 1.4f, 1.4f};
         e.material.baseColor = {1.0f, 1.0f, 1.0f}; // white tint (glTF supplies the color)
@@ -454,6 +465,13 @@ int main() {
 
     // HDR post-processing (foundation for DiligentFX effects).
     toon::PostParams post;
+
+    // Scene serialization (core/serializer.h): path field + Save/Load buttons live in the
+    // Debug panel below. `sceneStatus` echoes the last op's result in the UI (SaveScene/
+    // LoadScene also log to the console) since this dev environment has no reliable console.
+    char scenePathBuf[256];
+    std::snprintf(scenePathBuf, sizeof(scenePathBuf), "%s", TOON_SCENES_DIR "/default.scene");
+    std::string sceneStatus;
 
     bool spin = true;
 #ifdef IMGUI_HAS_DOCK
@@ -820,6 +838,22 @@ int main() {
                 }
                 ImGui::EndCombo();
             }
+
+            ImGui::SeparatorText("Scene");
+            ImGui::InputText("Path", scenePathBuf, sizeof(scenePathBuf));
+            if (ImGui::Button("Save Scene")) {
+                sceneStatus = toon::SaveScene(scenePathBuf, scene, camera) ? "Saved." : "Save failed (see console).";
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Load Scene")) {
+                if (toon::LoadScene(scenePathBuf, scene, camera, renderer)) {
+                    spinners.clear(); // stale entity indices into the scene Load just replaced
+                    sceneStatus = "Loaded.";
+                } else {
+                    sceneStatus = "Load failed (see console).";
+                }
+            }
+            if (!sceneStatus.empty()) { ImGui::TextDisabled("%s", sceneStatus.c_str()); }
 
             ImGui::SeparatorText("Style (all objects)");
             ImGui::SliderFloat("Bands", &style.bands, 1.0f, 8.0f, "%.0f");

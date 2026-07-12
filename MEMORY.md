@@ -46,6 +46,25 @@ After fixing the environment, a stale CMake cache from a failed configure will
 keep `CMAKE_MT=NOTFOUND` cached — wipe `build/<preset>/` (or at least
 `CMakeCache.txt` + `CMakeFiles/`) before reconfiguring.
 
+### `'lib.exe' is not recognized` — editing `CMakeLists.txt` needs the VS env too, not just a fresh configure
+
+The `verify` skill's claim that "ninja caches tool paths from the last successful configure,
+so the VS Developer environment doesn't need importing for an incremental build" is only
+true when `CMakeLists.txt` itself doesn't change. Adding a new source file to
+`add_executable(...)` (as scene serialization's `serializer.cpp` did) forces a CMake
+reconfigure as the first step of the next `cmake --build`, and DiligentTools' "Combining
+libraries" step invokes `lib.exe` (the MSVC librarian) by bare name, relying on `PATH` at
+*build* time, not a path resolved once at configure time. From a bare shell with no VS env
+imported, that step fails with `'lib.exe' is not recognized as an internal or external
+command`. A plain compile-error grep won't find it; the real failure is
+`ninja -t restat ... failed with: ninja: error: failed recompaction: Permission denied`-
+adjacent noise if something else is *also* touching the build dir, or a clean
+`FAILED: external/DiligentTools/Debug/DiligentTools.lib` if not. Either way, the fix is the
+same VS-env-import snippet above — chained into the *same* shell invocation as the
+`cmake --build`, since environment variables set in one tool call don't persist to the
+next one here. A source-only change (no `CMakeLists.txt` edit) still doesn't need it, per
+the skill.
+
 ### `RefCntAutoPtr.hpp` not found / link errors consuming the `-shared` Vulkan engine
 
 Linking `Diligent-GraphicsEngineVk-shared` alone doesn't propagate
@@ -915,6 +934,95 @@ gated on mesh/model presence), with the Color swatch and Intensity matching the 
 values and a genuinely non-trivial decomposed rotation. Console log clean, only the
 pre-existing benign warnings already noted throughout this file.
 
+## Scene serialization (roadmap A.2)
+
+`core/serializer.{h,cpp}` adds `SaveScene`/`LoadScene`, ported from
+`ToonEngineOld/src/scene/serializer.*` but redesigned around this engine's actual Entity
+shape. The old engine had no procedural primitives — every renderable carried a
+`modelPath` and reloaded from disk. This engine's scripted scene is almost entirely
+procedural (sphere/cube/torus/plane), so a serializer that only handled `modelPath` would
+round-trip just the Helmet and Sun; everything else would come back as an empty transform
+node. Reusing the old format directly wasn't an option.
+
+**A procedural mesh needs provenance, not just a handle.** `Entity` gained two fields:
+`PrimitiveDesc primitive` (`core/primitives.h` — a `PrimitiveKind` enum plus the generator
+params: radius/rings/segments for a sphere, half-extent for a cube, major/minor
+radius/segments for a torus) and `std::string modelPath`. `MakePrimitiveMesh(desc)`
+dispatches back to `MakeUVSphere`/`MakeCube`/`MakeTorus`/`MakePlane`, so a saved primitive
+regenerates its exact mesh on load without a source file; a saved model re-feeds its path
+to `Renderer::LoadModel`. `main.cpp`'s scripted scene now builds every primitive through a
+`SetPrimitive(renderer, entity, desc)` helper instead of calling `Upload(MakeXxx(...))`
+directly, so the provenance is always recorded alongside the mesh handle rather than
+reconstructed after the fact. `PrimitiveDesc` gets one static factory per kind
+(`PrimitiveDesc::Sphere(radius, rings, segments)` etc., the same pattern as
+`Mat4::Identity()` in math.h) instead of a positional-argument aggregate literal, since
+five same-typed floats/ints in a row at the call site is an easy transposition bug.
+
+**File format.** A simple line-based text file, human-readable and diffable, matching the
+old engine's approach:
+
+```
+camera.pivot 0 0 0
+camera.distance 10
+entity "Cube"
+  parent 0
+  position 0 0 0
+  rotation 0 0 0
+  scale 1 1 1
+  primitive cube 0.9
+  material.baseColor 0.3 0.45 0.85
+  ...
+```
+
+Entities are written and re-read in vector order, which is exactly parent-before-child
+(the scene's own invariant, see scene.h), so a `parent <index>` line always names an
+already-parsed entity, and `LoadScene`'s append-as-you-go rebuild reproduces the identical
+vector — no second pass or index remapping needed.
+
+**Scope: camera + entities, not editor/session state.** A saved scene is exactly what the
+Scene Hierarchy and Inspector panels expose (transform, primitive-or-model, material,
+light, hierarchy) plus the camera. `PostParams`, the shared `style` (bands/ambient/
+outline scale), the UI theme, and Spin are deliberately excluded: they're renderer/editor
+tuning, not scene content, and folding them in would blur that boundary for no clear
+benefit yet (nothing currently lets you attach "spin" to an arbitrary entity — it's
+main.cpp's scripted-demo behavior, not a scene-graph concept).
+
+**`LoadScene` takes a `Renderer&`** and calls `CreateMesh`/`LoadModel` itself, so the
+Debug panel's Load button is one call, matching the old engine's "reload from disk on
+load" pattern. It parses into a side-buffer `Scene`/`Camera` and only replaces the
+caller's on a fully successful parse, so a malformed file leaves the live scene untouched
+rather than half-applying. `SaveScene` creates any missing parent directories via
+`<filesystem>` first, so the first save into a fresh `assets/scenes/` (not committed,
+created on demand) doesn't silently fail.
+
+**Known gap, not a new one.** Neither `Renderer` nor `DestroyScene` frees GPU mesh/model
+resources today (`DestroyScene`'s own comment in scene.h says so), so Load leaks the
+replaced scene's GPU resources exactly like `DeleteEntity` already does. A real fix needs
+`Renderer::DestroyMesh`/`DestroyModel` plus either refcounting or a path cache for
+repeated `LoadModel` calls on the same file; out of scope here.
+
+**`main.cpp` wiring.** A new "Scene" section in the Debug panel: a path field (defaulting
+to a new `TOON_SCENES_DIR` compile define, matching the `TOON_SHADERS_DIR`/
+`TOON_MODELS_DIR`/`TOON_FONTS_DIR` pattern) and Save/Load buttons, with a status line
+since `SaveScene`/`LoadScene` also print to the console and this dev environment has no
+reliably visible one. The scripted demo's `spinners` vector (which entities animate, and
+by which axis) holds raw indices into `scene.entities` and isn't part of the serialized
+model — Load clears it on success so a freshly-loaded scene doesn't drive spin off stale
+or wrong indices.
+
+**Verified for real, not just by compiling.** This dev environment has no live input (see
+`.claude/skills/verify/SKILL.md`), so the Save/Load buttons can't be click-tested here. A
+temporary, reverted self-test in `main.cpp` round-tripped the scripted default scene
+through `SaveScene` + `LoadScene` into a throwaway `Scene`/`Camera` at startup (never
+touching the live one) and printed a comparison to stderr, redirected to a file at launch.
+Confirmed: 8/8 entities round-tripped with correct parent indices (Satellite correctly
+came back with `parent=3`, Cube's index), correct positions, a valid regenerated mesh
+handle for every primitive, a valid reloaded model handle for Helmet, and Sun reconstructed
+with neither mesh nor model set, light only. Also read the written `.scene` file directly:
+clean, matches the format above, human-readable. Screenshot-confirmed (before and after
+reverting the temp code) that the Debug panel's new Scene section renders correctly and
+nothing else regressed.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -980,12 +1088,55 @@ vertex, a framebuffer path for shadows).
 - **core/input/** — keyboard/mouse/gamepad + action maps + rebinding + an ImGui capture
   gate; GLFW-based, largely direct.
 - **core/animator + animation** — skeleton + keyframe clips; after skinned loading.
-- **ui/file_browser + themes** — asset browser + 3 themes; ImGui, mostly portable.
+- **ui/file_browser + themes + thumbnail_cache** — asset browser + 3 themes + texture/model
+  preview thumbnails; ImGui, mostly portable. Thumbnails should decode/upload through the
+  already-linked `Diligent-TextureLoader` (`CreateTextureFromFile`), not a new image lib.
 - **core/renderer (GL) + main.cpp** — reference only.
 
 **Materials will need textures:** the old `Material` is `baseColor + texture + normalMap`,
 and loaded models (helmet.glb) carry albedo/normal maps — so Phase A adds texture handles
 to the seam + a textured cel fill, and the toon `Vertex` gains UVs (bone weights later).
+
+### Diligent overlap check (roadmap fold-in, 2026-07-11)
+
+Before adding the input-system / asset-browser / fixed-timestep / shader-hot-reload items
+to CLAUDE.md's roadmap, checked each against the guiding principle (build *on* Diligent,
+don't reinvent it) — against the actual vendored source (DiligentCore/Tools/FX only;
+DiligentSamples is **not** a submodule here) plus Diligent's own docs/blog.
+
+- **Input / camera controllers — genuinely nothing to build on.** DiligentCore and
+  DiligentTools have no windowing or input abstraction at all: the only `*Camera*` hit in
+  either (grepped both trees) is `NativeApp/Android/ndk_helper/tapCamera.h`, Android-only.
+  `FirstPersonCamera` / `InputController` exist only in **DiligentSamples** — a separate
+  repo ToonEngine doesn't vendor — and Diligent's own docs confirm the engine "does not
+  define any platform-specific window abstraction"; DiligentSamples' own maze demo just
+  uses GLFW for windowing + input, same as us. So `core/input.{h,cpp}` and
+  `core/camera.{h,cpp}` staying hand-rolled isn't a guiding-principle violation — there's
+  no in-scope Diligent equivalent to defer to, so the ToonEngineOld port is genuinely new
+  engine-layer code, same as the seam philosophy already treats scene.cpp/camera.cpp.
+- **Shader hot-reload — Diligent already has this; don't hand-roll a file-watcher.** The
+  interface is `Diligent::IRenderStateCache`, declared in
+  `DiligentCore/Graphics/GraphicsTools/interface/RenderStateCache.h`. Create it with
+  `EnableHotReload = true` (the default `RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT`
+  hash mode is required for this), route shader/PSO creation through its
+  `CreateShader()` / `CreateGraphicsPipelineState()` instead of the raw device calls,
+  then call `cache->Reload()` to recompile whatever source files changed. Confirmed via
+  Diligent's 2.5.3 release notes + `Tutorial26_StateCache`: `Reload()` is a manual trigger
+  (a UI button/hotkey), not something polled every frame. The implementation
+  (`RenderStateCacheImpl.cpp`) builds unconditionally into `Diligent-GraphicsTools`, which
+  `CMakeLists.txt` already links (for `MapHelper.hpp`); the only other requirement is
+  `Diligent-ArchiverInterface` for the `IArchiverFactory` the cache needs, and the Archiver
+  DLL already ships (see *Compile time* above). Zero new deps.
+- **Fixed timestep — not a Diligent concern either way.**
+  `DiligentCore/Common/interface/Timer.hpp` is a bare `std::chrono` stopwatch (`Restart` /
+  `GetElapsedTime[f]`), not a fixed-timestep/accumulator solution — swapping `main.cpp`'s
+  `glfwGetTime()` for it would change nothing functionally. The accumulator + decoupled
+  sim-rate pattern is pure game-loop architecture, orthogonal to the graphics API either way.
+- **Asset thumbnails — reuse the texture path already on the seam.** No new image
+  library needed: `Diligent-TextureLoader`'s `CreateTextureFromFile` (already linked, used
+  today for model textures) is the right entry point for generating/caching browser
+  thumbnails, per `ToonEngineOld/src/ui/thumbnail_cache.{h,cpp}` — a real implemented file
+  the original carry-over survey above had missed (now added to the file_browser bullet).
 
 ## Architecture decisions
 
@@ -1364,3 +1515,31 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   to roadmap phase C. Verified via build + screenshot: a regression check, a blue-tinted
   spot-check proving the shader path actually runs, and a clean console log. See "Light
   entity component" above.
+- **2026-07-11** — **Roadmap audit: ToonEngineOld's own CLAUDE.md TODO lists.** Diffed
+  `ToonEngineOld/CLAUDE.md`'s "Engine Roadmap TODO" / "ImGui TODO" lists (the old engine's
+  own unshipped wishlist — distinct from the proven systems it actually built, which the
+  carry-over survey above already covers) against the current roadmap. Folded in four
+  concrete, verified gaps as new CLAUDE.md roadmap items: an explicit **input system**
+  bullet (already noted as deferred here, but never promoted to CLAUDE.md's forward
+  roadmap), an **asset browser panel** bullet (`ui/file_browser` + the previously-unlisted
+  `ui/thumbnail_cache`), a **fixed-timestep** game-loop bullet (`main.cpp` currently runs a
+  plain variable `dt`), and a **shader hot-reload** bullet wired explicitly to Diligent's
+  own `IRenderStateCache` rather than a hand-rolled file-watcher. Skipped the speculative
+  half of the old lists (audio, physics, particles, undo/redo, material editor, drag-drop
+  material/model workflows, render-stats/profiling panel, status bar, shortcuts overlay,
+  animation blending, morph targets) — no code or design work backs any of them yet,
+  unlike the four folded in. See "Diligent overlap check" above for the per-item
+  guiding-principle verification (checked against the actual vendored source, since
+  DiligentSamples — where Diligent's own camera/input helpers actually live — isn't a
+  submodule here).
+- **2026-07-12** — **Scene serialization** (roadmap A.2, now shipped — see "Scene
+  serialization" above for the full writeup). `core/serializer.{h,cpp}`: `SaveScene`/
+  `LoadScene` to a line-based text `.scene` file covering the camera and every entity's
+  hierarchy, transform, material, and light. Required extending `Entity` with
+  `PrimitiveDesc primitive` + `std::string modelPath` so procedural meshes (which have no
+  source file, unlike a loaded model) can regenerate on load instead of just carrying a
+  live GPU handle that a fresh process can't reconstruct. Deliberately scoped to camera +
+  entities, not `PostParams`/style/theme/Spin, which are editor tuning, not scene content.
+  Verified with a temporary, reverted self-test (no live input here to click the actual
+  buttons — see the `verify` skill) that round-tripped the scripted default scene end to
+  end: 8/8 entities, correct hierarchy, valid regenerated mesh/model handles.

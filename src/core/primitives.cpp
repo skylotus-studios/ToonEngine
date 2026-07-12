@@ -131,4 +131,53 @@ MeshData MakePlane(float halfExtent) {
     return mesh;
 }
 
+// --- Primitive provenance -----------------------------------------------------
+
+PrimitiveDesc PrimitiveDesc::Sphere(float radius, uint32_t rings, uint32_t segments) {
+    PrimitiveDesc d;
+    d.kind      = PrimitiveKind::Sphere;
+    d.radius    = radius;
+    d.segmentsA = rings;
+    d.segmentsB = segments;
+    return d;
+}
+
+PrimitiveDesc PrimitiveDesc::Cube(float halfExtent) {
+    PrimitiveDesc d;
+    d.kind       = PrimitiveKind::Cube;
+    d.halfExtent = halfExtent;
+    return d;
+}
+
+PrimitiveDesc PrimitiveDesc::Torus(float majorRadius, float minorRadius,
+                                   uint32_t majorSegments, uint32_t minorSegments) {
+    PrimitiveDesc d;
+    d.kind        = PrimitiveKind::Torus;
+    d.radius      = majorRadius;
+    d.minorRadius = minorRadius;
+    d.segmentsA   = majorSegments;
+    d.segmentsB   = minorSegments;
+    return d;
+}
+
+PrimitiveDesc PrimitiveDesc::Plane(float halfExtent) {
+    PrimitiveDesc d;
+    d.kind       = PrimitiveKind::Plane;
+    d.halfExtent = halfExtent;
+    return d;
+}
+
+// Dispatches to the MakeXxx generator `kind` names; unpacks the shared param slots back into
+// each generator's own argument names (see PrimitiveDesc's field comments for the mapping).
+MeshData MakePrimitiveMesh(const PrimitiveDesc& desc) {
+    switch (desc.kind) {
+        case PrimitiveKind::Sphere: return MakeUVSphere(desc.radius, desc.segmentsA, desc.segmentsB);
+        case PrimitiveKind::Cube:   return MakeCube(desc.halfExtent);
+        case PrimitiveKind::Torus:  return MakeTorus(desc.radius, desc.minorRadius, desc.segmentsA, desc.segmentsB);
+        case PrimitiveKind::Plane:  return MakePlane(desc.halfExtent);
+        case PrimitiveKind::None:   break;
+    }
+    return MeshData{};
+}
+
 } // namespace toon
