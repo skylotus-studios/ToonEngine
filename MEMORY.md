@@ -140,6 +140,37 @@ Per-frame order in `main.cpp`: `BeginFrame` (bind the HDR offscreen target) →
 DiligentFX bloom chain first (it binds its own targets), then resolves whichever HDR
 source — raw scene or scene+bloom — to the back buffer.
 
+### Window icon: the taskbar needs an embedded resource, `glfwSetWindowIcon` alone isn't enough
+
+`core/renderer.cpp`'s `SetWindowIcon` (decodes an image via DiligentTools' `Image.h`, calls
+`glfwSetWindowIcon`) sets the icon via `WM_SETICON` on the live window; the title bar
+updating immediately is real-time evidence it works. It does **not** touch the .exe's own icon
+resources. GLFW's Win32 backend registers the window *class* icon by looking for a resource
+named exactly `GLFW_ICON` in the executable (`external/glfw/src/win32_window.c`,
+`createNativeWindow`), falling back to the generic system `IDI_APPLICATION` icon if it
+can't find one. That fallback is what the taskbar, Alt-Tab, and shell kept showing even
+after `SetWindowIcon` had already fixed the title bar — a title-bar-only fix reads as "half
+done," not "wrong," so it's an easy thing to ship and only notice later.
+
+Fix: embed a `GLFW_ICON` resource. `src/icon.rc.in` (one line: `GLFW_ICON ICON
+"@TOON_ICON_ICO_PATH@"`) is `configure_file`'d by `CMakeLists.txt` into
+`${CMAKE_CURRENT_BINARY_DIR}/icon.rc` and attached via `target_sources`. Windows-only,
+guarded on `WIN32`; needs `enable_language(RC)` called once near the top of the file.
+`assets/icon.ico` wraps the existing `assets/icon.png` in a minimal ICO container: a
+22-byte ICONDIR + ICONDIRENTRY header prepended directly to the PNG's own bytes. A single
+PNG-compressed frame is valid ICO content, supported since Windows Vista (no need for the
+older multi-resolution uncompressed-BMP format); built by hand in PowerShell since neither
+ImageMagick nor a working Python was available in this environment. The runtime
+`SetWindowIcon` call stays. The two are complementary, not redundant: the resource fixes
+the class/taskbar icon, the runtime call still explicitly covers the per-window instance.
+
+Verified by screenshot, not just a clean build: the taskbar (`Shell_TrayWnd`, a real
+top-level window distinct from ToonEngine's own) was captured with ordinary
+`Graphics.CopyFromScreen` — unlike ToonEngine's own client area, the taskbar isn't a Vulkan
+swap-chain surface, so plain GDI screen-copy works on it (the swap-chain-black issue only
+applies to windows actually presenting through DXGI/Vulkan). The captured taskbar button
+showed the real icon, not the generic fallback.
+
 ## Dear ImGui integration
 
 - **No GLFW backend shipped by DiligentTools.** `Diligent-Imgui` only
@@ -1543,3 +1574,13 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   Verified with a temporary, reverted self-test (no live input here to click the actual
   buttons — see the `verify` skill) that round-tripped the scripted default scene end to
   end: 8/8 entities, correct hierarchy, valid regenerated mesh/model handles.
+- **2026-07-12** — **Window icon (taskbar fix)** — see "Window icon: the taskbar needs an
+  embedded resource" above for the full writeup. The user added `SetWindowIcon`
+  (`glfwSetWindowIcon` via `WM_SETICON`) separately; it fixed the title bar but not the
+  taskbar/Alt-Tab/shell, which GLFW's Win32 backend drives from a `GLFW_ICON`-named
+  resource embedded in the .exe, not runtime state. Added `src/icon.rc.in` +
+  `assets/icon.ico` (hand-built: a 22-byte ICO header prepended to the existing PNG's
+  bytes) + `CMakeLists.txt` wiring (`enable_language(RC)`, `configure_file`,
+  `target_sources`, all `WIN32`-guarded). Verified by screenshot: captured the taskbar
+  itself (`Shell_TrayWnd`, via ordinary `CopyFromScreen` since it isn't a Vulkan swap-chain
+  surface) and confirmed the real icon renders there now.

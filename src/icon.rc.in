@@ -1,0 +1,9 @@
+// Windows resource script: embeds the window icon into ToonEngine.exe itself.
+//
+// GLFW's Win32 backend looks for an icon resource named exactly GLFW_ICON when it
+// registers the window class (see external/glfw/src/win32_window.c, createNativeWindow) -
+// finding one here is what makes the taskbar/Alt-Tab/shell icon match the window's icon,
+// not just the title bar (which core/renderer.cpp's runtime SetWindowIcon/glfwSetWindowIcon
+// call already covers via WM_SETICON). The path is filled in by CMake's configure_file()
+// (see CMakeLists.txt) since the source tree's absolute path isn't known at authoring time.
+GLFW_ICON ICON "@TOON_ICON_ICO_PATH@"

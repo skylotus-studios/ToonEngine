@@ -5,6 +5,13 @@ cmake_minimum_required(VERSION 3.20)
 # ToonEngine's own code is C++ only.
 project(ToonEngine CXX C)
 
+# RC (Windows resource-script) compiler, for the embedded window icon below — see the
+# "Application" section. Guarded on WIN32 since RC is a Windows-only concept (Linux/macOS
+# are planned but don't build yet either way; this just keeps the guard honest).
+if(WIN32)
+    enable_language(RC)
+endif()
+
 # ---------------------------------------------------------------------------
 #  ToonEngine — minimal Diligent Engine starting point
 #  Rendering-only (DiligentCore) + GLFW windowing, single Vulkan backend.
@@ -60,6 +67,20 @@ add_executable(ToonEngine
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
     external/ImGuizmo/src/ImGuizmo.cpp   # editor transform gizmos (compiled against Diligent's imgui)
 )
+
+# Embed the window icon into the .exe itself (RT_GROUP_ICON/RT_ICON resources), not just
+# set it at runtime (core/renderer.cpp's SetWindowIcon, called from main.cpp, still does
+# that too — WM_SETICON on the live window). GLFW's Win32 backend looks for a resource
+# named exactly GLFW_ICON when it registers the window class (see
+# external/glfw/src/win32_window.c) and falls back to the generic system icon if it can't
+# find one — that fallback is what the taskbar/Alt-Tab/shell were showing even though the
+# runtime call had already fixed the title bar. assets/icon.ico wraps assets/icon.png in a
+# minimal ICO container (a single PNG-compressed frame — supported since Windows Vista).
+if(WIN32)
+    set(TOON_ICON_ICO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.ico")
+    configure_file(src/icon.rc.in ${CMAKE_CURRENT_BINARY_DIR}/icon.rc @ONLY)
+    target_sources(ToonEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/icon.rc)
+endif()
 
 # src/ is the include root: cross-directory includes read "core/renderer.h".
 # ImGuizmo/src so main.cpp (and ImGuizmo.cpp) can #include "ImGuizmo.h"; ImGuizmo itself
