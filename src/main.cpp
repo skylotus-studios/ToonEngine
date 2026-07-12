@@ -428,6 +428,15 @@ int main() {
         e.material.roughness = 0.5f;
         spinners.push_back({i, {0.0f, 1.0f, 0.0f}});
     }
+    // Sun — a directional light entity (no mesh/model, so the draw loop's isMesh/isModel
+    // check skips it). Aimed by rotation (MakeLightTransform), reproducing the scene's old
+    // fixed light direction exactly, so the default render is unchanged.
+    {
+        const int i = toon::AddEntity(scene, 0, "Sun");
+        toon::Entity &e = scene.entities[i];
+        e.transform = toon::MakeLightTransform({0.0f, 4.0f, 0.0f}, {0.5f, 0.8f, -0.3f});
+        e.light = toon::LightComponent{};
+    }
 
     // Start with the cube selected so the Inspector is populated on launch.
     scene.selected = cubeIdx;
@@ -436,8 +445,6 @@ int main() {
     // origin, distance 10, a slight downward pitch so the ground + its AO show).
     toon::Camera camera;
     const toon::Camera cameraDefault = camera; // for the "Reset camera" button
-
-    toon::Vec3 lightDir{0.5f, 0.8f, -0.3f};
 
     // Style shared by every object each frame: band count + ambient floor (a global
     // shading look). Outline color/width are per-object (above), but this scales all of
@@ -520,7 +527,14 @@ int main() {
 
         // Scene first, so the debug UI overlays it.
         renderer.SetCamera(camera);
-        renderer.SetLight(lightDir);
+
+        // Light: driven by the scene's first light entity (aimed via its rotation), falling
+        // back to this fixed default if the scene has none (e.g. the user deleted "Sun").
+        toon::Vec3 lightDir{0.5f, 0.8f, -0.3f};
+        toon::Vec3 lightColor{1.0f, 1.0f, 1.0f};
+        float lightIntensity = 1.0f;
+        toon::GetActiveLight(scene, lightDir, lightColor, lightIntensity);
+        renderer.SetLight(lightDir, lightColor, lightIntensity);
 
         // Walk the scene, drawing every renderable entity with its hierarchy-composed world
         // matrix (+ last frame's, for motion vectors). The shared style overlays band count,
@@ -728,6 +742,16 @@ int main() {
                     ImGui::SliderFloat("Roughness", &e.material.roughness, 0.0f, 1.0f);
                 }
 
+                // Light — only for light entities. Direction isn't a field here: it comes
+                // from the entity's rotation (aim it with the gizmo, like Material's
+                // transform above).
+                if (e.light) {
+                    ImGui::SeparatorText("Light");
+                    ImGui::ColorEdit3("Color", &e.light->color.x);
+                    ImGui::DragFloat("Intensity", &e.light->intensity, 0.01f, 0.0f, 10.0f, "%.2f");
+                    ImGui::TextDisabled("Aim: rotate this entity (gizmo R).");
+                }
+
                 // Transform-gizmo controls (the gizmo itself draws over the scene, below).
                 if (e.transform && !isRoot) {
                     ImGui::SeparatorText("Gizmo");
@@ -796,9 +820,6 @@ int main() {
                 }
                 ImGui::EndCombo();
             }
-
-            ImGui::SeparatorText("Light");
-            ImGui::SliderFloat3("Direction", &lightDir.x, -1.0f, 1.0f);
 
             ImGui::SeparatorText("Style (all objects)");
             ImGui::SliderFloat("Bands", &style.bands, 1.0f, 8.0f, "%.0f");

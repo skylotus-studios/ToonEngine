@@ -99,7 +99,7 @@ namespace toon {
     static constexpr TEXTURE_FORMAT kSceneDepthFormat = TEX_FORMAT_D32_FLOAT;
 
     // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
-    // (five row-major float4x4 rows + four float4 rows = 384 bytes, 16-aligned).
+    // (five row-major float4x4 rows + five float4 rows = 400 bytes, 16-aligned).
     struct ShaderConstants {
         float4x4 worldViewProj;
         float4x4 world;
@@ -107,6 +107,7 @@ namespace toon {
         float4x4 prevWorldViewProj; // previous frame, for motion vectors
         float4x4 prevNormalMatrix;  // inverse-transpose of the PREVIOUS frame's world (outline motion)
         float4 lightDir;
+        float4 lightColor; // rgb = light color * intensity, premultiplied; w unused
         float4 baseColor;
         float4 outline; // rgb color, w = extrude width
         float4 params;  // x = bands, y = ambient, z = roughness
@@ -210,6 +211,7 @@ namespace toon {
         float nearZ = 0.1f;
         float farZ = 100.0f;
         float3 lightDir = float3(0.5f, 0.8f, -0.3f); // world-space dir TO light (shader normalizes)
+        float3 lightColor = float3(1.0f, 1.0f, 1.0f); // color * intensity, premultiplied
         PostParams post;
     };
 
@@ -1147,8 +1149,9 @@ namespace toon {
         m_impl->farZ = cam.farZ;
     }
 
-    void Renderer::SetLight(const Vec3 &directionToLight) {
+    void Renderer::SetLight(const Vec3 &directionToLight, const Vec3 &color, float intensity) {
         m_impl->lightDir = float3(directionToLight.x, directionToLight.y, directionToLight.z);
+        m_impl->lightColor = float3(color.x, color.y, color.z) * intensity;
     }
 
     // Object -> world (Diligent is row-major / row-vector: v * M). Rotation order X,Y,Z.
@@ -1211,6 +1214,7 @@ namespace toon {
 
         {
             const float3 &L = m_impl->lightDir;
+            const float3 &LC = m_impl->lightColor;
             MapHelper<ShaderConstants> cb(m_impl->context, m_impl->constants, MAP_WRITE, MAP_FLAG_DISCARD);
             cb->worldViewProj = wvp;
             cb->world = world;
@@ -1218,6 +1222,7 @@ namespace toon {
             cb->prevWorldViewProj = prevWvp;
             cb->prevNormalMatrix = prevNormalMat;
             cb->lightDir = float4(L.x, L.y, L.z, 0.0f);
+            cb->lightColor = float4(LC.x, LC.y, LC.z, 0.0f);
             cb->baseColor = float4(mat.baseColor.x, mat.baseColor.y, mat.baseColor.z, 1.0f);
             cb->outline = float4(mat.outlineColor.x, mat.outlineColor.y, mat.outlineColor.z, mat.outlineWidth);
             cb->params = float4(mat.bands, mat.ambient, mat.roughness, 0.0f);
@@ -1339,6 +1344,7 @@ namespace toon {
 
         ITextureView *whiteSRV = m_impl->modelWhite->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         const float3 &L = m_impl->lightDir;
+        const float3 &LC = m_impl->lightColor;
         const GLTF::Scene &scene = model.Scenes[sceneId];
 
         for (const GLTF::Node *node : scene.LinearNodes) {
@@ -1362,6 +1368,7 @@ namespace toon {
                     cb->prevWorldViewProj = prevWorld * m_impl->prevViewProj;
                     cb->prevNormalMatrix = prevNormalMat;
                     cb->lightDir = float4(L.x, L.y, L.z, 0.0f);
+                    cb->lightColor = float4(LC.x, LC.y, LC.z, 0.0f);
                     cb->baseColor = float4(bc.x * style.baseColor.x, bc.y * style.baseColor.y, bc.z * style.baseColor.z,
                                            bc.w); // glTF factor * app tint
                     cb->outline = float4(style.outlineColor.x, style.outlineColor.y, style.outlineColor.z,

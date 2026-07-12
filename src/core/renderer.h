@@ -187,7 +187,11 @@ namespace toon {
 
         // Per-frame scene state (set between BeginFrame and the DrawMesh calls).
         void SetCamera(const Camera &camera);
-        void SetLight(const Vec3 &directionToLight); // world-space direction TO the light
+
+        // Global scene light (single directional light). `color`/`intensity` are
+        // premultiplied together before upload — pass intensity > 1 to push it into HDR
+        // (bloom will pick it up).
+        void SetLight(const Vec3 &directionToLight, const Vec3 &color, float intensity);
 
         // Current view + projection (as of the last SetCamera), for the editor's transform gizmo
         // (ImGuizmo). Handed out as plain Mat4 so the app/gizmo stay Diligent-free.

@@ -216,6 +216,47 @@ void SetEntityWorldMatrix(Scene& scene, int idx, const Mat4& world) {
     DecomposeToTransform(ToFloat4x4(world) * parentW.Inverse(), *e.transform);
 }
 
+Transform MakeLightTransform(const Vec3& position, const Vec3& dirToLight) {
+    float3 fwd(dirToLight.x, dirToLight.y, dirToLight.z);
+    const float len = length(fwd);
+    fwd = len > 1e-8f ? fwd / len : float3(0.0f, 0.0f, 1.0f);
+
+    // Any up-reference not parallel to fwd works; fall back to +X when fwd is near-vertical.
+    const float3 upRef = (std::abs(fwd.y) > 0.999f) ? float3(1.0f, 0.0f, 0.0f) : float3(0.0f, 1.0f, 0.0f);
+    float3       right = cross(upRef, fwd);
+    const float  rlen  = length(right);
+    right = rlen > 1e-8f ? right / rlen : float3(1.0f, 0.0f, 0.0f);
+    const float3 up = cross(fwd, right);   // unit length: fwd, right already orthonormal
+
+    // Rows = world axes [right, up, forward] (row-vector convention, matches
+    // LocalFromTransform) — local +Z maps to world `fwd`, i.e. `dirToLight`.
+    float4x4 rot = float4x4::Identity();
+    rot[0][0] = right.x; rot[0][1] = right.y; rot[0][2] = right.z;
+    rot[1][0] = up.x;    rot[1][1] = up.y;    rot[1][2] = up.z;
+    rot[2][0] = fwd.x;   rot[2][1] = fwd.y;   rot[2][2] = fwd.z;
+
+    Transform out;
+    DecomposeToTransform(rot, out);   // extracts rotationEuler (position/scale overwritten below)
+    out.position = position;
+    out.scale    = {1.0f, 1.0f, 1.0f};
+    return out;
+}
+
+bool GetActiveLight(const Scene& scene, Vec3& dirToLight, Vec3& color, float& intensity) {
+    for (const Entity& e : scene.entities) {
+        if (!e.light) continue;
+        // Direction-to-light = world image of local +Z = row 2 of the world matrix (see
+        // MakeLightTransform for the matching convention). Mat4 is row-major (math.h).
+        const Vec3 fwd{ e.worldMatrix.m[8], e.worldMatrix.m[9], e.worldMatrix.m[10] };
+        if (Length(fwd) < 1e-8f) continue;   // degenerate (e.g. zero-scaled) -- keep looking
+        dirToLight = Normalize(fwd);
+        color      = e.light->color;
+        intensity  = e.light->intensity;
+        return true;
+    }
+    return false;
+}
+
 // --- Hierarchy mutations ----------------------------------------------------
 
 bool IsAncestorOrSelf(const Scene& scene, int idx, int maybeAncestor) {

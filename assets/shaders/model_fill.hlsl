@@ -53,7 +53,9 @@ PSOutput PSMain(ModelPSInput pin)
     float3 albedo = g_Albedo.Sample(g_Albedo_sampler, float3(pin.UV, 0.0)).rgb * g_BaseColor.rgb;
 
     PSOutput o;
-    o.Color  = float4(CelShade(albedo, N, g_LightDir.xyz, g_Params.x, g_Params.y), 1.0);
+    // g_LightColor tints/scales the whole ramp (including the ambient floor) by the light's
+    // color * intensity -- see toon_fill.hlsl.
+    o.Color  = float4(CelShade(albedo, N, g_LightDir.xyz, g_Params.x, g_Params.y) * g_LightColor.rgb, 1.0);
     o.Normal = float4(N, g_Params.z);   // world normal (SSAO) + roughness in w (SSR)
     o.Motion = ComputeMotion(pin.CurrClip, pin.PrevClip);
     return o;

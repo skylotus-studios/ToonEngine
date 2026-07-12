@@ -35,7 +35,8 @@ small spinning scene — a smooth **sphere** (non-uniformly scaled into an **ell
 exercising the inverse-transpose normal matrix), a faceted **cube**, a **torus**, and a
 loaded **glTF model** (`helmet.glb`), on a **ground plane**. Everything is a node in an
 **entity-tree scene graph** (`core/scene.h`) with hierarchy-composed world transforms — a
-small satellite is parented to the cube and orbits it. The procedural primitives are
+small satellite is parented to the cube and orbits it, and a directional **light entity**
+(aimed by rotating it) lights the scene. The procedural primitives are
 cel-shaded with a **banded diffuse fill + inverted-hull silhouette outline** in their own
 colors (base + a **per-object outline**); the model is cel-shaded with its **albedo
 texture** + an **inverted-hull outline** (via DiligentTools' glTF loader). The scene renders into an **HDR offscreen
@@ -45,9 +46,9 @@ optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bl
 then an **ACES tone-map pass** resolves to the back buffer. A docked **Dear ImGui editor**
 (Bai Jamjuree font, 3 selectable themes) drives it live: a **Scene Hierarchy** panel (select /
 add-child / duplicate / delete / drag-drop reparent), an **Inspector** for the selected entity
-(name, transform, material, **ImGuizmo** move/rotate/scale gizmo with **W/E/R/X hotkeys +
-snapping**), and a **Debug** panel (theme,
-light, band count, global style, and every post effect). An
+(name, transform, material or light color/intensity, **ImGuizmo** move/rotate/scale gizmo
+with **W/E/R/X hotkeys + snapping**), and a **Debug** panel (theme, band count, global
+style, and every post effect). An
 **editor camera** navigates the scene — right-drag orbit (+ WASD/QE fly), middle-drag pan,
 scroll zoom, F focus — with input suppressed while using the UI. HLSL shaders cross-compile to
 SPIR-V at runtime.
@@ -169,7 +170,7 @@ arc is the **engine/editor layer** — largely porting `ToonEngineOld`'s proven 
 
 **A. Editor**
 
-1. **Follow-ups:** light/sprite/animation entity components.
+1. **Follow-ups:** sprite/animation entity components.
 2. **Scene serialization** — save/load scenes to disk.
 
 **B. Environment & fidelity**

@@ -786,7 +786,8 @@ camera matrices as `Mat4`.
   decomposing, and **`ReparentEntity`/`MoveEntityAsSibling` now preserve world** the same way
   (the object no longer jumps on reparent).
 
-**Still deferred:** light / sprite / animation entity components.
+**Still deferred:** sprite / animation entity components (the light entity shipped — see
+"Light entity component" below).
 
 **Gizmo snap + hotkeys.** MEMORY.md previously deferred hotkeys here because "WASD is taken by
 the camera fly" — but that fly only runs *while right-mouse is held* (`main.cpp`'s camera
@@ -869,6 +870,50 @@ input desktop, so synthetic keyboard/mouse (`SendInput`) reaches no window at al
 written up in `.claude/skills/verify/SKILL.md`. Both fixes above were made from a precise
 code trace (confirmed correct on read, both root-caused to an exact line), then confirmed
 working by the user after a manual test.
+
+**Light entity component (roadmap A.1).** Promoted the single global light (a
+`toon::Vec3 lightDir` plus a Debug-panel `SliderFloat3("Direction")`) to a first-class scene
+entity, the same move already made for per-object outlines (see "Per-object outline tuning"
+above). A new `Sun` entity carries a `LightComponent{color, intensity}`, aimed by its
+**rotation**: local +Z in world space is the direction light rays travel (Unity/Godot-style),
+so the existing gizmo (Rotate) re-aims it with no new input plumbing. `scene.cpp` gained
+`MakeLightTransform(position, dirToLight)`, which builds an orthonormal basis from
+`dirToLight` (a cross-product pair, guarded for a near-vertical direction) and reuses the
+existing `DecomposeToTransform` to extract Euler angles, so the light shares the exact
+rotation convention every other entity uses. `GetActiveLight(scene, ...)` is the inverse: it
+finds the first light entity and reads its direction back out as row 2 of its world matrix.
+`main.cpp`'s scripted scene seeds `Sun` with `MakeLightTransform({0,4,0}, {0.5,0.8,-0.3})`,
+the exact old default direction, so the default render is unchanged.
+
+Color and intensity needed a real shader change; direction alone didn't. `SetLight` gained
+`color`/`intensity` params, premultiplied into one `float3`. The shared cbuffer
+(`toon_common.hlsli` / `ShaderConstants`) grew 384 → 400 bytes with a new `g_LightColor`
+field (five `float4x4` rows plus five `float4` rows now, was four).
+`toon_fill.hlsl`/`model_fill.hlsl` multiply their `CelShade` result by `g_LightColor.rgb`.
+This is deliberately simple: it tints the ambient/shadow floor along with the lit side, with
+no separate ambient color, consistent with the renderer's stylized shading elsewhere.
+
+**Scope, deliberately: single light only.** The cel shader does one `N·L`; `GetActiveLight`
+returns the first light entity found and ignores the rest (silent no-ops). True multi-light
+needs a different shading model, a light array or loop, left for later. There is no "Add
+Light" hierarchy affordance yet either, since nothing distinguishes it from `Add Child` until
+multi-light makes "which light" a meaningful question. Sprite and animation entity
+components are still not started; both are deferred to roadmap phase C, where their
+rendering paths (2D/sprites, skeletal animation) actually land. Building the entity-side
+scaffolding now, with nothing to render, would be exactly the speculative, half-finished work
+CLAUDE.md's guiding principles warn against.
+
+Verified: a clean build (a cbuffer size or field mismatch fails loudly and immediately, so a
+clean PSO-creation log is real evidence the C++/HLSL layouts agree), then launch +
+`PrintWindow` screenshots (see "Verifying a Vulkan build" below; no live input desktop here).
+The default scene rendered identically to before (regression check) with `Sun` listed in the
+Scene Hierarchy. A temporary spot-check, reverted after, forced `Sun` selected with a strong
+blue color at intensity 2: the entire rendered scene visibly tinted blue, proving
+`g_LightColor` flows through the cbuffer and shader multiply rather than being a UI-only
+change. The Inspector showed exactly Name, Transform, and Light (no Material, correctly
+gated on mesh/model presence), with the Color swatch and Intensity matching the injected
+values and a genuinely non-trivial decomposed rotation. Console log clean, only the
+pre-existing benign warnings already noted throughout this file.
 
 ## Verifying a Vulkan build
 
@@ -1309,3 +1354,13 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   script. General lesson (folded into the `tidy-md` skill): a doc referencing a missing file
   is stale in one of *two* directions — the file may need restoring, or the doc may need to
   stop claiming it exists — check which before acting, don't assume the first.
+- **2026-07-11** — **Light entity component** (the light piece of roadmap A.1's
+  "light/sprite/animation entity components"): promoted the global `lightDir` + Debug-panel
+  slider to a `Sun` scene entity, aimed by rotation via a new `MakeLightTransform`/
+  `GetActiveLight` pair in `scene.cpp`, with editable color/intensity (`LightComponent`)
+  premultiplied into a new `g_LightColor` cbuffer field (384→400 B) that the two fill
+  shaders multiply in. Reproduces the old default direction and look exactly; single-light
+  scope (first entity found) by design. Sprite/animation entity components remain, deferred
+  to roadmap phase C. Verified via build + screenshot: a regression check, a blue-tinted
+  spot-check proving the shader path actually runs, and a clean console log. See "Light
+  entity component" above.

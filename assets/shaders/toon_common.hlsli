@@ -23,6 +23,7 @@ cbuffer Constants
                                             // extrude direction itself is rotation-dependent.
 
     float4 g_LightDir;   // xyz: normalized direction TO the light;  w unused
+    float4 g_LightColor; // rgb: light color * intensity, premultiplied; w unused
     float4 g_BaseColor;  // rgb: material albedo;                    w unused
     float4 g_Outline;    // rgb: outline color;                      w: object-space extrude width
     float4 g_Params;     // x: shading bands; y: ambient floor; z: roughness (SSR); w unused

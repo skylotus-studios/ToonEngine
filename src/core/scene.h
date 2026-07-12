@@ -16,10 +16,19 @@
 
 namespace toon {
 
+// A directional light carried by an entity. Aimed by the entity's ROTATION (its local +Z
+// axis in world space is the direction light rays travel — Unity/Godot-style; rotate the
+// entity, e.g. with the gizmo, to re-aim it). See MakeLightTransform / GetActiveLight.
+struct LightComponent {
+    Vec3  color     = {1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+};
+
 // One node in the scene. It renders either a procedural primitive (`mesh` set) or a loaded
 // glTF model (`model` set); `material` is the primitive's material, or the model's
 // style/tint. `transform == nullopt` marks a pure grouping/anchor node (the root) that
-// simply passes its parent's world matrix through.
+// simply passes its parent's world matrix through. A renderable and a light are mutually
+// exclusive in practice (nothing draws a light), but nothing enforces that here.
 struct Entity {
     std::string name;
     int         parent = 0;                 // parent index; -1 marks the root (index 0 only)
@@ -31,6 +40,8 @@ struct Entity {
     MeshHandle  mesh     = MeshHandle::Invalid;   // a procedural primitive, or...
     ModelHandle model    = ModelHandle::Invalid;  // ...a loaded glTF model
     Material    material;                          // primitive material / model tint + style
+
+    std::optional<LightComponent> light;    // set -> this entity is a (directional) light
 };
 
 // A scene is a flat vector with parents ALWAYS before their children, so a single forward
@@ -57,6 +68,17 @@ void UpdateWorldTransforms(Scene& scene);
 // folds out the parent's world and decomposes to the local TRS the renderer recomposes. No-op
 // on a transform-less anchor. Call between UpdateWorldTransforms passes (uses cached worlds).
 void SetEntityWorldMatrix(Scene& scene, int idx, const Mat4& world);
+
+// Build a Transform whose rotation aims local +Z at `dirToLight` (Unity/Godot-style light
+// aiming) and whose position is `position`; scale is identity. Used to seed the scripted
+// default light. Call UpdateWorldTransforms afterward for it to take effect.
+Transform MakeLightTransform(const Vec3& position, const Vec3& dirToLight);
+
+// Find the first entity carrying a LightComponent and report its world-space direction TO
+// the light (local +Z of its world matrix, see MakeLightTransform) plus color/intensity.
+// Leaves the out-params untouched and returns false if the scene has no light entity.
+// Uses cached world matrices (call after UpdateWorldTransforms).
+bool GetActiveLight(const Scene& scene, Vec3& dirToLight, Vec3& color, float& intensity);
 
 // --- Hierarchy mutations (editor operations; defined in scene.cpp) ----------
 // All keep the parents-before-children invariant (re-ordering as needed) and fix up

@@ -28,9 +28,9 @@ panels](docs/screenshots/editor-overview.png)
   relationships, and world-preserving reparenting, so dragging an object under a new parent
   doesn't move it in world space.
 - Editor UI built from scratch on Dear ImGui: a docked layout with 3 selectable themes, a
-  scene hierarchy with drag-drop reparenting, an inspector with live material and transform
-  editing, and ImGuizmo move/rotate/scale gizmos with Unity-style hotkeys (W/E/R/X) and
-  snapping.
+  scene hierarchy with drag-drop reparenting, an inspector with live material, transform,
+  and light editing, and ImGuizmo move/rotate/scale gizmos with Unity-style hotkeys
+  (W/E/R/X) and snapping.
 - glTF model loading via Diligent's own asset loader, textured and cel-shaded with the same
   inverted-hull outline technique as the procedural geometry.
 - Editor camera: orbit, pan, zoom, and WASD/QE fly, with input capture suppressed correctly
