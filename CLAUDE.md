@@ -104,7 +104,7 @@ assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + mod
 assets/models/            glTF/GLB/FBX test models (helmet/fox/dragon) — Git LFS
 assets/fonts/             UI fonts (BaiJamjuree, OpenSans) for the editor overlay
 assets/scenes/            Saved .scene text files (core/serializer.h); created on first Save
-external/                 Git submodules (see .gitmodules): DiligentCore/Tools/FX, glfw, ImGuizmo
+external/                 Git submodules (see .gitmodules): DiligentCore/Tools/FX, glfw, ImGuizmo, imgui
 CMakeLists.txt            add_subdirectory the submodules; disables unused Diligent backends
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
 .clangd                   Points clangd at build/windows-debug's compile_commands.json
@@ -186,8 +186,7 @@ See MEMORY.md → *ToonEngineOld carry-over* for the survey + per-system porting
 3. **Instancing** (deferred — a per-instance draw path for many-object scenes).
 
 **Infra / cross-cutting** (unscheduled): Linux (Vulkan) then macOS (MoltenVK, needs the
-GLFW Cocoa `NSView` `.mm` helper); durable docking fix (fork DiligentTools, pin imgui to a
-`docking` commit — see MEMORY.md → *Docking*); re-enable D3D11 for older Windows devices;
+GLFW Cocoa `NSView` `.mm` helper); re-enable D3D11 for older Windows devices;
 **fixed-timestep** sim loop (`main.cpp` runs a plain variable `dt` today); **shader
 hot-reload** via Diligent's `IRenderStateCache` (`EnableHotReload` + `Reload()`, already
 reachable through the linked `Diligent-GraphicsTools`), not a hand-rolled file-watcher.

@@ -37,6 +37,14 @@ set(DILIGENT_NO_OPENGL     ON CACHE BOOL "" FORCE)
 # asset managers). We don't use GI, so disable it — same rationale as the backends.
 set(DILIGENT_NO_RADIENT    ON CACHE BOOL "" FORCE)
 
+# Dear ImGui: build against ToonEngine's own imgui submodule (external/imgui, pinned
+# to the docking branch) instead of DiligentTools' vendored non-docking imgui.
+# DiligentTools' ThirdParty/CMakeLists.txt only sets this if we haven't, so this wins;
+# Diligent-Imgui then defines IMGUI_HAS_DOCK and the editor dock space (main.cpp)
+# activates. Durable across clone/submodule-update — see MEMORY.md -> Docking.
+set(DILIGENT_DEAR_IMGUI_PATH "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui"
+    CACHE PATH "Dear ImGui source dir (docking branch)" FORCE)
+
 # Tools adds Dear ImGui (debug/editor UI) + texture/glTF loaders. FX adds the
 # post-processing effects (bloom, tone mapping, SSAO, ...) — see the toon HDR
 # post chain in core/renderer.cpp.
@@ -54,8 +62,8 @@ add_subdirectory(external/glfw)
 # imgui_impl_glfw.cpp is Dear ImGui's GLFW platform backend. DiligentTools'
 # Imgui module only auto-compiles the Win32/Linux/macOS-native/SDL backends
 # (it doesn't know we use GLFW), so we compile this one file ourselves.
-# DILIGENT_DEAR_IMGUI_PATH is set by DiligentTools' ThirdParty/CMakeLists.txt
-# above to point at the vendored imgui submodule.
+# DILIGENT_DEAR_IMGUI_PATH is set above to ToonEngine's own imgui submodule
+# (external/imgui, docking branch), not DiligentTools' vendored one.
 add_executable(ToonEngine
     src/main.cpp
     src/core/renderer.cpp

@@ -83,7 +83,7 @@ live in this environment**. Fall back to, in order of strength:
 
 1. **Clean build** (`cmake --build`, exit 0) — table stakes, not sufficient alone.
 2. **API-signature verification against the vendored headers**, not memory/training data.
-   For ImGui: `external/DiligentTools/ThirdParty/imgui/imgui.h`. For ImGuizmo:
+   For ImGui: `external/imgui/imgui.h`. For ImGuizmo:
    `external/ImGuizmo/src/ImGuizmo.h`. Grep the exact signatures the diff calls
    (`IsKeyPressed`, `Manipulate`'s parameter order, struct fields like `io.KeyCtrl`) and
    confirm every call matches — this is real evidence the code compiles *and* means what

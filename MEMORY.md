@@ -202,29 +202,42 @@ showed the real icon, not the generic fallback.
   Don't reach for the demo window to smoke-test ImGui — write a tiny custom
   window instead (that's what `main.cpp` does).
 
-### Docking (roadmap #5) — needs the imgui `docking` branch (not the fork's)
+### Docking — own `external/imgui` submodule, overriding DiligentTools' vendored one
 
 Docking (`ImGuiConfigFlags_DockingEnable`, `DockSpaceOverViewport`, DockBuilder)
-lives on imgui's separate `docking` branch. Two traps enabling it here:
+lives on imgui's separate `docking` branch. DiligentTools vendors its own imgui
+as a nested submodule (`ThirdParty/imgui`, pinned to the DiligentGraphics fork's
+`diligent_v1.92.1` tag) — non-docking. Its own **`docking` branch is ancient**: a
+pre-1.80 imgui (backends still under `examples/`, wrong API), incompatible with
+DiligentTools' modern (1.92.1) `Diligent-Imgui` integration. Its `backends/` dir
+doesn't even exist, so the build fails on `imgui_impl_glfw.cpp`. Don't use it.
 
-- **The vendored DiligentGraphics imgui fork's `docking` branch is ancient** — a
-  pre-1.80 imgui (backends still under `examples/`, wrong API), incompatible with
-  DiligentTools' modern (1.92.1) `Diligent-Imgui` integration. Its `backends/`
-  dir doesn't even exist, so the build fails on `imgui_impl_glfw.cpp`. Don't use it.
-- **Fix: point `ThirdParty/imgui` at UPSTREAM ocornut/imgui's `docking` tip**
-  (1.92.9-WIP when this was done). Same 1.92 minor as DiligentTools' pinned
-  1.92.1, modern `backends/` layout — `Diligent-Imgui` compiles against it clean:
-  ```
-  cd external/DiligentTools/ThirdParty/imgui
-  git remote add upstream https://github.com/ocornut/imgui    # once
-  git fetch --depth 1 upstream docking
-  git checkout FETCH_HEAD          # was a23e9fb1 (1.92.9-WIP)
-  ```
-- **It's a LOCAL nested-submodule checkout, committed nowhere.** ToonEngine shows
-  `m external/DiligentTools` (dirty submodule); DiligentTools shows
-  `M ThirdParty/imgui`. **`git submodule update --recursive` reverts it** → imgui
-  goes back to the fork's master (no docking). Re-run the checkout to restore it.
-  A durable fix would fork DiligentTools and pin imgui to a docking commit — deferred.
+**Durable fix: vendor our own docking-branch imgui and override the path,
+rather than touch DiligentTools at all.** `DiligentTools/ThirdParty/CMakeLists.txt`
+only defaults `DILIGENT_DEAR_IMGUI_PATH` `if (NOT DILIGENT_DEAR_IMGUI_PATH)` — a
+supported override hook. So:
+
+- ToonEngine has its own top-level `external/imgui` submodule, `branch = docking`,
+  pinned to upstream **ocornut/imgui**'s docking tip `a23e9fb1b` (1.92.9-WIP) —
+  same 1.92 minor as DiligentTools' pinned 1.92.1, modern `backends/` layout,
+  `Diligent-Imgui` compiles against it clean.
+- `CMakeLists.txt` sets `DILIGENT_DEAR_IMGUI_PATH` to `external/imgui` (`CACHE
+  PATH ... FORCE`, grouped with the other Diligent cache vars) *before*
+  `add_subdirectory(external/DiligentTools)`, so DiligentTools' own default never
+  applies. DiligentTools is never forked or patched — it builds from its pristine
+  upstream state; its own vendored `ThirdParty/imgui` submodule is initialized but
+  unused.
+- **Fully durable, verified end-to-end:** a plain `git submodule update --init
+  --recursive` (the exact command that used to silently revert the old manual
+  checkout back to non-docking) now leaves `external/imgui` pinned at `a23e9fb1b`
+  and `external/DiligentTools` clean — no more `m external/DiligentTools`
+  dirtiness, no manual steps on a fresh clone. Chosen over forking DiligentTools
+  itself specifically to avoid rebasing a fork every time DiligentTools is bumped
+  (it moves often — was at `API256018-28-ge637cfc` when this landed).
+- Superseded the original 2026-07-09 approach (manually checking out
+  DiligentTools' *nested* `ThirdParty/imgui` submodule to the same upstream
+  commit, uncommitted, reverted by any `submodule update --recursive`) — see that
+  changelog entry.
 - **Build stays green either way:** the docking code in `main.cpp` is guarded on
   `#ifdef IMGUI_HAS_DOCK` (imgui defines it only on the docking branch). With a
   non-docking imgui the debug window simply floats instead of docking.
@@ -1216,8 +1229,9 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   panel docked left by default, driven from `main.cpp` and guarded on
   `IMGUI_HAS_DOCK`. Required checking out the nested imgui submodule to upstream
   ocornut/imgui's `docking` branch — the DiligentGraphics fork's docking branch
-  is ancient/incompatible. See "Docking" above for the checkout + the
-  `git submodule update` reversion caveat.
+  is ancient/incompatible. That checkout was manual and uncommitted (reverted by
+  any `git submodule update --recursive`) — superseded 2026-07-12 by a dedicated
+  `external/imgui` submodule; see "Docking" above for the current mechanism.
 - **2026-07-09** — DiligentFX (roadmap #6, in progress): added the submodule
   (API256018) + build wiring, and stood up the HDR pipeline — offscreen RGBA16F
   scene target resolved to the back buffer by an exposure + ACES tone-map pass
@@ -1584,3 +1598,21 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   `target_sources`, all `WIN32`-guarded). Verified by screenshot: captured the taskbar
   itself (`Shell_TrayWnd`, via ordinary `CopyFromScreen` since it isn't a Vulkan swap-chain
   surface) and confirmed the real icon renders there now.
+- **2026-07-12** — **Durable docking fix** (closes the item CLAUDE.md's roadmap listed as
+  "fork DiligentTools, pin imgui to a `docking` commit" — see "Docking" above for the
+  mechanism actually shipped, which is lighter than that). Added ToonEngine's own
+  `external/imgui` submodule (`branch = docking`, pinned to the same upstream ocornut/imgui
+  commit — `a23e9fb1b`, 1.92.9-WIP — the manual checkout used) and pointed
+  `DILIGENT_DEAR_IMGUI_PATH` at it in `CMakeLists.txt`, before
+  `add_subdirectory(external/DiligentTools)`. DiligentTools itself is untouched, not
+  forked: its `ThirdParty/CMakeLists.txt` only defaults that path `if (NOT
+  DILIGENT_DEAR_IMGUI_PATH)`, so the override wins and DiligentTools builds from its
+  pristine upstream state (its own vendored `ThirdParty/imgui` is initialized but unused).
+  Chosen over forking DiligentTools to avoid rebasing a fork every time DiligentTools is
+  bumped. Verified end-to-end: a fresh `cmake --preset windows-debug` +
+  `cmake --build --preset windows-debug` built clean (680 steps — the first CLI build under
+  this preset dir), a launch + `PrintWindow` screenshot showed the real DockBuilder split
+  layout (Scene Hierarchy left, Inspector + Debug right, scene visible through the
+  pass-through center — not floating windows), and re-running `git submodule update --init
+  --recursive` afterward left `external/imgui` pinned and `external/DiligentTools` clean —
+  the exact command that used to silently revert docking now leaves it intact.
