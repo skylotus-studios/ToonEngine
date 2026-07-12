@@ -35,6 +35,11 @@ namespace toon {
         float r = 0.0f, g = 0.0f, b = 0.0f, a = 1.0f;
     };
 
+    // Sets the OS window/taskbar icon from an image file (PNG/TGA/etc, decoded via
+    // DiligentTools — no GPU device needed). Returns false on failure (details go to
+    // stderr). Call any time after the window is created.
+    bool SetWindowIcon(GLFWwindow *window, const char *path);
+
     // --- Scene vocabulary -------------------------------------------------------
     // Plain, backend-agnostic types the engine speaks in. The renderer converts
     // them to Diligent math/resources behind the seam.

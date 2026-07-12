@@ -48,6 +48,10 @@
 // PBR renderer needed (we cel-shade with our own PSO).
 #include "GLTFLoader.hpp"
 
+// DiligentTools' CPU-side image decoder (PNG/JPEG/TGA/...) — used to load the window
+// icon. No GPU device involved, so this needs no Renderer::Impl state.
+#include "Image.h"
+
 // Dear ImGui + Diligent's ImGui renderer backend (DiligentTools). The GLFW
 // platform backend (imgui_impl_glfw.cpp) is compiled directly into ToonEngine
 // by CMakeLists.txt, since DiligentTools doesn't ship a GLFW backend itself.
@@ -87,6 +91,67 @@ namespace Diligent {
 } // namespace Diligent
 
 namespace toon {
+
+    // Sets the OS window/taskbar icon from an image file, via DiligentTools' CPU-side
+    // decoder (Image.h — no GPU device needed). GLFW wants tightly-packed 8-bit RGBA
+    // rows; the decoder's RowStride may be padded and NumComponents may be less than 4
+    // (grayscale/RGB/etc.), so this expands each source pixel into the RGBA buffer GLFW
+    // copies internally (glfwSetWindowIcon doesn't retain `pixels` after it returns).
+    bool SetWindowIcon(GLFWwindow *window, const char *path) {
+        if (!window || !path) { return false; }
+
+        RefCntAutoPtr<Image> image;
+        const IMAGE_FILE_FORMAT format = CreateImageFromFile(path, &image);
+        if (format == IMAGE_FILE_FORMAT_UNKNOWN || !image) {
+            std::fprintf(stderr, "Renderer: failed to load window icon '%s'\n", path);
+            return false;
+        }
+
+        const ImageDesc &desc = image->GetDesc();
+        if (desc.ComponentType != VT_UINT8 || desc.NumComponents == 0 || desc.NumComponents > 4) {
+            std::fprintf(stderr, "Renderer: window icon '%s' has an unsupported pixel format\n", path);
+            return false;
+        }
+
+        const auto *src = image->GetData()->GetConstDataPtr<uint8_t>();
+        std::vector<uint8_t> rgba(static_cast<size_t>(desc.Width) * desc.Height * 4);
+        for (Uint32 y = 0; y < desc.Height; ++y) {
+            const uint8_t *row = src + static_cast<size_t>(y) * desc.RowStride;
+            for (Uint32 x = 0; x < desc.Width; ++x) {
+                const uint8_t *px = row + static_cast<size_t>(x) * desc.NumComponents;
+                uint8_t *dst = &rgba[(static_cast<size_t>(y) * desc.Width + x) * 4];
+                switch (desc.NumComponents) {
+                    case 1: // grayscale
+                        dst[0] = dst[1] = dst[2] = px[0];
+                        dst[3] = 255;
+                        break;
+                    case 2: // grayscale + alpha
+                        dst[0] = dst[1] = dst[2] = px[0];
+                        dst[3] = px[1];
+                        break;
+                    case 3: // RGB
+                        dst[0] = px[0];
+                        dst[1] = px[1];
+                        dst[2] = px[2];
+                        dst[3] = 255;
+                        break;
+                    default: // RGBA
+                        dst[0] = px[0];
+                        dst[1] = px[1];
+                        dst[2] = px[2];
+                        dst[3] = px[3];
+                        break;
+                }
+            }
+        }
+
+        GLFWimage icon;
+        icon.width = static_cast<int>(desc.Width);
+        icon.height = static_cast<int>(desc.Height);
+        icon.pixels = rgba.data();
+        glfwSetWindowIcon(window, 1, &icon);
+        return true;
+    }
 
     // --- Internal formats, GPU-mirror types & PIMPL state -----------------------
 

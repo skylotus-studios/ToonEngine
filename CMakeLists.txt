@@ -105,6 +105,7 @@ target_compile_definitions(ToonEngine PRIVATE
     TOON_SHADERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders"
     TOON_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
     TOON_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
+    TOON_ICON_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png"
     TOON_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes")
 
 # Convenience function from DiligentCore: copies the engine shared libraries

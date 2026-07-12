@@ -304,6 +304,7 @@ int main() {
         glfwTerminate();
         return 1;
     }
+    toon::SetWindowIcon(window, TOON_ICON_PATH);
 
     toon::Renderer renderer;
     if (!renderer.Init(window)) {
