@@ -1451,23 +1451,22 @@ DiligentSamples is **not** a submodule here) plus Diligent's own docs/blog.
 `ToonEngineOld`'s own `CLAUDE.md` has no salvage value beyond this file — it's a subset of
 the carry-over map above, and its two TODO lists (engine roadmap + ImGui) were already
 audited and dispositioned line-by-line in the entry above. What isn't fully captured
-anywhere else yet is the GL-specific-vs-portable split inside the source of the four
-un-shipped roadmap systems (grid+sky, CSM, sprites, skeletal animation). Recorded here so
-the folder can be deleted once those land without losing anything:
+anywhere else yet is the GL-specific-vs-portable split inside the source of the remaining
+un-shipped roadmap systems (grid+sky, sprites, skeletal animation). Recorded here so the
+folder can be deleted once those land without losing anything:
 
-- **CSM depth convention.** `ToonEngineOld`'s cascades are built with `glm::perspective` /
-  `glm::ortho`, which emit GL's `[-1,1]` NDC-Z convention; Diligent's is `[0,1]` and
-  left-handed (see "Matrix convention" above). The cascade split math, the per-cascade
-  light-space ortho bounds, and the shadow-space `z*0.5+0.5` remap all assume `[-1,1]` and
-  must be rederived, not transliterated. Everything else about the scheme ports directly:
-  4 cascades, 2048×2048 each, a practical (log-linear blend, `lambda = 0.5`) split, light
-  frustum built from the 8 unprojected NDC corners of each sub-frustum, far extended +20 to
-  catch casters standing outside the view frustum, and front-face culling on the shadow
-  pass to reduce peter-panning.
-- **Shadow sampling.** The old shader uses `sampler2DArrayShadow` with hardware PCF; the
-  Diligent equivalent is a comparison sampler + `SampleCmp`. The 3×3 PCF loop and the
-  per-cascade bias (`bias * (1 + layer)`, deeper cascades get more bias) port as-is — only
-  the sampler object and intrinsic name change.
+- **Cascaded shadow maps shipped via a different path than this file originally
+  anticipated.** CSM landed the same day this section was written, built directly on
+  **Diligent's own `ShadowMapManager`** component (`external/DiligentFX/Components`) rather
+  than porting `ToonEngineOld`'s GL/glm cascade math — `ShadowMapManager` owns cascade
+  distribution and light-space matrix construction internally, so the GL `[-1,1]`-NDC-Z vs.
+  Diligent `[0,1]`-left-handed conversion problem this entry used to warn about never came
+  up; the guiding principle (build *on* Diligent, don't reinvent it) working as intended.
+  `ToonEngineOld`'s `shadow.vert`/`shadow.frag` and the `ComputeCascades`/`RenderShadowPass`
+  C++ in its `main.cpp` are no longer a required port source — kept only as a historical
+  note on the log-linear split scheme and PCF approach they used (4 cascades × 2048² either
+  way). See "Renderer seam" / the rendering pipeline in `docs/architecture.md` for how the
+  shipped version actually works.
 - **Grid pass.** `grid.frag` reconstructs a world-space ray from the inverse view-proj,
   intersects it with the Y=0 plane, and draws two line scales (minor + major every 5th
   line) via `abs(fract(coord - 0.5) - 0.5) / fwidth(coord)`, with distance fade. It writes
@@ -1494,10 +1493,10 @@ the folder can be deleted once those land without losing anything:
   itself — but the **ufbx FBX path has no current-engine equivalent at all** (DiligentTools
   is glTF-only), so it's the only reference if FBX/skeleton import is ever wanted; only
   `dragon.fbx` needs it, `dragon.gltf` already loads through the normal path.
-- **Deletion trigger.** Once grid+sky, CSM, skeletal animation, and sprites have all shipped
+- **Deletion trigger.** Once grid+sky, skeletal animation, and sprites have all shipped
   (roadmap M3), `ToonEngineOld/` can be deleted wholesale — its CLAUDE.md and every
   already-ported subsystem (scene, camera, input, serializer, file browser/thumbnails/themes,
-  glTF loading) carry zero further value once that happens.
+  glTF loading, cascaded shadow maps) carry zero further value once that happens.
 
 ## Architecture decisions
 
@@ -2019,7 +2018,8 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   docs/architecture.md added.** Audited `ToonEngineOld` in full against this file's own
   carry-over map: its `CLAUDE.md` had zero salvage value left (a subset of the carry-over
   survey, its TODO lists already dispositioned on 2026-07-11), so the folder stays only for
-  the un-shipped systems' source (grid/sky, CSM, sprites, skeletal animation) — see "Port
+  the un-shipped systems' source (grid/sky, sprites, skeletal animation — cascaded shadow
+  maps turned out to already be shipped, see the entry right below this one) — see "Port
   gotchas for the un-shipped systems" above for what was captured before a later deletion.
   Reworked `CLAUDE.md`'s roadmap: it was rendering-fidelity-and-infra-only and didn't answer
   "what's needed to build a game," so it's now milestone-based and dependency-sequenced
@@ -2149,6 +2149,7 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   count, a real cost at scale); no cascade-boundary debug visualization
   (`GetCascadeColor` exists in `Shadows.fxh` if this is ever needed); bias/`fFilterWorldSize`
   (currently a single hand-picked `0.02`) untested against grazing-angle acne or peter-panning
-  beyond what the front-face-culled shadow pass already mitigates structurally. `docs/
-  architecture.md`'s rendering-pipeline section predates this and doesn't mention the shadow
-  pre-pass yet — worth a `/tidy-md` pass.
+  beyond what the front-face-culled shadow pass already mitigates structurally.
+  `docs/architecture.md` (added the same day, after this shipped) already documents the
+  shadow pre-pass in full — see its "Shadow map creation runs first" and "The shadow
+  pre-pass" sections.

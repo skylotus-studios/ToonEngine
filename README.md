@@ -21,6 +21,9 @@ panels](docs/screenshots/editor-overview.png)
 - Custom toon/cel-shading pipeline: banded diffuse lighting plus inverted-hull silhouette
   outlines, with per-object base and outline color and width, applied the same way to
   procedural primitives and textured glTF models.
+- Cascaded shadow maps (4 cascades, PCF-filtered) via Diligent's own `ShadowMapManager`,
+  feeding directly into the cel-shading ramp — a shadowed pixel lands on a darker rung of the
+  same toon band ladder, not a separate flat overlay.
 - Full HDR post-processing stack via DiligentFX's `PostFXContext`: temporal-denoised SSAO,
   TAA, depth of field, screen-space reflections, bloom, and an ACES filmic tone map, every
   parameter live-tunable from the editor.
@@ -70,7 +73,8 @@ application layer (`main.cpp`) never includes a Diligent header; it calls `Init`
 `BeginFrame` / `DrawMesh` / `EndScene` / `EndFrame`. A backend swap or a console port means
 writing another `renderer_*.cpp`, not a rewrite.
 
-See [CLAUDE.md](CLAUDE.md) for the full architecture writeup and [MEMORY.md](MEMORY.md) for
+See [docs/architecture.md](docs/architecture.md) for the full architecture writeup,
+[CLAUDE.md](CLAUDE.md) for guiding principles and conventions, and [MEMORY.md](MEMORY.md) for
 the detailed history and reasoning behind the non-obvious decisions.
 
 ## Building

@@ -1,14 +1,15 @@
 ---
 name: tidy-md
-description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/**) accurate and current. Prunes CLAUDE.md's roadmap into MEMORY.md as items ship (hard 200-line cap), and keeps README.md a portfolio-quality feature showcase. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships.
+description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/**) accurate and current. Prunes CLAUDE.md's roadmap into MEMORY.md as items ship (hard 200-line cap), keeps README.md a portfolio-quality feature showcase, and keeps docs/architecture.md in sync with the actual seam/pipeline/system boundaries. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships.
 ---
 
 # tidy-md — keep ToonEngine's markdown docs accurate, current, and right-sized
 
-Three different documents have three different jobs. `CLAUDE.md` is a lean, always-loaded
-map. `MEMORY.md` is the unlimited detailed archive. `README.md` is the public-facing pitch.
-Don't give them all the same treatment. `docs/**` are narrower reference docs; touch them
-only when they're actually wrong.
+Four documents have four different jobs. `CLAUDE.md` is a lean, always-loaded map.
+`MEMORY.md` is the unlimited detailed archive. `README.md` is the public-facing pitch.
+`docs/architecture.md` is the deep design reference, actively maintained alongside the other
+three (see its own section below). Don't give them all the same treatment. The rest of
+`docs/**` are narrower reference docs; touch those only when they're actually wrong.
 
 ## The "locked" marker: skip a file entirely
 
@@ -86,9 +87,39 @@ under `docs/screenshots/`.
 Keep the Building section in sync with CLAUDE.md's Build section (same commands). If you
 update one, check the other.
 
+## docs/architecture.md: the deep design reference, actively maintained
+
+Unlike the rest of `docs/**` (below), `architecture.md` is a first-class maintained target,
+closer to `CLAUDE.md`/`README.md` than to a narrow setup guide. It's the deep
+how-it-fits-together reference: the renderer seam, source layout, the frame loop, the
+rendering pipeline, the scene model, data flow and ownership, and build/dependencies. The
+canonical split across the docs, so nothing duplicates:
+
+- `docs/architecture.md` — the deep design reference (this file).
+- `CLAUDE.md` — the lean, always-loaded map: guiding principles, conventions, the roadmap.
+- `README.md`'s `## Architecture` section — a short summary for a reader landing on the repo
+  cold, pointing to `docs/architecture.md` for the full writeup.
+- `MEMORY.md` — history, reasoning, and gotchas behind individual decisions.
+
+Update `architecture.md` in the same pass whenever the thing it describes actually changes:
+the renderer seam's public API, the source layout, the frame-loop sequence, the rendering
+pipeline (a new PostFX stage, a new pass), the scene model, or a roadmap item shipping that
+changes what's true today (a new pipeline stage, a new engine-layer system). That's a
+different trigger than the rest of `docs/**` below — a broken path/command isn't the signal
+here, a changed system is. Verify against the actual current code (read the relevant
+header/source; don't infer from a commit message or a roadmap checkbox) the same way the
+CLAUDE.md roadmap check does.
+
+Keep README's `## Architecture` summary and its pointer to `architecture.md` in sync with
+this file, the same way the Building sections are kept in sync (see above).
+
+Stays **unlocked** — it tracks the code, so don't mark it `tidy-md:locked` by reflex even
+after a careful pass. Locking is for content that shouldn't churn; this file is supposed to.
+
 ## docs/**: touch only what's actually stale
 
-For each non-locked file under `docs/`, default to leave it alone. Only edit one when:
+For each non-locked file under `docs/` other than `architecture.md` (covered above), default
+to leave it alone. Only edit one when:
 
 - The user names it explicitly, or
 - A quick verification turns up something actually wrong: a referenced file/command/path
@@ -118,5 +149,6 @@ rather than duplicating them.
   real file.
 - `wc -l CLAUDE.md`: confirm it's 200 lines or fewer.
 - Summarize what moved where: what left CLAUDE.md, what (if anything) landed in MEMORY.md or
-  README.md, what in docs/** you verified-but-left-alone vs. actually changed, and any file
-  you newly marked `tidy-md:locked`.
+  README.md, what changed in docs/architecture.md, what in the rest of docs/** you
+  verified-but-left-alone vs. actually changed, and any file you newly marked
+  `tidy-md:locked`.

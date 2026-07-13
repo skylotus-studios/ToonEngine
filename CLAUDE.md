@@ -85,7 +85,7 @@ Presets build into `build/<preset>/` with the engine DLLs copied next to the exe
 src/
   main.cpp                Entry point: GLFW window + game loop; builds the scene, drives Renderer (no Diligent headers)
   core/
-    renderer.h            The seam: opaque handles + scene types (Vertex/Camera/ToonParams/Transform) + PIMPL Renderer
+    renderer.h            The seam: opaque handles + scene types (Vertex/Camera/Material/Transform/PostParams) + PIMPL Renderer
     renderer.cpp          Diligent (Vulkan) backend behind the seam: toon PSOs/shaders/mesh buffers + DiligentFX post chain + ImGui-Diligent glue
     math.h                Minimal Diligent-free vector/matrix types for the seam's public API
     primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus/plane) -> toon::MeshData
