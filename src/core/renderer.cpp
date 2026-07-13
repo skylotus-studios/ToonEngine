@@ -237,11 +237,10 @@ namespace toon {
 
         // DiligentFX post effects (Bloom + SSAO) share a PostFXContext. It requires
         // depth + motion + camera to reach its "PSOs ready" gate (which both effects
-        // check). Bloom ignores those inputs; SSAO reads real depth + a world-space
-        // normal G-buffer + camera. So when a post effect runs we fill `postCamera`
-        // from the actual view/proj (not zeros) and the scene writes `normalBuffer`.
-        // Motion stays a zero texture (we keep no frame history), which is why SSAO's
-        // temporal accumulation is off by default — it would ghost the moving scene.
+        // check). Bloom ignores those inputs; SSAO/TAA/SSR read real depth + a
+        // world-space normal G-buffer + camera, and reproject using both. So when a
+        // post effect runs we fill `postCamera` from the actual view/proj (not zeros)
+        // and the scene writes `normalBuffer` + real per-pixel `motionVectors`.
         std::unique_ptr<PostFXContext> postFX;
         std::unique_ptr<Bloom> bloom;
         std::unique_ptr<ScreenSpaceAmbientOcclusion> ssao;
@@ -254,6 +253,16 @@ namespace toon {
         RefCntAutoPtr<ITexture> ssrBlack;      // 1x1 black = "no reflection" default
         RefCntAutoPtr<ITexture> modelWhite;    // 1x1 white 2D-ARRAY = untextured model albedo
         HLSL::CameraAttribs postCamera{};
+        // Last frame's postCamera -- a REAL previous-camera snapshot for PostFXContext
+        // (see RunPostFX). Without this, PostFXContext's own camera-matrix-based
+        // reprojection (ComputeReprojectedDepth.fx, which SSAO/TAA/SSR's disocclusion
+        // checks all read via GetReprojectedDepth()) can't distinguish "the camera
+        // moved" from "the camera didn't move" -- it always sees whatever `postCamera`
+        // currently holds as BOTH the current and previous camera. Every temporal
+        // effect's history-trust test then silently assumes the camera never orbits,
+        // pans, zooms, or flies, which is wrong every frame the camera actually moves.
+        HLSL::CameraAttribs prevPostCamera{};
+        bool havePrevPostCamera = false; // seed prev = curr on the very first frame
         Uint32 frameIndex = 0;
 
         // Run the shared PostFXContext plus whichever effects are enabled. The color
@@ -276,7 +285,7 @@ namespace toon {
         float4x4 prevViewProj = float4x4::Identity();
         float nearZ = 0.1f;
         float farZ = 100.0f;
-        float3 lightDir = float3(0.5f, 0.8f, -0.3f); // world-space dir TO light (shader normalizes)
+        float3 lightDir = float3(0.5f, 0.8f, -0.3f);  // world-space dir TO light (shader normalizes)
         float3 lightColor = float3(1.0f, 1.0f, 1.0f); // color * intensity, premultiplied
         PostParams post;
     };
@@ -350,6 +359,10 @@ namespace toon {
         // depth-based disocclusion fire, instead of leaning on motion vectors alone
         // (see prevSceneDepth's declaration).
         FillCameraAttribs(sc);
+        if (!havePrevPostCamera) {
+            prevPostCamera = postCamera; // first frame: no real history yet -- zero apparent motion
+            havePrevPostCamera = true;
+        }
         ITextureView *depthSRV = sceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         ITextureView *prevDepthSRV = prevSceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         ITextureView *motionSRV = motionVectors->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
@@ -361,9 +374,15 @@ namespace toon {
         pfx.pPrevDepthBufferSRV = prevDepthSRV;
         pfx.pMotionVectorsSRV = motionSRV;
         pfx.pCurrCamera = &postCamera;
-        pfx.pPrevCamera = &postCamera;
+        pfx.pPrevCamera = &prevPostCamera;
         postFX->Execute(pfx);
         ++frameIndex;
+
+        // Snapshot now that Execute has consumed prevPostCamera as "previous" for THIS
+        // frame's reprojection -- ready to be genuinely previous for NEXT frame. Mirrors
+        // prevSceneDepth's CopyTexture at the end of EndScene (same reasoning, same
+        // ordering constraint: update the history only after this frame's read of it).
+        prevPostCamera = postCamera;
 
         if (!postFX->IsPSOsReady()) {
             return; // still compiling — skip effects this frame

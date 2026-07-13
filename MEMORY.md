@@ -1814,3 +1814,51 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   clean launch/render/graceful-close via screenshot, and honestly-reported limits (no live
   input desktop here to drive interactively, no confirmed physical gamepad to test the new
   stick bindings against).
+- **2026-07-12** — **Round 7 — the actual camera-motion root cause (SSAO/TAA/SSR ghosting on
+  zoom/orbit/pan, not just Spin).** A fresh session, asked to understand the renderer in depth
+  and fix SSAO "the Diligent way," found a bug none of Rounds 1-6 had touched: `RunPostFX` fed
+  `PostFXContext::RenderAttributes` the *same* `postCamera` instance as both `pCurrCamera` and
+  `pPrevCamera` — `Impl` had no `prevPostCamera` at all. Traced the exact mechanism by reading
+  DiligentFX's actual shaders (Round 6's own lesson: read the algorithm, don't guess from
+  struct field names): `ComputeReprojectedDepth.fx` unprojects the current depth through
+  `g_CurrCamera.mViewProjInv` then reprojects through `g_PrevCamera.mViewProj` — with curr==prev
+  this round-trips through the identical matrix and is a no-op *regardless of whether the
+  camera actually moved*. SSAO's `SSAO_ComputeTemporalAccumulation.fx` uses exactly that value
+  as `CurrCamZ` and compares it to the real previous frame's depth (correctly motion-vector-
+  compensated) via `IsCameraZSimilar`, a relative-depth-ratio disocclusion test. During genuine
+  camera motion (zoom/orbit/pan/fly) a static surface's camera-space depth legitimately changes
+  frame-to-frame *because the camera moved* — the reprojection step exists specifically to
+  cancel that out before comparing. With it disabled, the test compares depths that differ for
+  a benign reason, and for slow/moderate camera motion the ratio often still passes the
+  disocclusion threshold — so stale AO blends in across a frame where the framing genuinely
+  changed, exactly the "screen burn" reported on zoom. TAA and SSR pull the same camera CB via
+  `pPostFXContext->GetCameraAttribsCB()`, so this silently degraded all three temporal effects,
+  not just SSAO — camera motion was simply never in any of the six prior rounds' hypothesis
+  space (all of them looked at object/Spin motion vectors and `prevSceneDepth`, never at the
+  camera-attribs plumbing itself). Also re-traced `DuplicateEntity` (scene.cpp) specifically to
+  rule out a bad `prevWorldMatrix` init on a freshly duplicated entity — it's fine, the struct
+  copy carries a correct, static `prevWorldMatrix`/`worldMatrix` pair; "duplicate + move"
+  showing the same ghosting is almost certainly this same camera bug (nobody repositions a
+  duplicate without also orbiting/zooming to see it), not a second one.
+  **Fix**: added `Impl::prevPostCamera` (seeded to `postCamera` on frame 1, snapshotted right
+  after `postFX->Execute()` each frame) — the same "copy current into history after this
+  frame's read of it" idiom the code already used for `prevSceneDepth` (`CopyTexture` at the
+  end of `EndScene`, Round 5) and `prevViewProj` (snapshotted in `SetCamera`), just never
+  extended to the camera-attribs struct. Matches Diligent's own reference pattern too
+  (`DiligentSamples/Tutorial27_PostProcessing` keeps a real double-buffered `CameraAttribs[2]`,
+  never aliases curr/prev). Left the `spin`-forced `suppressTemporalHistory` reset untouched —
+  that mitigates the separate, genuinely inherent Round 6 finding (rotating silhouettes are
+  view-dependent contours; DiligentFX's motion-safety-net constants are compiled-in `#define`s,
+  unreachable from the app), which this fix doesn't change.
+  **Verified**: clean `cmake --build --preset windows-debug` (0 warnings/errors touching
+  `renderer.cpp`; all warnings in the log are pre-existing, from vendored DiligentFX/
+  DiligentCore source). Hit one build-environment snag along the way worth folding into "Build
+  gotchas": a plain PowerShell tool session has no VS Developer environment loaded (unlike
+  CLion's VS toolchain, which does this automatically) — a build attempted before importing it
+  failed on `'lib.exe' is not recognized...` (not a code error). Fixed by locating the VS 2022
+  install via `vswhere.exe` and dot-sourcing `Common7\Tools\Launch-VsDevShell.ps1 -Arch amd64
+  -HostArch amd64` **in the same shell invocation** as the build command (shell state/env vars
+  don't persist between separate tool calls here, so the import and the build must be chained
+  in one command). After that, a clean build: 153/153 link steps, `ToonEngine.exe` produced.
+  **Not yet visually re-confirmed by the user** — same honestly-reported limit as every prior
+  round (no live input desktop here — see the `verify` skill).
