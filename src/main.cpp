@@ -514,6 +514,12 @@ int main() {
 #endif
     double lastTime = glfwGetTime();
 
+    // Fixed-timestep simulation clock (M1.1): gameplay state advances in fixed kFixedDt steps,
+    // decoupled from the variable render rate below, via an accumulator (see the loop's own
+    // comments for the why). `accumulator` carries leftover sim time between frames.
+    constexpr double kFixedDt = 1.0 / 60.0; // simulation rate: 60 Hz
+    double accumulator = 0.0;
+
     const toon::Color clearColor{0.10f, 0.11f, 0.13f, 1.0f};
     while (!glfwWindowShouldClose(window)) {
         // BeginFrame BEFORE PollEvents: it snapshots previous state and clears this frame's
@@ -523,27 +529,54 @@ int main() {
         toon::Input::BeginFrame();
         glfwPollEvents();
 
+        // Variable frame dt drives input-rate concerns (camera nav below): it should feel as
+        // smooth as the display, not snap to the sim's fixed rate. Clamped so a stall (a
+        // breakpoint, or a window drag -- glfwPollEvents blocks for the duration on Windows)
+        // doesn't dump a large time debt into the accumulator below and trigger a many-step
+        // "spiral of death" catch-up burst; the sim just falls a bit behind wall-clock instead.
         const double now = glfwGetTime();
-        const float dt = static_cast<float>(now - lastTime);
+        double frameTime = now - lastTime;
         lastTime = now;
+        if (frameTime > 0.25) { frameTime = 0.25; }
+        const float dt = static_cast<float>(frameTime);
 
-        // Animate the spinning entities' local rotation incrementally (added to whatever
-        // rotationEuler currently is), then compose the hierarchy's world matrices (parents
-        // before children). Motion vectors come from the cached previous world matrices, so
-        // no prev-angle bookkeeping is needed here. Incremental rather than an absolute
-        // axis*sharedClock formula so a gizmo-set orientation (set while paused) is the new
-        // baseline spin continues from on resume, instead of the whole spin group snapping
-        // back to where a shared clock says it "should" be.
-        if (spin) {
-            constexpr float kSpinRate = 0.6f; // radians/sec
-            for (const Spinner &s : spinners) {
-                if (scene.entities[s.entity].transform) {
-                    scene.entities[s.entity].transform->rotationEuler =
-                        scene.entities[s.entity].transform->rotationEuler + s.axis * (dt * kSpinRate);
+        // Fixed-timestep simulation: advance in whole kFixedDt-sized steps regardless of the
+        // variable frame rate above, so gameplay state (spin today; entity Update hooks /
+        // physics later -- see CLAUDE.md's roadmap) evolves deterministically. Usually one step
+        // per frame; zero if rendering outruns the sim rate, several if the sim fell behind.
+        accumulator += frameTime;
+        while (accumulator >= kFixedDt) {
+            // Snapshot BEFORE integrating, so UpdateWorldTransforms below can interpolate the
+            // render pose across the tick this step just produced.
+            toon::SnapshotSimState(scene);
+
+            // Animate the spinning entities' local rotation incrementally (added to whatever
+            // rotationEuler currently is) -- the stand-in for a future per-entity Update hook.
+            // Incremental rather than an absolute axis*sharedClock formula so a gizmo-set
+            // orientation (set while paused) is the new baseline spin continues from on resume,
+            // instead of the whole spin group snapping back to where a shared clock says it
+            // "should" be.
+            if (spin) {
+                constexpr float kSpinRate = 0.6f; // radians/sec
+                for (const Spinner &s : spinners) {
+                    if (scene.entities[s.entity].transform) {
+                        scene.entities[s.entity].transform->rotationEuler =
+                            scene.entities[s.entity].transform->rotationEuler +
+                            s.axis * static_cast<float>(kFixedDt * kSpinRate);
+                    }
                 }
             }
+            accumulator -= kFixedDt;
         }
-        toon::UpdateWorldTransforms(scene);
+
+        // Compose the hierarchy's world matrices (parents before children), rendering each
+        // entity's pose interpolated between its previous and current sim tick by how far
+        // `accumulator` has drifted into the next one -- smooth motion even when the display's
+        // refresh rate doesn't match the fixed sim rate. Motion vectors come from the cached
+        // previous world matrices (see UpdateWorldTransforms), so no separate prev-angle
+        // bookkeeping is needed here.
+        const float alpha = static_cast<float>(accumulator / kFixedDt);
+        toon::UpdateWorldTransforms(scene, alpha);
 
         // Editor camera: poll input, gate on ImGui's capture (last frame's UI state), then
         // navigate. Right-drag orbits (+ WASD/QE = fly); middle-drag pans; scroll zooms;

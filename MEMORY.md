@@ -2153,3 +2153,65 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   `docs/architecture.md` (added the same day, after this shipped) already documents the
   shadow pre-pass in full — see its "Shadow map creation runs first" and "The shadow
   pre-pass" sections.
+- **2026-07-13** — **Fixed-timestep sim loop shipped** (M1.1, first item of the M1 roadmap
+  milestone added earlier the same day). Replaced `main.cpp`'s single variable-`dt` frame loop
+  with an accumulator-driven fixed 60 Hz simulation tick, decoupled from the (still variable)
+  render rate, with full "Fix Your Timestep!"-style render interpolation, the user's explicit
+  choice over the simpler render-latest-tick alternative, and over extracting a new
+  `core/sim_clock` module (kept inline in `main.cpp`; a scoped decision, see
+  docs/architecture.md's "Where new systems plug in").
+
+  **Mechanism:** `main.cpp` gained `kFixedDt = 1/60` and a `double accumulator`. Each frame,
+  `frameTime` (the old `dt`) is clamped to <= 0.25s before feeding the accumulator: a
+  spiral-of-death guard, since a window drag/resize genuinely stalls `glfwPollEvents` for its
+  duration (a well-known Win32 message-pump behavior, not newly tested here) and would otherwise
+  dump a huge time debt in at once. A `while (accumulator >= kFixedDt)` then runs zero-or-more
+  fixed steps, each calling the new `SnapshotSimState(scene)` (copies every transformed entity's
+  `transform` into a new `prevSimTransform` field) before advancing the spin animation by
+  `kFixedDt` instead of `dt`; the spin advance is the existing stand-in for a future per-entity
+  `Update` hook (M1.3), now living inside the fixed step rather than the render frame. After the
+  loop, `alpha = accumulator / kFixedDt` (the leftover fraction into the next, not-yet-run tick)
+  feeds a new `UpdateWorldTransforms(scene, alpha)` overload (default `alpha = 1.0`, so callers
+  outside the loop are unaffected); it composes each entity's world matrix from
+  `lerp(prevSimTransform.value_or(transform), transform, alpha)` instead of the raw current
+  transform, via a new `LerpTransform` (component-wise on position/rotationEuler/scale, a
+  documented Euler-lerp approximation fine for small per-tick deltas; quaternions are the upgrade
+  if a fast spin ever visibly wobbles). Camera navigation (orbit/pan/zoom/fly, gamepad)
+  deliberately stays on the old variable `dt`: it's the user driving the editor, not the
+  simulation, and should feel exactly as smooth as the display, not snap to the sim tick.
+
+  **The motion-vector chain needed zero new bookkeeping.** `UpdateWorldTransforms` already
+  snapshotted `prevWorldMatrix = worldMatrix` before recomputing; since `worldMatrix` is now
+  always built from the interpolated pose, `prevWorldMatrix` automatically becomes "last
+  *rendered* frame's interpolated world," so TAA/SSAO/SSR keep measuring motion between
+  consecutive rendered frames exactly as before. This was the strongest argument for choosing
+  full interpolation once it was clear doing so wouldn't touch the ghosting-prone temporal
+  machinery (see "Motion vectors" and the SSAO-temporal work above for why that machinery is
+  worth being careful around). `prevSimTransform` defaults to `nullopt`, and
+  `UpdateWorldTransforms` reads `value_or(transform)`, so a fresh/loaded/anchor entity
+  interpolates `transform` with itself — no ghost on spawn or scene load.
+
+  **Verified:** clean `cmake --build --preset windows-debug` (only pre-existing
+  `-Wunsafe-buffer-usage` warnings from vendored Diligent headers and pre-existing lines
+  elsewhere in `scene.cpp`; none on the new code). Launch + `PrintWindow` screenshot (3840×2054,
+  the same 150%-DPI framebuffer size documented above under "Screenshotting the window") showed
+  the full scene correctly cel-shaded, outlined, and shadowed at 143.9 FPS, with crisp
+  (non-smeared) silhouettes on the spinning sphere/cube/torus/helmet cluster: the visual
+  regression check a broken motion-vector chain would have failed. The running instance's Cube
+  rotation reached ~1268°/2536° across the ~60-90s it stayed alive through two capture attempts
+  (a pixel-sampling bug in the capture script burned the first attempt's four retries before a
+  fix), i.e. thousands of fixed steps ticked correctly with no NaN/corruption/crash over
+  sustained real runtime. Closed gracefully via `CloseMainWindow()` (a `WM_CLOSE` post, not
+  `SendInput`, which sidesteps the no-synthetic-input limitation the same way the asset-browser
+  verification did).
+
+  **Not verified live (documented, not silently dropped: no live input desktop here, see the
+  `verify` skill):** interpolation smoothness over time, which a static screenshot structurally
+  cannot show; and the gizmo-drag "no ghost-glide" path, established by code reasoning
+  (`prevSimTransform` only updates at fixed-tick boundaries, so an edit lands in `transform`
+  immediately and is picked up as `prevSim` on the next tick) rather than a live drag. The
+  `spin`-off regression case (scene must render pixel-identical to pre-change) is likewise a
+  code-reasoning proof, not a live toggle: with `spin` off, `SnapshotSimState` still runs every
+  tick but nothing changes `transform`, so `prevSimTransform == transform` always and
+  `lerp(x, x, alpha) == x` regardless of `alpha`, which mathematically forces a match to the
+  non-interpolated render.

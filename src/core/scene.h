@@ -34,8 +34,13 @@ struct Entity {
     std::string name;
     int         parent = 0;                 // parent index; -1 marks the root (index 0 only)
 
-    std::optional<Transform> transform = Transform{};   // local placement
-    Mat4 worldMatrix;                       // cached: local * parent.world (UpdateWorldTransforms)
+    std::optional<Transform> transform = Transform{};   // local placement (current sim tick)
+    // Previous sim-tick local pose. UpdateWorldTransforms interpolates transform between this
+    // and `transform` (see its `alpha` param) so rendering stays smooth even when the render
+    // rate doesn't match the fixed sim rate. nullopt = no prior sim state yet (a fresh/loaded
+    // entity, or an anchor) -> no interpolation (renders straight `transform`).
+    std::optional<Transform> prevSimTransform;
+    Mat4 worldMatrix;                       // cached: interpolated local * parent.world (UpdateWorldTransforms)
     Mat4 prevWorldMatrix;                   // last frame's world, for motion vectors
 
     MeshHandle  mesh     = MeshHandle::Invalid;   // a procedural primitive, or...
@@ -68,9 +73,17 @@ void EnsureSceneRoot(Scene& scene);
 int AddEntity(Scene& scene, int parent, const char* name);
 
 // Recompute every entity's cached worldMatrix from the hierarchy (one forward pass, since
-// parents precede children), snapshotting the previous frame's matrices first. Call once
-// per frame before drawing.
-void UpdateWorldTransforms(Scene& scene);
+// parents precede children), snapshotting the previous frame's matrices first. Each entity's
+// local pose is interpolated between prevSimTransform and transform by `alpha` (the fixed-
+// timestep accumulator's fraction into the next sim tick; see main.cpp's frame loop) — the
+// default 1.0 renders the current sim tick exactly, for callers outside that loop (e.g. right
+// after a scene load). Call once per rendered frame, before drawing.
+void UpdateWorldTransforms(Scene& scene, float alpha = 1.0f);
+
+// Copy every transformed entity's current `transform` into `prevSimTransform`. Call once at
+// the start of each FIXED sim step (before advancing any simulation state for that step), so
+// UpdateWorldTransforms has a correct interval to interpolate across afterward.
+void SnapshotSimState(Scene& scene);
 
 // Set entity `idx`'s transform from a WORLD matrix (the editor gizmo edits in world space):
 // folds out the parent's world and decomposes to the local TRS the renderer recomposes. No-op

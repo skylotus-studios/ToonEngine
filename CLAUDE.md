@@ -41,7 +41,8 @@ TAA/DoF/SSR, Bloom) resolves through ACES tone-mapping to the back buffer. A doc
 gizmo, a Debug panel (scene save/load, every post effect), and an Asset Browser with
 thumbnails. An **editor camera** and a rebindable **action-map input system** (mouse/keyboard/
 gamepad) drive it, with input suppressed while using the UI. HLSL shaders cross-compile to
-SPIR-V at runtime.
+SPIR-V at runtime. Gameplay state (today: the demo spin) advances on a fixed 60 Hz sim tick,
+decoupled from and interpolated into the render rate.
 
 See **[docs/architecture.md](docs/architecture.md)** for the full design: the renderer seam,
 frame loop, rendering pipeline, scene model, and data flow.
@@ -168,9 +169,8 @@ runtime you can build a game on, sequenced by dependency. See docs/architecture.
 current design and MEMORY.md for history + the ToonEngineOld carry-over survey.
 
 **M1 — Simulation foundation.** Turn the editor into a game runtime.
-1. Fixed-timestep sim loop — accumulator + render/sim decoupling (`main.cpp` runs a plain variable `dt` today).
-2. Play / pause / step mode — run gameplay in-editor, distinct from edit mode.
-3. Entity behavior system — per-entity Update hooks (a component/behavior layer, ECS as a
+1. Play / pause / step mode — run gameplay in-editor, distinct from edit mode.
+2. Entity behavior system — per-entity Update hooks (a component/behavior layer, ECS as a
    later scaling option). Entities are render-data only today; this is the core gap.
 
 **M2 — Interaction and world.** Rules and feedback.

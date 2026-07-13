@@ -32,6 +32,19 @@ float4x4 LocalFromTransform(const Transform& t) {
            float4x4::Translation(t.position.x, t.position.y, t.position.z);
 }
 
+// Component-wise lerp between two sim ticks' local poses, for UpdateWorldTransforms' render
+// interpolation (see scene.h). Lerping rotationEuler directly (rather than a quaternion slerp)
+// is an approximation, valid for the small per-tick deltas smooth animation produces; a fast
+// spin or a large single-tick rotation could show the "long way round" or gimbal wobble a
+// quaternion wouldn't -- an upgrade to make only if that's ever actually visible.
+Transform LerpTransform(const Transform& a, const Transform& b, float t) {
+    Transform out;
+    out.position      = a.position + (b.position - a.position) * t;
+    out.rotationEuler = a.rotationEuler + (b.rotationEuler - a.rotationEuler) * t;
+    out.scale         = a.scale + (b.scale - a.scale) * t;
+    return out;
+}
+
 // Plain Mat4 (seam) <-> Diligent float4x4 — both row-major, a straight element copy.
 Mat4 ToMat4(const float4x4& m) {
     Mat4 out;
@@ -183,7 +196,13 @@ int AddEntity(Scene& scene, int parent, const char* name) {
     return static_cast<int>(scene.entities.size()) - 1;
 }
 
-void UpdateWorldTransforms(Scene& scene) {
+void SnapshotSimState(Scene& scene) {
+    for (Entity& e : scene.entities) {
+        if (e.transform) { e.prevSimTransform = e.transform; }
+    }
+}
+
+void UpdateWorldTransforms(Scene& scene, float alpha) {
     const int n = static_cast<int>(scene.entities.size());
     for (int i = 0; i < n; ++i) {
         Entity& e = scene.entities[i];
@@ -194,9 +213,16 @@ void UpdateWorldTransforms(Scene& scene) {
         const float4x4 parentW =
             (e.parent >= 0 && e.parent < i) ? ToFloat4x4(scene.entities[e.parent].worldMatrix)
                                             : float4x4::Identity();
-        // Row-vector convention (v' = v·M): apply local first, then the parent.
-        const float4x4 local = e.transform ? LocalFromTransform(*e.transform)
-                                            : float4x4::Identity();
+        // Render the pose interpolated between the previous and current sim tick (fixed-
+        // timestep decoupling -- see scene.h). No prior sim tick yet (fresh/loaded entity)
+        // -> interpolate transform with itself, i.e. render it exactly. Row-vector convention
+        // (v' = v·M): apply local first, then the parent.
+        float4x4 local = float4x4::Identity();
+        if (e.transform) {
+            const Transform interpolated =
+                LerpTransform(e.prevSimTransform.value_or(*e.transform), *e.transform, alpha);
+            local = LocalFromTransform(interpolated);
+        }
         e.worldMatrix = ToMat4(local * parentW);
     }
 }

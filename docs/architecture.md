@@ -225,10 +225,20 @@ cube, torus, a loaded glTF helmet, a light entity); construct the editor `Camera
 ```
 Input::BeginFrame()              // snapshot prev state, clear deltas -- BEFORE glfwPollEvents
 glfwPollEvents()                 // callbacks accumulate into the freshly-cleared frame
-dt = now - lastTime
+frameTime = now - lastTime, clamped to <= 0.25s   // spiral-of-death guard (e.g. a window drag stalls glfwPollEvents)
+dt = frameTime                                     // frame-rate concerns below (camera nav) use this
+accumulator += frameTime
 
-if (spin) advance spinning entities' rotationEuler incrementally
-UpdateWorldTransforms(scene)     // snapshots prevWorldMatrix, then composes local * parentWorld
+// Fixed-timestep sim: decoupled from the render rate above. kFixedDt = 1/60s. Usually one
+// iteration per frame; zero if rendering outruns the sim rate, several if it fell behind.
+while (accumulator >= kFixedDt):
+    SnapshotSimState(scene)          // prevSimTransform = transform, for every transformed entity
+    if (spin) advance spinning entities' rotationEuler by kFixedDt (not dt)
+    accumulator -= kFixedDt
+
+alpha = accumulator / kFixedDt       // leftover fraction into the next (not-yet-run) sim tick
+UpdateWorldTransforms(scene, alpha)  // snapshots prevWorldMatrix, then composes local * parentWorld
+                                      // from lerp(prevSimTransform, transform, alpha) per entity
 
 // Editor camera: gate on ImGui capture OR an active gizmo drag, then navigate
 Input::SetCaptured(io.WantCaptureMouse || gizmoActive, io.WantCaptureKeyboard)
@@ -280,11 +290,15 @@ Teardown runs the mirror image: `Input::Shutdown()`, `assetBrowser.Shutdown(rend
 thumbnail textures before the device goes away), `renderer.Shutdown()`, destroy the window,
 `glfwTerminate()`.
 
-Three ordering rules are load-bearing and easy to get wrong if this code moves: `Input::BeginFrame`
+Four ordering rules are load-bearing and easy to get wrong if this code moves: `Input::BeginFrame`
 must precede `glfwPollEvents` (edge detection depends on it); `SetPostParams` must precede
-`SetCamera` (the TAA jitter decision reads `post.taa`); and the shadow pre-pass must run after
+`SetCamera` (the TAA jitter decision reads `post.taa`); the shadow pre-pass must run after
 `SetCamera`/`SetLight` but before `BeginFrame` (it needs the current camera and light, and it
-renders into its own targets that don't interact with the main G-buffer `BeginFrame` binds).
+renders into its own targets that don't interact with the main G-buffer `BeginFrame` binds); and
+in the fixed-step loop, `SnapshotSimState` must run before that iteration mutates any entity's
+`transform` (it's what `UpdateWorldTransforms`'s `alpha` interpolates *from*), while `alpha`
+itself must be computed *after* the `while` has fully drained the accumulator, not before, since
+it reads the accumulator's final leftover for this frame.
 
 ## The rendering pipeline
 
@@ -441,6 +455,7 @@ struct Entity {
     std::string name;
     int parent = 0;                                    // -1 marks the root (index 0 only)
     std::optional<Transform> transform = Transform{};   // nullopt = pure anchor/grouping node
+    std::optional<Transform> prevSimTransform;          // previous fixed sim tick's pose, for render interpolation
     Mat4 worldMatrix;                                   // cached, composed by UpdateWorldTransforms
     Mat4 prevWorldMatrix;                               // last frame's world, for motion vectors
     MeshHandle  mesh  = MeshHandle::Invalid;             // a procedural primitive, or...
@@ -462,11 +477,19 @@ space is the direction light travels, so rotating the entity — with the gizmo,
 re-aims it. `GetActiveLight` reads that direction off the first light entity's cached world
 matrix (row 2), falling back to a fixed default if the scene has none.
 
-`UpdateWorldTransforms(scene)` runs once per frame, before drawing: for each entity in order, it
-snapshots `prevWorldMatrix = worldMatrix` first, then recomputes `worldMatrix = local *
-parentWorld` (row-vector convention; the parent's world is already known because parents precede
-children). The gizmo write-back path runs the inverse: `SetEntityWorldMatrix` folds out the
-parent's world (`world * parent⁻¹`) and decomposes the result to a local TRS.
+`UpdateWorldTransforms(scene, alpha)` runs once per rendered frame, after the fixed-step sim loop
+(see "The frame loop") has run zero or more ticks: for each entity in order, it snapshots
+`prevWorldMatrix = worldMatrix` first, then recomputes `worldMatrix = local * parentWorld`, where
+`local` comes from `LocalFromTransform` fed a pose **interpolated** between `prevSimTransform` and
+`transform` by `alpha` (row-vector convention; the parent's world is already known because parents
+precede children). `alpha` is the fixed-timestep accumulator's leftover fraction into the next sim
+tick; the default `alpha = 1.0` renders the current tick exactly, for callers outside the main loop
+(e.g. right after a scene load). `prevSimTransform` starts `nullopt` and is populated by
+`SnapshotSimState` at the top of each fixed step, so a fresh or just-loaded entity interpolates
+`transform` with itself: no spurious motion. The gizmo write-back path runs the inverse:
+`SetEntityWorldMatrix` folds out the parent's world (`world * parent⁻¹`) and decomposes the result
+to a local TRS, writing `transform`, the authoritative pose the next fixed step's
+`SnapshotSimState` will pick up.
 
 The editor mutation API (`AddChildEntity`, `DeleteEntity`, `DuplicateEntity`, `ReparentEntity`,
 `MoveEntityAsSibling`) all preserve the parents-before-children invariant and fix up `selected`,
@@ -578,7 +601,11 @@ motion vectors being correct, which means threading "last frame's" state through
 in the same order every frame:
 
 1. `UpdateWorldTransforms` snapshots `entity.prevWorldMatrix = entity.worldMatrix` **before**
-   recomputing this frame's `worldMatrix`.
+   recomputing this frame's `worldMatrix`, which is now composed from each entity's pose
+   **interpolated** between its previous and current fixed sim tick, not the raw current tick
+   (see "The scene model" above). Because both the previous and current `worldMatrix` are built
+   the same interpolated way, `prevWorldMatrix` automatically means "last **rendered** frame's
+   (interpolated) world": the fixed/render rate mismatch needs no separate bookkeeping here.
 2. The draw loop passes both matrices into `DrawMesh`/`DrawModel`.
 3. `SetCamera` snapshots `prevViewProj = viewProj` **before** overwriting it, so camera motion
    (orbit/zoom/pan/fly) is captured the same way object motion is.
@@ -651,12 +678,17 @@ and per-frame joint-matrix upload, alongside a new animation entity component in
 
 Gameplay systems (the roadmap's M1 and M2) are a different shape: they're Diligent-free by
 default, since nothing about a fixed-timestep loop, an entity-behavior/update layer, physics, or
-audio needs to touch the renderer directly. They attach above the seam as new `core/` modules
-alongside `scene.h`, consumed from `main.cpp`'s frame loop the same way `Input`/`Camera`/`Scene`
-already are — a behavior system would most naturally add an `Update`-style hook to `Entity` and
-a call in the frame loop before `UpdateWorldTransforms`; physics would own its own body/collider
-handles (its own small seam, following the same opaque-handle pattern `renderer.h` uses) and
-write results back into entity transforms each frame.
+audio needs to touch the renderer directly. The first of these, the fixed-timestep sim loop (see
+"The frame loop" above), shipped as a restructuring of `main.cpp`'s existing loop plus two new
+`core/scene.h` members (`prevSimTransform`, `SnapshotSimState`), not a new `core/` module. That
+was a scoped choice for this item, not a pattern to assume for what's next: an entity-behavior
+system would most naturally add an `Update`-style hook to `Entity` and a call inside the
+fixed-step loop (before `UpdateWorldTransforms`, alongside where the spin animation advances
+today); physics would own its own body/collider handles (its own small seam, following the same
+opaque-handle pattern `renderer.h` uses), step inside that same fixed-step loop (physics engines
+assume a fixed tick), and write results back into entity transforms each fixed step. Either would
+plausibly be the second consumer that justifies extracting a shared `core/sim_clock`-style module
+out of `main.cpp`, evaluated when it's actually being built, not before.
 
 See MEMORY.md's "ToonEngineOld carry-over" section (and its "Port gotchas for the un-shipped
 systems" subsection) for the concrete algorithms and gotchas behind the still-open M3 items.
