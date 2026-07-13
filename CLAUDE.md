@@ -47,11 +47,13 @@ then an **ACES tone-map pass** resolves to the back buffer. A docked **Dear ImGu
 (Bai Jamjuree font, 3 selectable themes) drives it live: a **Scene Hierarchy** panel (select /
 add-child / duplicate / delete / drag-drop reparent), an **Inspector** for the selected entity
 (name, transform, material or light color/intensity, **ImGuizmo** move/rotate/scale gizmo
-with **W/E/R/X hotkeys + snapping**), and a **Debug** panel (theme, **scene save/load** to a
-text `.scene` file, band count, global style, and every post effect). An
-**editor camera** navigates the scene via mouse + keyboard (right-drag orbit/WASD/QE fly,
-middle-drag pan, scroll zoom, F focus) or a **gamepad** (left-stick fly, right-stick orbit),
-all through a rebindable **action-map input system** (`assets/input.json`) — with input
+with **W/E/R/X hotkeys + snapping**), a **Debug** panel (theme, **scene save/load** to a
+text `.scene` file, band count, global style, and every post effect), and an **Asset
+Browser** for `assets/` (breadcrumb navigation, a sortable file table, and image
+thumbnails/preview). An **editor camera** navigates the scene via mouse + keyboard
+(right-drag orbit/WASD/QE fly, middle-drag pan, scroll zoom, F focus) or a **gamepad**
+(left-stick fly, right-stick orbit), all through a rebindable **action-map input system**
+(`assets/input.json`) — with input
 suppressed while using the UI. HLSL shaders cross-compile to SPIR-V at runtime.
 
 ## Build
@@ -101,6 +103,9 @@ src/
     camera.{h,cpp}        Editor camera controls: orbit/pan/zoom/fly/focus
     input/                 GLFW device/gamepad polling, action maps + rebinding (assets/input.json)
     serializer.{h,cpp}    Scene save/load — entity/camera state to a text .scene file
+  ui/
+    file_browser.{h,cpp}  "Asset Browser" panel: breadcrumb nav, sortable file table, preview pane
+    thumbnail_cache.{h,cpp}  Path -> texture cache for the browser's inline icons/preview
 assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + model_fill/model_outline + tonemap.hlsl
 assets/models/            glTF/GLB/FBX test models (helmet/fox/dragon) — Git LFS
 assets/fonts/             UI fonts (BaiJamjuree, OpenSans) for the editor overlay
@@ -165,24 +170,18 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-The renderer core is done (toon fill + outline, HDR, full DiligentFX post stack). The
+The renderer core is done (toon fill + outline, HDR, full DiligentFX post stack), and the
 **engine/editor layer** — `ToonEngineOld`'s scene graph, model loading, inspector, camera,
-serialization, and input (action maps, rebinding, gamepad) — has been ported too; an asset
-browser is what's left. See MEMORY.md → *ToonEngineOld carry-over* for the survey +
-per-system porting notes.
+serialization, input (action maps, rebinding, gamepad), and asset browser — has been ported
+too. See MEMORY.md → *ToonEngineOld carry-over* for the survey + per-system porting notes.
 
-**A. Editor**
-
-1. **Asset browser panel** — `assets/` browser + texture/model thumbnails (port
-   `ui/file_browser` + `ui/thumbnail_cache`, via the linked `Diligent-TextureLoader`).
-
-**B. Environment & fidelity**
+**A. Environment & fidelity**
 1. **Grid + sky gradient** — HLSL ports of the old editor backdrop.
 2. **Cascaded shadow maps** — toon-friendly directional shadows (needs seam framebuffer /
    depth-array support).
 
-**C. Later**
-1. **Skeletal animation** (play the fox/dragon clips), plus the animation entity component
+**B. Later**
+1. **Skeletal animation** (play the fox/dragon clips), plu/comms the animation entity component
 2. **2D / sprites**, plus the sprite entity component
 3. **Instancing** (deferred — a per-instance draw path for many-object scenes).
 

@@ -74,6 +74,8 @@ add_executable(ToonEngine
     src/core/input/action_map.cpp     # named actions/axes, context stack, default bindings
     src/core/input/binding_io.cpp     # JSON save/load for bindings (assets/input.json)
     src/core/serializer.cpp     # scene save/load (.scene text files)
+    src/ui/thumbnail_cache.cpp  # path -> texture cache (asset browser icons/preview)
+    src/ui/file_browser.cpp     # "Asset Browser" editor panel
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
     external/ImGuizmo/src/ImGuizmo.cpp   # editor transform gizmos (compiled against Diligent's imgui)
 )
@@ -150,6 +152,7 @@ target_compile_definitions(ToonEngine PRIVATE
     TOON_ICON_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png"
     TOON_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes"
     TOON_INPUT_JSON="${CMAKE_CURRENT_SOURCE_DIR}/assets/input.json"
+    TOON_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets" # asset browser's root (ui/file_browser.h)
     # core/input/input_device.h needs <GLFW/glfw3.h> (GLFW_RELEASE, GLFWgamepadstate) and is
     # reachable from main.cpp before main.cpp's own local #define would run. Set engine-wide
     # instead of per-TU so it's correct regardless of #include order.

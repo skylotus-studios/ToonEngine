@@ -13,6 +13,7 @@
 #include "core/input/binding_io.h"
 #include "core/input/input_system.h"
 #include "core/serializer.h"
+#include "ui/file_browser.h"
 
 // GLFW_INCLUDE_NONE is set engine-wide (CMakeLists.txt) since core/input/input_device.h now
 // also pulls <GLFW/glfw3.h>, ahead of this file's own include below.
@@ -29,6 +30,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <filesystem> // .scene extension check, routing an asset-browser double-click to loadScene
 #include <string>
 #include <vector>
 
@@ -445,7 +447,7 @@ int main() {
         const int i = toon::AddEntity(scene, 0, "Helmet");
         toon::Entity &e = scene.entities[i];
         e.model = helmet;
-        e.modelPath = helmetPath;   // so a saved scene can reload it (see core/serializer.h)
+        e.modelPath = helmetPath; // so a saved scene can reload it (see core/serializer.h)
         e.transform->position = {0.0f, 2.5f, 0.0f};
         e.transform->scale = {1.4f, 1.4f, 1.4f};
         e.material.baseColor = {1.0f, 1.0f, 1.0f}; // white tint (glTF supplies the color)
@@ -487,6 +489,24 @@ int main() {
     char scenePathBuf[256];
     std::snprintf(scenePathBuf, sizeof(scenePathBuf), "%s", TOON_SCENES_DIR "/default.scene");
     std::string sceneStatus;
+
+    // Shared scene-load path for the Debug panel's "Load Scene" button AND the asset
+    // browser's double-click-a-.scene behavior (below): LoadScene resets scene.selected and
+    // invalidates every spinners[] index (see core/serializer.h), so spinners must be
+    // cleared at every call site, not just the button's own.
+    auto loadScene = [&](const char *path) {
+        if (toon::LoadScene(path, scene, camera, renderer)) {
+            spinners.clear(); // stale entity indices into the scene LoadScene just replaced
+            sceneStatus = "Loaded.";
+        } else {
+            sceneStatus = "Load failed (see console).";
+        }
+    };
+
+    // Asset browser: browses assets/ with thumbnails; passive besides double-click, which
+    // this routes through loadScene when the activated file is a .scene.
+    toon::FileBrowser assetBrowser;
+    assetBrowser.Init(TOON_ASSETS_DIR);
 
     bool spin = true;
 #ifdef IMGUI_HAS_DOCK
@@ -644,14 +664,17 @@ int main() {
             ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
             // Hierarchy on the far left; Inspector (top) + Debug (bottom) stacked on the
-            // right; the 3D scene shows through the pass-through center.
+            // right; Asset Browser along the bottom of what's left; the 3D scene shows
+            // through the remaining pass-through center.
             ImGuiID centerId = dockspaceId;
             const ImGuiID leftId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, 0.20f, nullptr, &centerId);
             ImGuiID rightId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.34f, nullptr, &centerId);
             const ImGuiID rightTopId = ImGui::DockBuilderSplitNode(rightId, ImGuiDir_Up, 0.55f, nullptr, &rightId);
+            const ImGuiID bottomId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.28f, nullptr, &centerId);
             ImGui::DockBuilderDockWindow("Scene Hierarchy", leftId);
             ImGui::DockBuilderDockWindow("Inspector", rightTopId);
             ImGui::DockBuilderDockWindow("ToonEngine Debug", rightId);
+            ImGui::DockBuilderDockWindow("Asset Browser", bottomId);
             ImGui::DockBuilderFinish(dockspaceId);
         }
 #endif
@@ -884,14 +907,7 @@ int main() {
                 sceneStatus = toon::SaveScene(scenePathBuf, scene, camera) ? "Saved." : "Save failed (see console).";
             }
             ImGui::SameLine();
-            if (ImGui::Button("Load Scene")) {
-                if (toon::LoadScene(scenePathBuf, scene, camera, renderer)) {
-                    spinners.clear(); // stale entity indices into the scene Load just replaced
-                    sceneStatus = "Loaded.";
-                } else {
-                    sceneStatus = "Load failed (see console).";
-                }
-            }
+            if (ImGui::Button("Load Scene")) { loadScene(scenePathBuf); }
             if (!sceneStatus.empty()) { ImGui::TextDisabled("%s", sceneStatus.c_str()); }
 
             ImGui::SeparatorText("Style (all objects)");
@@ -904,8 +920,8 @@ int main() {
             ImGui::TextDisabled("Right-drag: orbit (+WASD/QE fly)");
             ImGui::TextDisabled("Mid-drag: pan | Scroll: zoom | F: focus");
             ImGui::TextDisabled(toon::Input::GamepadCount() > 0
-                                     ? "Gamepad: left stick fly, right stick orbit"
-                                     : "Gamepad: left stick fly, right stick orbit (none connected)");
+                                    ? "Gamepad: left stick fly, right stick orbit"
+                                    : "Gamepad: left stick fly, right stick orbit (none connected)");
             ImGui::TextDisabled("Rebind: edit assets/input.json, then relaunch.");
             ImGui::SliderAngle("FOV", &camera.fovY, 20.0f, 100.0f);
             if (ImGui::Button("Reset camera")) { camera = cameraDefault; }
@@ -943,12 +959,21 @@ int main() {
             if (post.ssr) { ImGui::SliderFloat("Reflection strength", &post.ssrStrength, 0.0f, 1.5f); }
         }
         ImGui::End();
+
+        // Asset browser: passive navigation/preview, except a double-clicked .scene file,
+        // which loads through the same path as the Debug panel's button (see loadScene).
+        if (const std::string activated = assetBrowser.Render(renderer);
+            !activated.empty() && std::filesystem::path(activated).extension() == ".scene") {
+            loadScene(activated.c_str());
+        }
+
         renderer.EndUI();
 
         renderer.EndFrame();
     }
 
     toon::Input::Shutdown();
+    assetBrowser.Shutdown(renderer); // frees cached thumbnails; must run before the device does
     renderer.Shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();

@@ -228,6 +228,20 @@ namespace toon {
         // Draw a loaded model with a pre-composed world matrix (see DrawMesh's Mat4 overload).
         void DrawModel(ModelHandle model, const Mat4 &world, const Mat4 &prevWorld, const Material &style);
 
+        // --- Textures (editor UI: asset thumbnails/previews) --------------------
+        // Not part of the toon draw path (materials don't carry textures yet) — this exists
+        // so editor UI (the asset browser) can decode an image file and display it with
+        // ImGui::Image. Decodes PNG/JPG/BMP/TGA via DiligentTools' TextureLoader.
+        TextureHandle LoadTexture(const char *path); // TextureHandle::Invalid on failure
+        void DestroyTexture(TextureHandle texture);
+
+        // An opaque id ImGui::Image can draw (cast to ImTextureID at the call site — this
+        // header stays ImGui-free). 0 for an invalid handle.
+        uint64_t GetTextureImGuiID(TextureHandle texture) const;
+
+        // Pixel dimensions, for sizing a preview. Left untouched (0) for an invalid handle.
+        void GetTextureSize(TextureHandle texture, uint32_t &width, uint32_t &height) const;
+
         // Post-processing. Set params, then EndScene() resolves the HDR scene to the
         // back buffer (call after the DrawMesh calls, before the UI overlay).
         void SetPostParams(const PostParams &params);

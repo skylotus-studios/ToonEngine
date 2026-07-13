@@ -1235,8 +1235,93 @@ the same `build.ninja` grep), and the subsequent build succeeded.
 
 **Still deferred** (see the "Editor camera + input" update above): F-focus on the selected
 entity, an interactive in-editor rebind panel (rebinding today is edit-the-JSON-and-
-relaunch), and the event queue / file-drops (first consumer: the asset-browser roadmap item,
-next up).
+relaunch), and the event queue / file-drops.
+
+## Asset browser (roadmap A.1)
+
+Ported `ToonEngineOld/src/ui/file_browser.*` + `thumbnail_cache.*` onto the current engine —
+the last editor-layer item from the carry-over survey. The old files were written against a
+**free-function** seam (`LoadTexture`/`DestroyTexture`/`GetTextureNativeID`/...); the current
+seam is a PIMPL `Renderer` class with no texture API at all, so the real work here was adding
+one, not just moving UI code.
+
+**Seam addition** (`core/renderer.h`/`.cpp`): `LoadTexture`/`DestroyTexture`/
+`GetTextureImGuiID`/`GetTextureSize`, mirroring the existing `meshes`/`models` handle-vector
+convention (`Impl::textures`, 1-based handles, 0 = Invalid). `LoadTexture` uses
+`CreateTextureFromFile` (already-linked `Diligent-TextureLoader`) with a **default**
+`TextureLoadInfo` — its defaults (`IMMUTABLE`, `BIND_SHADER_RESOURCE`, `IsSRGB=false`,
+`GenerateMips=true`) are exactly right, so nothing is overridden except `Name`.
+`GetTextureImGuiID` returns `reinterpret_cast<uint64_t>(tex->GetDefaultView(...SHADER_RESOURCE))`
+as a plain integer — not an ImGui type — so `renderer.h` stays ImGui-free; the UI casts it to
+`ImTextureID` at the `ImGui::Image` call site. Confirmed against
+`external/DiligentTools/Imgui/src/ImGuiDiligentRenderer.cpp:1135`
+(`reinterpret_cast<ITextureView*>(pCmd->GetTexID())`, then `Set` + `CommitShaderResources(...,
+RESOURCE_STATE_TRANSITION_MODE_TRANSITION)`) that this is exactly the mechanism the Diligent
+ImGui backend expects — the same path the model albedo texture already goes through, so no
+new state-management burden. `Renderer::Shutdown` gained `m_impl->textures.clear()` alongside
+`meshes`/`models`, so thumbnails free on the idle'd device even if a caller forgets to.
+
+**Two real bugs the GL reference would have carried over silently:**
+- **`IsSRGB` must be `false`, not the seemingly-obvious `true` for a color image.** ImGui
+  doesn't tone-map; its pixel shader computes `vertexColor * texture.Sample(...)` and applies
+  sRGB handling to that *product* uniformly, so a bound texture's samples and the UI's own
+  (gamma-space-authored theme) vertex colors have to live in the same color space. Loading
+  sRGB would linearize on sample while the UI around it doesn't, making every thumbnail read
+  too dark — caught before shipping by comparing a captured thumbnail directly against the
+  source PNG (see Verification below), not by inspection alone.
+- **Drop the reference's UV flip.** The old code passed `ImVec2(0,1),(1,0)` to `ImGui::Image`
+  for GL's bottom-origin textures; Diligent/Vulkan's `CreateTextureFromFile` decodes
+  top-origin (same convention the model albedo texture already uses), so the port uses
+  `ImGui::Image`'s default `(0,0)-(1,1)` UVs. Carrying the flip over would have rendered every
+  thumbnail upside down.
+
+**C++17, not the reference's C++20:** `FormatTime` used `std::chrono::clock_cast`
+(C++20) — rewritten as the portable pre-`clock_cast` idiom (measure `ft`'s offset from the
+file clock's `now()`, apply that same offset to `system_clock::now()`). The old `FileFilter`
+(`.gitignore`-pattern matching, for browsing the *whole* repo) was dropped entirely rather than
+ported: it also used C++20's `std::string::starts_with`, and scoping the browser to `assets/`
+only (see Scope below) removes the reason it existed in the first place — a plain dotfile
+check is the whole filter now.
+
+**Scope decisions** (confirmed with the user before building): thumbnails are **images only**
+(PNG/JPG/BMP/TGA decoded to textures); models/other files get a colored text tag
+(`[M]`/`[D]`), no rendered model previews. Root is **`assets/` only**, not the whole repo.
+Mostly **passive** — navigate/sort/preview — except double-clicking a `.scene` file, which
+loads it. That last path is shared with the Debug panel's existing "Load Scene" button via a
+`loadScene` lambda in `main.cpp`, not duplicated: `LoadScene` resets `scene.selected` and
+invalidates every `spinners[]` index (see "Scene serialization" above), so both call sites
+need the same `spinners.clear()` cleanup, and a lambda was the only way to guarantee that
+without two copies of it drifting apart. `FileBrowser::Render` reports an activated file's
+path back to the caller rather than knowing what a `.scene` file means itself — `main.cpp`
+decides that, keeping the browser decoupled from scene/serializer semantics. Dock layout:
+split off the bottom ~28% of the remaining pass-through center (after the existing
+Hierarchy/Inspector/Debug splits), so the 3D viewport shrinks but nothing else moves.
+
+**Verified:** clean build (after the CMakeLists.txt reconfigure gotcha below). Screenshot
+comparison, not just a compile check: cropped the captured `icon.png` row's thumbnail out of
+a full-window `PrintWindow` capture and compared it directly against the source file — same
+upright orientation, same brightness, confirming both bug fixes above actually took. Graceful
+shutdown was also genuinely exercised despite the no-synthetic-input limitation (see the
+`verify` skill): `PostMessage(hwnd, WM_CLOSE, ...)` is a direct Win32 message post, not
+`SendInput`-based injection, so it isn't subject to that limitation — GLFW's win32 backend
+handles `WM_CLOSE` in its window procedure regardless of focus state. The process exited
+cleanly in ~2s with nothing in the Application event log — stronger evidence than one captured
+frame rendering fine, since it confirms `FileBrowser::Shutdown` and the new
+`Impl::textures.clear()` are ordered correctly across teardown. **Still blocked:** clicking a
+row to check the preview pane, double-clicking a folder to navigate, and double-clicking a
+`.scene` file to confirm the load all need synthetic input this environment doesn't have. The
+last one is also untestable for an unrelated reason: no `.scene` file exists yet in a fresh
+`assets/scenes/` (nobody has clicked "Save Scene" in this build), so even a manual check needs
+that done first.
+
+**CMakeLists.txt gotcha, hit again:** adding a source file (`src/ui/file_browser.cpp`) and a
+new define (`TOON_ASSETS_DIR`) forced the exact reconfigure-needs-the-VS-env failure mode in
+"Build gotchas" above (`'lib.exe' is not recognized`) — the fix was the same chained
+VS-env-import + build in one shell call. Worth reinforcing since it was hit from a plain
+(non-CLion) shell across two separate tool invocations: the first rebuild attempt, run
+without re-importing the VS env in that specific call, failed the same way even though an
+explicit `cmake --preset` reconfigure had just succeeded moments earlier in the environment —
+the import genuinely doesn't outlive the shell process it ran in.
 
 ## Verifying a Vulkan build
 
@@ -1862,3 +1947,18 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   in one command). After that, a clean build: 153/153 link steps, `ToonEngine.exe` produced.
   **Not yet visually re-confirmed by the user** — same honestly-reported limit as every prior
   round (no live input desktop here — see the `verify` skill).
+- **2026-07-13** — **Asset browser panel shipped (roadmap A.1 — the last engine/editor-layer
+  carry-over item).** Full writeup under "Asset browser" above. Headline points: added a
+  texture API to the seam (`LoadTexture`/`DestroyTexture`/`GetTextureImGuiID`/
+  `GetTextureSize`) since the current PIMPL `Renderer` had none, unlike the free-function seam
+  the old `ui/file_browser`/`thumbnail_cache` reference was written against; caught two bugs
+  the GL reference would have carried over silently (`IsSRGB` must be `false` or thumbnails
+  render dark, and the reference's GL-bottom-origin UV flip must be dropped for Vulkan's
+  top-origin decode) by comparing a captured thumbnail against its source file, not by
+  inspection; and confirmed graceful shutdown genuinely exercises the new cleanup path via a
+  direct `WM_CLOSE` post (sidesteps the no-synthetic-input limitation, since it's a Win32
+  message post rather than `SendInput`). Hit the CMakeLists.txt reconfigure gotcha again
+  (new source + new define forced the VS-env-import-must-be-chained-with-the-build failure).
+  **Blocked:** click-to-preview, double-click-navigate, and double-click-to-load-scene all
+  need a manual check — no live input desktop, and no `.scene` file exists yet to test the
+  last one against.

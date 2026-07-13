@@ -13,7 +13,7 @@ HDR post-processing stack, all built on the seam described below.
 *A [Skylotus Studios](LICENSE.md) project.*
 
 ![ToonEngine editor: a cel-shaded scene (sphere, cube, torus, glTF helmet) with SSAO contact
-shadows and bloom, alongside the docked scene hierarchy, inspector, and debug
+shadows and bloom, alongside the docked scene hierarchy, inspector, debug, and asset browser
 panels](docs/screenshots/editor-overview.png)
 
 ## Highlights
@@ -32,8 +32,8 @@ panels](docs/screenshots/editor-overview.png)
   (radius, segment counts), not baked mesh data, so a saved scene has no binary blobs.
 - Editor UI built from scratch on Dear ImGui: a docked layout with 3 selectable themes, a
   scene hierarchy with drag-drop reparenting, an inspector with live material, transform,
-  and light editing, and ImGuizmo move/rotate/scale gizmos with Unity-style hotkeys
-  (W/E/R/X) and snapping.
+  and light editing, ImGuizmo move/rotate/scale gizmos with Unity-style hotkeys (W/E/R/X)
+  and snapping, and an asset browser with sortable file listings and image thumbnails.
 - glTF model loading via Diligent's own asset loader, textured and cel-shaded with the same
   inverted-hull outline technique as the procedural geometry.
 - Editor camera: orbit, pan, zoom, and WASD/QE fly, with input capture suppressed correctly

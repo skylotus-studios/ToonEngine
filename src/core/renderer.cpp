@@ -27,6 +27,7 @@
 #include "GraphicsTypes.h"
 #include "Buffer.h"
 #include "Texture.h"
+#include "TextureUtilities.h" // CreateTextureFromFile — asset-browser thumbnails/previews
 #include "Sampler.h"
 #include "Shader.h"
 #include "PipelineState.h"
@@ -218,6 +219,11 @@ namespace toon {
         RefCntAutoPtr<IPipelineState> modelOutlinePSO; // inverted-hull outline
         RefCntAutoPtr<IShaderResourceBinding> modelOutlineSRB;
         std::vector<std::unique_ptr<GLTF::Model>> models;
+
+        // Editor-UI textures (asset browser thumbnails/previews) — decoded image files,
+        // unrelated to the toon draw path. handle N -> textures[N-1], same 1-based
+        // convention as meshes/models above; a null slot is a destroyed handle.
+        std::vector<RefCntAutoPtr<ITexture>> textures;
 
         // HDR offscreen scene target + tone-map resolve to the back buffer.
         RefCntAutoPtr<ITexture> hdrColor;       // RGBA16F scene color
@@ -1039,8 +1045,9 @@ namespace toon {
 
         // Release scene/pipeline GPU objects before the device.
         m_impl->meshes.clear();
-        m_impl->models.clear(); // GLTF::Model objects own GPU buffers + textures
-        m_impl->bloom.reset();  // DiligentFX effect objects own GPU resources
+        m_impl->models.clear();   // GLTF::Model objects own GPU buffers + textures
+        m_impl->textures.clear(); // editor-UI thumbnails (asset browser)
+        m_impl->bloom.reset();    // DiligentFX effect objects own GPU resources
         m_impl->ssao.reset();
         m_impl->dof.reset();
         m_impl->taa.reset();
@@ -1489,6 +1496,59 @@ namespace toon {
     // Convenience: a single model instance's placement (no scene parent).
     void Renderer::DrawModel(ModelHandle handle, const Transform &t, const Transform &prevT, const Material &style) {
         DrawModel(handle, ToMat4(WorldFromTransform(t)), ToMat4(WorldFromTransform(prevT)), style);
+    }
+
+    // --- Textures (editor UI: asset thumbnails/previews) ------------------------
+
+    // Decodes an image file straight to GPU via DiligentTools' loader (PNG/JPG/BMP/TGA).
+    // Default TextureLoadInfo is exactly right here: IMMUTABLE + BIND_SHADER_RESOURCE, mips
+    // generated, and — load-bearing — IsSRGB = false. ImGui's own shader treats a bound
+    // texture's samples and its per-vertex colors (authored in gamma space by the editor
+    // themes) as the same color space; an sRGB-sampled texture would linearize on read while
+    // the UI around it doesn't, so every thumbnail would come out too dark. CreateTextureFromFile
+    // is device-only (uploads mips as immutable initial data, no immediate-context work), so
+    // this never touches m_impl->context.
+    TextureHandle Renderer::LoadTexture(const char *path) {
+        if (!path) { return TextureHandle::Invalid; }
+
+        TextureLoadInfo info;
+        info.Name = path;
+        RefCntAutoPtr<ITexture> tex;
+        CreateTextureFromFile(path, info, m_impl->device, &tex);
+        if (!tex) { return TextureHandle::Invalid; } // failure leaves the out-pointer null, not a throw
+
+        m_impl->textures.push_back(std::move(tex));
+        return static_cast<TextureHandle>(m_impl->textures.size()); // 1-based; 0 = Invalid
+    }
+
+    // Releases one texture's GPU memory early (the thumbnail cache calls this at shutdown, not
+    // per-frame). Leaves the slot null rather than compacting the vector — handles must stay
+    // stable, and this cache is small enough that slot reuse isn't worth the bookkeeping.
+    void Renderer::DestroyTexture(TextureHandle texture) {
+        const uint32_t idx = static_cast<uint32_t>(texture);
+        if (idx == 0 || idx > m_impl->textures.size()) { return; }
+        m_impl->textures[idx - 1].Release();
+    }
+
+    // The texture's default SRV, handed out as a plain integer so this header never has to
+    // mention ITextureView — the UI casts it to ImTextureID at the ImGui::Image call site.
+    // Diligent's ImGui backend reinterpret_casts it right back and transitions the resource
+    // itself (RESOURCE_STATE_TRANSITION_MODE_TRANSITION), the same path the model albedo
+    // texture already goes through — so there's no extra state-management burden here.
+    uint64_t Renderer::GetTextureImGuiID(TextureHandle texture) const {
+        const uint32_t idx = static_cast<uint32_t>(texture);
+        if (idx == 0 || idx > m_impl->textures.size() || !m_impl->textures[idx - 1]) { return 0; }
+        return reinterpret_cast<uint64_t>(m_impl->textures[idx - 1]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+    }
+
+    // Pixel dimensions read straight from the texture's own desc — nothing cached, since
+    // Diligent already stores it and the caller (a preview pane) only asks once per draw.
+    void Renderer::GetTextureSize(TextureHandle texture, uint32_t &width, uint32_t &height) const {
+        const uint32_t idx = static_cast<uint32_t>(texture);
+        if (idx == 0 || idx > m_impl->textures.size() || !m_impl->textures[idx - 1]) { return; }
+        const TextureDesc &desc = m_impl->textures[idx - 1]->GetDesc();
+        width = desc.Width;
+        height = desc.Height;
     }
 
     // --- Debug UI (Dear ImGui) --------------------------------------------------
