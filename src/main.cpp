@@ -824,8 +824,6 @@ int main() {
                 ImGui::MenuItem("ToonEngine Debug", nullptr, &showDebug);
                 ImGui::MenuItem("Asset Browser", nullptr, &showAssetBrowser);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Reset Camera")) { camera = cameraDefault; }
-                ImGui::Separator();
                 if (ImGui::BeginMenu("Theme")) {
                     for (int i = 0; i < static_cast<int>(Theme::Count); ++i) {
                         const Theme t = static_cast<Theme>(i);
