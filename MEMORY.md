@@ -2215,3 +2215,66 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   tick but nothing changes `transform`, so `prevSimTransform == transform` always and
   `lerp(x, x, alpha) == x` regardless of `alpha`, which mathematically forces a match to the
   non-interpolated render.
+- **2026-07-13** — **Play / Pause / Step mode shipped** (M1.2, second item of the M1
+  milestone; M1.3's entity behavior system is the one remaining item). Introduced an explicit
+  `EditorMode { Editing, Playing, Paused }` on top of M1.1's fixed-timestep loop: Editing (the
+  new default at launch) freezes the accumulator so nothing simulates, Playing is M1.1's
+  existing behavior, and Paused freezes mid-play without discarding progress. Step credits the
+  accumulator with exactly one `kFixedDt` and lets the same while loop drain it, so no separate
+  single-step code path was needed. A new "Playback" panel (Play/Pause toggle, Step, Stop, a
+  Mode status label) docks as a thin strip at the top of the existing dockspace via one more
+  `DockBuilderSplitNode`, not a new positioning mechanism.
+
+  **Play-mode isolation, the user's explicit choice:** Stop always restores `scene` from
+  `sceneBackup`, a snapshot taken when Play starts, discarding whatever happened during Play
+  (Unity/Godot/Unreal convention). Free to build today because `Scene` is a plain copyable
+  struct (a `vector<Entity>` plus an `int`, no manual resource ownership; mesh/model are
+  handles owned by `Renderer`): `sceneBackup = scene` and `scene = sceneBackup` are the entire
+  mechanism, no new serialization code. Chosen as the safety net that makes testing M1.3/M2
+  gameplay and physics non-destructive later, not just an M1.2-scoped convenience.
+
+  **Two bugs caught by tracing the interpolation math before writing any code, not found by
+  testing:** first, `alpha` (M1.1's render-interpolation fraction) only means something while
+  the accumulator is actively draining during Playing; left at a stale fractional value outside
+  Playing, a gizmo edit made while paused would render as a wrong blend between the stale
+  pre-edit tick and the new edited pose. Fixed by pinning `alpha = 1.0` whenever `mode !=
+  Playing`. Second, a Stop-restore can teleport a pose in one frame (spun to 90 degrees during
+  Play, back to 0 on Stop); TAA/SSAO/SSR would read that as a large spurious motion, the same
+  problem category as the spin/ghosting bug documented above. A Step has the same character for
+  a smaller reason: it renders the post-step pose immediately, with no smoothing-in. Fixed by
+  folding a one-frame `suppressNextFrameHistory` flag into the existing `suppressTemporalHistory`
+  computation, set by both Stop and Step.
+
+  **Declined, on purpose:** pushing a new "play" context onto `core/input/action_map.h`'s
+  existing context stack, built explicitly to let a future play/edit mode shadow bindings (see
+  its own header comment). There is no gameplay-specific input to put in it until M1.3's entity
+  behavior system exists; the hook stays available for whoever adds the first real gameplay
+  action. Also declined: locking scene-structural editing (gizmo, Add/Delete/Reparent) while
+  Playing/Paused, since snapshot/restore already makes editing during Play safe to discard.
+  Pure UI polish to consider later, not core to the item.
+
+  **Coexistence with a concurrent, independent session's work.** While this shipped, a separate
+  Claude Code session was concurrently building (uncommitted, in the same working tree) a
+  File/Edit/Tools/View/Help main menu bar, scene modals, and native title-bar theming in the
+  same region of `main.cpp`; not this session's work, and not detailed further here. The
+  Playback panel's design accounted for it directly: verified against the vendored
+  `external/imgui/imgui.cpp` (`DockSpaceOverViewport`, around line 20860) that it builds its
+  host window from `viewport->WorkPos`/`WorkSize`, which Dear ImGui already shrinks around any
+  `BeginMainMenuBar()` submitted earlier the same frame. Docking Playback into the existing
+  dockspace therefore composes below a main menu bar automatically, with no coordinate math and
+  no dependency on that other session's exact implementation. Confirmed in the verification
+  screenshot below: the two bars stack cleanly with no overlap.
+
+  **Verified:** clean `cmake --build --preset windows-debug` (a link-step `permission denied`
+  error on the first attempt was a locked `ToonEngine.exe` held by a concurrently-running
+  process, not mine, not killed, simply waited out; unrelated to code correctness). Launch +
+  `PrintWindow` screenshot at 3840x2054 showed the Playback panel docked correctly below the
+  concurrent session's menu bar, `Mode: EDITING`, and the concrete regression-check evidence:
+  the Cube's Inspector-displayed rotation at exactly 0.000/0.000/0.000 on a fresh launch,
+  versus the M1.1 screenshot's same long-running Cube having accumulated to roughly 1268/2536
+  degrees. That is a direct, visible confirmation that nothing simulates until Play is
+  pressed, not an inference. Gracefully closed via `CloseMainWindow()`.
+
+  **Not verified live (same standing limitation as M1.1, no live input desktop here, see the
+  `verify` skill):** actually clicking Play/Pause/Step/Stop and observing the transitions.
+  Established by code reasoning (traced above), not a live click-through.

@@ -136,6 +136,12 @@ target_link_libraries(ToonEngine
         glfw
 )
 
+# Native title-bar theming (core/renderer.cpp's SetTitleBarTheme, via DWM) needs
+# dwmapi.lib. Windows-only, like the icon/RC block above -- Linux/macOS don't build yet.
+if(WIN32)
+    target_link_libraries(ToonEngine PRIVATE dwmapi)
+endif()
+
 # We link the Vulkan engine as a SHARED library, which Diligent loads at runtime
 # via LoadGraphicsEngineVk() (see main.cpp's `#if ENGINE_DLL` path). This define
 # selects that dynamic-load path; copy_required_dlls (below) drops the engine

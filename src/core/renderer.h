@@ -40,6 +40,15 @@ namespace toon {
     // stderr). Call any time after the window is created.
     bool SetWindowIcon(GLFWwindow *window, const char *path);
 
+    // Themes the native title bar to match the ImGui editor instead of the OS's stock
+    // white/light bar: enables Windows' dark window chrome (frame + system buttons), and
+    // on Windows 11 22H2+ sets the exact caption background/text color via DWM (older
+    // Windows just keeps the dark-mode default, no exact color match). `background`/
+    // `text` are 0-1 RGB, e.g. the active theme's MenuBarBg/Text colors. Call once after
+    // the window is created and again whenever the editor theme changes. No-op (returns
+    // false) on non-Windows platforms.
+    bool SetTitleBarTheme(GLFWwindow *window, Color background, Color text);
+
     // --- Scene vocabulary -------------------------------------------------------
     // Plain, backend-agnostic types the engine speaks in. The renderer converts
     // them to Diligent math/resources behind the seam.

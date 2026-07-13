@@ -20,6 +20,24 @@
 #include <GLFW/glfw3native.h>
 #endif
 
+// Title-bar theming (SetTitleBarTheme, below) via DWM. Older Windows SDKs don't declare
+// these DWMWINDOWATTRIBUTE values even though the OS itself has supported them since
+// Windows 10 1809 (dark mode) / Windows 11 22H2 (caption/text color) -- define the
+// numeric values locally so the build doesn't depend on SDK version. DwmSetWindowAttribute
+// takes a plain DWORD, so this is safe whether or not the SDK's own enum already has them.
+#if defined(_WIN32)
+#include <dwmapi.h>
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_TEXT_COLOR
+#define DWMWA_TEXT_COLOR 36
+#endif
+#endif
+
 #include "EngineFactoryVk.h"
 #include "RenderDevice.h"
 #include "DeviceContext.h"
@@ -187,6 +205,39 @@ namespace toon {
         icon.pixels = rgba.data();
         glfwSetWindowIcon(window, 1, &icon);
         return true;
+    }
+
+    // Themes the native title bar to match the ImGui editor (see renderer.h) -- otherwise
+    // it stays the OS's stock white/light bar, clashing with every one of the editor's dark
+    // themes. The dark-mode flag (window frame + system button glyphs) works from Windows 10
+    // 1809 on; the exact caption/text color needs Windows 11 22H2's DWMWA_CAPTION_COLOR/
+    // TEXT_COLOR and is simply ignored (DwmSetWindowAttribute fails, nothing thrown) on older
+    // Windows, which then keeps the OS's own dark-mode gray instead of stock white.
+    bool SetTitleBarTheme(GLFWwindow *window, Color background, Color text) {
+#if defined(_WIN32)
+        if (!window) { return false; }
+        const HWND hwnd = glfwGetWin32Window(window);
+        if (!hwnd) { return false; }
+
+        const BOOL useDarkMode = TRUE;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDarkMode, sizeof(useDarkMode));
+
+        auto toByte = [](float v) {
+            if (v < 0.0f) { v = 0.0f; }
+            if (v > 1.0f) { v = 1.0f; }
+            return static_cast<BYTE>(v * 255.0f + 0.5f);
+        };
+        const COLORREF captionColor = RGB(toByte(background.r), toByte(background.g), toByte(background.b));
+        const COLORREF textColor = RGB(toByte(text.r), toByte(text.g), toByte(text.b));
+        DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &captionColor, sizeof(captionColor));
+        DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &textColor, sizeof(textColor));
+        return true;
+#else
+        (void) window;
+        (void) background;
+        (void) text;
+        return false;
+#endif
     }
 
     // --- Internal formats, GPU-mirror types & PIMPL state -----------------------

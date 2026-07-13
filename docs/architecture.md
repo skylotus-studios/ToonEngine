@@ -227,22 +227,27 @@ Input::BeginFrame()              // snapshot prev state, clear deltas -- BEFORE 
 glfwPollEvents()                 // callbacks accumulate into the freshly-cleared frame
 frameTime = now - lastTime, clamped to <= 0.25s   // spiral-of-death guard (e.g. a window drag stalls glfwPollEvents)
 dt = frameTime                                     // frame-rate concerns below (camera nav) use this
-accumulator += frameTime
 
-// Fixed-timestep sim: decoupled from the render rate above. kFixedDt = 1/60s. Usually one
-// iteration per frame; zero if rendering outruns the sim rate, several if it fell behind.
-while (accumulator >= kFixedDt):
-    SnapshotSimState(scene)          // prevSimTransform = transform, for every transformed entity
-    if (spin) advance spinning entities' rotationEuler by kFixedDt (not dt)
-    accumulator -= kFixedDt
+// Fixed-timestep sim, gated by EditorMode (see "The editor layer" -> "Play / Pause / Step"):
+// only Playing feeds the accumulator from frameTime -- Editing/Paused freeze it. A Step
+// request credits it with exactly one kFixedDt instead, so the loop below drains one tick.
+if (mode == Playing) accumulator += frameTime
+if (stepRequested)   accumulator += kFixedDt
+if (mode == Playing || stepRequested):
+    while (accumulator >= kFixedDt):
+        SnapshotSimState(scene)          // prevSimTransform = transform, for every transformed entity
+        if (spin) advance spinning entities' rotationEuler by kFixedDt (not dt)
+        accumulator -= kFixedDt
 
-alpha = accumulator / kFixedDt       // leftover fraction into the next (not-yet-run) sim tick
+// Outside Playing, alpha is pinned to 1.0: the accumulator isn't draining, so any leftover
+// fraction from a previous Play session is stale and must not blend a paused/edited pose against it.
+alpha = (mode == Playing) ? accumulator / kFixedDt : 1.0
 UpdateWorldTransforms(scene, alpha)  // snapshots prevWorldMatrix, then composes local * parentWorld
                                       // from lerp(prevSimTransform, transform, alpha) per entity
 
 // Editor camera: gate on ImGui capture OR an active gizmo drag, then navigate
 Input::SetCaptured(io.WantCaptureMouse || gizmoActive, io.WantCaptureKeyboard)
-suppressTemporalHistory = gizmoActive || ImGui::IsAnyItemActive() || spin
+suppressTemporalHistory = gizmoActive || ImGui::IsAnyItemActive() || spin || suppressNextFrameHistory
   right-drag  -> CameraOrbit (+ WASD/QE fly via the "camera.fly.*" action map)
   middle-drag -> CameraPan
   scroll      -> CameraZoom
@@ -273,7 +278,11 @@ renderer.EndScene()              // PostFX chain + exposure + tone map -> back b
 
 renderer.BeginUI()               // ImGui::NewFrame
 ImGuizmo::BeginFrame()
-  gizmo hotkeys (W/E/R/X), dockspace,
+  gizmo hotkeys (W/E/R/X),
+  a main menu bar (File/Edit/Tools/View/Help),
+  dockspace,
+  Playback panel (Play/Pause toggle, Step, Stop, a Mode status label -- see "The editor
+    layer" -> "Play / Pause / Step" below),
   Scene Hierarchy panel (select / add-child / duplicate / delete / drag-drop reparent
     -- records structural ops mid-iteration, applies them AFTER the loop, since a
     mutation reorders the entity vector and invalidates in-flight indices),
@@ -483,8 +492,10 @@ matrix (row 2), falling back to a fixed default if the scene has none.
 `local` comes from `LocalFromTransform` fed a pose **interpolated** between `prevSimTransform` and
 `transform` by `alpha` (row-vector convention; the parent's world is already known because parents
 precede children). `alpha` is the fixed-timestep accumulator's leftover fraction into the next sim
-tick; the default `alpha = 1.0` renders the current tick exactly, for callers outside the main loop
-(e.g. right after a scene load). `prevSimTransform` starts `nullopt` and is populated by
+tick while Playing; the default `alpha = 1.0` renders the current tick exactly, which the main
+loop itself now passes explicitly whenever `EditorMode` isn't Playing (see "The editor layer" ->
+"Play / Pause / Step" below), not only for callers entirely outside the loop (e.g. right after a
+scene load). `prevSimTransform` starts `nullopt` and is populated by
 `SnapshotSimState` at the top of each fixed step, so a fresh or just-loaded entity interpolates
 `transform` with itself: no spurious motion. The gizmo write-back path runs the inverse:
 `SetEntityWorldMatrix` folds out the parent's world (`world * parent⁻¹`) and decomposes the result
@@ -564,6 +575,31 @@ double-clicked this frame; it has no notion of what a `.scene` file means, so `m
 that. `ui/thumbnail_cache.h`'s `ThumbnailCache` decodes an image to a texture once per path via
 `Renderer::LoadTexture`, and remembers failures too, so a bad file is only ever attempted once.
 
+### Play / Pause / Step
+
+`EditorMode` (`main.cpp`, anonymous namespace, alongside `Theme`) is `Editing`, `Playing`, or
+`Paused`, driving the fixed-timestep gating described in "The frame loop" above. A "Playback"
+panel (Play/Pause toggle, Step, Stop, a `Mode: EDITING/PLAYING/PAUSED` status label) docks as a
+thin strip at the top of the main dockspace, one more `DockBuilderSplitNode` alongside the
+existing panel splits, not a new positioning mechanism.
+
+Pressing Play snapshots `scene` into a `sceneBackup` (a plain `Scene` copy: a `vector<Entity>`
+plus an `int`, with no manual resource ownership to duplicate, since mesh/model are handles the
+`Renderer` owns) and switches to Playing. Pressing Stop always restores `scene = sceneBackup`
+and switches back to Editing, discarding whatever happened during Play, the same
+disposable-sandbox convention Unity, Godot, and Unreal all use. This is deliberately the safety
+net for the entity behavior system (M1.3) and physics (M2) still to come: testing gameplay
+should never risk permanently scrambling a hand-placed scene. Step credits the accumulator with
+exactly one `kFixedDt` (starting a Play session first, landing in Paused, if pressed from
+Editing) so the existing fixed-step `while` loop drains exactly one tick, with no separate
+single-step code path.
+
+A Stop-restore or a Step both cause a one-frame pose jump rather than smooth motion (a spun
+transform snapping back on Stop; a whole tick advancing at once with no interpolation smoothing
+it in on Step), so both set `suppressNextFrameHistory`, folded into `suppressTemporalHistory`
+the next frame alongside the existing gizmo-drag/edited-widget/`spin` cases (see "The
+motion-history chain" below).
+
 ## Data flow and ownership
 
 ### Ownership
@@ -618,7 +654,9 @@ in the same order every frame:
    during rotation. The pixel shader writes `Motion = ComputeMotion(CurrClip, PrevClip) =
    currNDC - prevNDC` into the RG16F motion target.
 6. `main.cpp` sets `PostParams::suppressTemporalHistory` whenever a gizmo is active, an ImGui
-   item is being edited, or the demo's Spin toggle is on. `RunPostFX` then forces
+   item is being edited, the demo's Spin toggle is on, or a Stop-restore/Step just happened
+   (see "The editor layer" -> "Play / Pause / Step" above -- both are a one-frame pose jump,
+   not smooth motion). `RunPostFX` then forces
    `ResetAccumulation` on SSAO and TAA — the fix for a documented ghosting bug where a slowly
    spinning silhouette's view-dependent contour slipped under DiligentFX's own compiled-in
    motion-distrust threshold (see MEMORY.md's "Bugs found dogfooding" for the full
@@ -684,7 +722,9 @@ audio needs to touch the renderer directly. The first of these, the fixed-timest
 was a scoped choice for this item, not a pattern to assume for what's next: an entity-behavior
 system would most naturally add an `Update`-style hook to `Entity` and a call inside the
 fixed-step loop (before `UpdateWorldTransforms`, alongside where the spin animation advances
-today); physics would own its own body/collider handles (its own small seam, following the same
+today, inheriting that loop's `EditorMode` gate for free -- see "The editor layer" -> "Play /
+Pause / Step" -- so a behavior hook only ever runs while Playing, never during Editing or
+Paused); physics would own its own body/collider handles (its own small seam, following the same
 opaque-handle pattern `renderer.h` uses), step inside that same fixed-step loop (physics engines
 assume a fixed tick), and write results back into entity transforms each fixed step. Either would
 plausibly be the second consumer that justifies extracting a shared `core/sim_clock`-style module

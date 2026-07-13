@@ -269,7 +269,7 @@ namespace {
     // Reset the style to ImGui's defaults, apply the selected theme, then scale every size to
     // the display's DPI (the themes' pixel metrics are authored at 1x). Colors a theme leaves
     // unset keep ImGui's dark defaults.
-    void ApplyTheme(Theme t, float dpiScale) {
+    void ApplyTheme(Theme t, float dpiScale, GLFWwindow *window) {
         ImGui::GetStyle() = ImGuiStyle();
         switch (t) {
             case Theme::AmberYellow:
@@ -286,7 +286,19 @@ namespace {
         }
         ImGui::GetStyle().WindowMenuButtonPosition = ImGuiDir_None;
         if (dpiScale > 1.0f) { ImGui::GetStyle().ScaleAllSizes(dpiScale); }
+
+        // Carry the theme into the native title bar (see SetTitleBarTheme) so the OS chrome
+        // reads as a continuation of the main menu bar directly below it, instead of the
+        // stock white bar every theme here otherwise clashes with.
+        const ImVec4 &menuBarBg = ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg];
+        const ImVec4 &text = ImGui::GetStyle().Colors[ImGuiCol_Text];
+        toon::SetTitleBarTheme(window, {menuBarBg.x, menuBarBg.y, menuBarBg.z}, {text.x, text.y, text.z});
     }
+
+    // Editor vs. simulation state (M1.2): Editing poses the scene with nothing ticking;
+    // Playing runs the fixed-timestep sim from main()'s loop; Paused freezes it without
+    // discarding progress. See the "Playback" panel below for the Play/Step/Stop transitions.
+    enum class EditorMode { Editing, Playing, Paused };
 } // namespace
 
 int main() {
@@ -360,7 +372,7 @@ int main() {
     ImGui::GetIO().Fonts->AddFontFromFileTTF(TOON_FONTS_DIR "/BaiJamjuree-Medium.ttf", 18.0f * uiScale);
 
     Theme uiTheme = Theme::AmberYellow;
-    ApplyTheme(uiTheme, uiScale);
+    ApplyTheme(uiTheme, uiScale, window);
 
     // Transform-gizmo state (ImGuizmo): which handle is active + local/world space.
     ImGuizmo::OPERATION gizmoOp = ImGuizmo::TRANSLATE;
@@ -503,6 +515,18 @@ int main() {
         }
     };
 
+    // File menu's "New Scene": drop every entity (GPU mesh/model handles stay alive but
+    // unreferenced until Shutdown, same as a LoadScene replacing the vector -- see
+    // core/scene.h's DestroyScene), then restore just the root for an empty-but-valid tree.
+    auto newScene = [&]() {
+        toon::DestroyScene(scene);
+        toon::EnsureSceneRoot(scene);
+        spinners.clear();
+        scene.selected = -1;
+        camera = cameraDefault;
+        sceneStatus = "New scene.";
+    };
+
     // Asset browser: browses assets/ with thumbnails; passive besides double-click, which
     // this routes through loadScene when the activated file is a .scene.
     toon::FileBrowser assetBrowser;
@@ -512,6 +536,21 @@ int main() {
 #ifdef IMGUI_HAS_DOCK
     bool dockLayoutBuilt = false;
 #endif
+
+    // Editor menu bar state: which panels are open (View menu checkboxes, and each panel's
+    // own close button both write these) and which modal the File/Help menus queued this
+    // frame (OpenPopup runs after EndMainMenuBar, below, at the same ID-stack depth
+    // BeginPopupModal reads from -- calling it while still nested in the menu's own ID
+    // stack would open a popup BeginPopupModal here never matches).
+    bool showHierarchy = true;
+    bool showInspector = true;
+    bool showDebug = true;
+    bool showAssetBrowser = true;
+    bool showPlayback = true;
+    bool openScenePopupRequested = false;
+    bool saveScenePopupRequested = false;
+    bool aboutPopupRequested = false;
+
     double lastTime = glfwGetTime();
 
     // Fixed-timestep simulation clock (M1.1): gameplay state advances in fixed kFixedDt steps,
@@ -519,6 +558,17 @@ int main() {
     // comments for the why). `accumulator` carries leftover sim time between frames.
     constexpr double kFixedDt = 1.0 / 60.0; // simulation rate: 60 Hz
     double accumulator = 0.0;
+
+    // Play/Pause/Step/Stop state (M1.2). sceneBackup is the snapshot taken when Play starts
+    // and wholesale-restored on Stop -- Scene's implicit copy (a vector<Entity> + an int, no
+    // manual resource ownership) is the entire mechanism, no serialization needed. The other
+    // two flags cross the frame boundary once: stepRequested is consumed at the top of the
+    // NEXT frame's accumulator gating; suppressNextFrameHistory is folded into that frame's
+    // suppressTemporalHistory (a Stop-restore or a Step is a pose jump, not smooth motion).
+    EditorMode mode = EditorMode::Editing;
+    toon::Scene sceneBackup;
+    bool stepRequested = false;
+    bool suppressNextFrameHistory = false;
 
     const toon::Color clearColor{0.10f, 0.11f, 0.13f, 1.0f};
     while (!glfwWindowShouldClose(window)) {
@@ -544,29 +594,40 @@ int main() {
         // variable frame rate above, so gameplay state (spin today; entity Update hooks /
         // physics later -- see CLAUDE.md's roadmap) evolves deterministically. Usually one step
         // per frame; zero if rendering outruns the sim rate, several if the sim fell behind.
-        accumulator += frameTime;
-        while (accumulator >= kFixedDt) {
-            // Snapshot BEFORE integrating, so UpdateWorldTransforms below can interpolate the
-            // render pose across the tick this step just produced.
-            toon::SnapshotSimState(scene);
+        // M1.2: only Playing feeds the accumulator from wall-clock time -- Editing/Paused freeze
+        // it so no time debt piles up while stopped. Step (from the "Playback" panel, below)
+        // credits it with exactly one kFixedDt instead, so the SAME while loop below drains
+        // exactly one iteration, no separate single-step code path needed.
+        const bool runFixedStepsThisFrame = (mode == EditorMode::Playing) || stepRequested;
+        if (mode == EditorMode::Playing) { accumulator += frameTime; }
+        if (stepRequested) {
+            accumulator += kFixedDt;
+            stepRequested = false; // consumed
+        }
+        if (runFixedStepsThisFrame) {
+            while (accumulator >= kFixedDt) {
+                // Snapshot BEFORE integrating, so UpdateWorldTransforms below can interpolate the
+                // render pose across the tick this step just produced.
+                toon::SnapshotSimState(scene);
 
-            // Animate the spinning entities' local rotation incrementally (added to whatever
-            // rotationEuler currently is) -- the stand-in for a future per-entity Update hook.
-            // Incremental rather than an absolute axis*sharedClock formula so a gizmo-set
-            // orientation (set while paused) is the new baseline spin continues from on resume,
-            // instead of the whole spin group snapping back to where a shared clock says it
-            // "should" be.
-            if (spin) {
-                constexpr float kSpinRate = 0.6f; // radians/sec
-                for (const Spinner &s : spinners) {
-                    if (scene.entities[s.entity].transform) {
-                        scene.entities[s.entity].transform->rotationEuler =
-                            scene.entities[s.entity].transform->rotationEuler +
-                            s.axis * static_cast<float>(kFixedDt * kSpinRate);
+                // Animate the spinning entities' local rotation incrementally (added to whatever
+                // rotationEuler currently is) -- the stand-in for a future per-entity Update hook.
+                // Incremental rather than an absolute axis*sharedClock formula so a gizmo-set
+                // orientation (set while paused) is the new baseline spin continues from on resume,
+                // instead of the whole spin group snapping back to where a shared clock says it
+                // "should" be.
+                if (spin) {
+                    constexpr float kSpinRate = 0.6f; // radians/sec
+                    for (const Spinner &s : spinners) {
+                        if (scene.entities[s.entity].transform) {
+                            scene.entities[s.entity].transform->rotationEuler =
+                                scene.entities[s.entity].transform->rotationEuler +
+                                s.axis * static_cast<float>(kFixedDt * kSpinRate);
+                        }
                     }
                 }
+                accumulator -= kFixedDt;
             }
-            accumulator -= kFixedDt;
         }
 
         // Compose the hierarchy's world matrices (parents before children), rendering each
@@ -574,8 +635,12 @@ int main() {
         // `accumulator` has drifted into the next one -- smooth motion even when the display's
         // refresh rate doesn't match the fixed sim rate. Motion vectors come from the cached
         // previous world matrices (see UpdateWorldTransforms), so no separate prev-angle
-        // bookkeeping is needed here.
-        const float alpha = static_cast<float>(accumulator / kFixedDt);
+        // bookkeeping is needed here. Outside Playing (Editing/Paused), alpha is pinned to 1.0
+        // -- accumulator isn't draining, so any interpolation fraction left over from the last
+        // Play session is stale; rendering the exact current tick avoids blending a paused/
+        // edited pose against that stale leftover.
+        const float alpha =
+            (mode == EditorMode::Playing) ? static_cast<float>(accumulator / kFixedDt) : 1.0f;
         toon::UpdateWorldTransforms(scene, alpha);
 
         // Editor camera: poll input, gate on ImGui's capture (last frame's UI state), then
@@ -586,9 +651,12 @@ int main() {
         const bool gizmoActive = ImGuizmo::IsUsing();
         toon::Input::SetCaptured(io.WantCaptureMouse || gizmoActive, io.WantCaptureKeyboard);
         // Feeds PostParams::suppressTemporalHistory (see its comment): an active gizmo
-        // drag, any ImGui widget being edited, OR Spin continuously animating all mean
+        // drag, any ImGui widget being edited, Spin continuously animating, or a Stop-restore/
+        // Step from the Playback panel last frame (a pose jump, not smooth motion) all mean
         // post-fx temporal history shouldn't be trusted this frame.
-        const bool suppressTemporalHistory = gizmoActive || ImGui::IsAnyItemActive() || spin;
+        const bool suppressTemporalHistory =
+            gizmoActive || ImGui::IsAnyItemActive() || spin || suppressNextFrameHistory;
+        suppressNextFrameHistory = false; // consumed -- only suppresses the one frame right after
         {
             using M = toon::Input::MouseButton;
             float mdx = 0.0f, mdy = 0.0f;
@@ -704,10 +772,131 @@ int main() {
             }
         }
 
+        // --- Main menu bar: File / Edit / Tools / View / Help ---------------------------
+        // Mirrors capabilities that already exist elsewhere (the Debug panel's Save/Load
+        // and Reset camera, the hierarchy's right-click ops, the Inspector's gizmo controls)
+        // under the menu layout a desktop editor is expected to have. Actions needing a path
+        // just queue a modal (opened below, outside the menu) instead of running inline.
+        if (ImGui::BeginMainMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("New Scene")) { newScene(); }
+                if (ImGui::MenuItem("Open Scene...")) { openScenePopupRequested = true; }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Save Scene")) {
+                    sceneStatus =
+                        toon::SaveScene(scenePathBuf, scene, camera) ? "Saved." : "Save failed (see console).";
+                }
+                if (ImGui::MenuItem("Save Scene As...")) { saveScenePopupRequested = true; }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Exit")) { glfwSetWindowShouldClose(window, GLFW_TRUE); }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Edit")) {
+                if (ImGui::MenuItem("Add Entity")) { scene.selected = toon::AddChildEntity(scene, 0, "Entity"); }
+                const bool hasSelection = scene.selected > 0 && scene.selected < static_cast<int>(scene.entities.size());
+                if (ImGui::MenuItem("Duplicate Entity", nullptr, false, hasSelection)) {
+                    const int d = toon::DuplicateEntity(scene, scene.selected);
+                    if (d >= 0) { scene.selected = d; }
+                }
+                if (ImGui::MenuItem("Delete Entity", nullptr, false, hasSelection)) {
+                    toon::DeleteEntity(scene, scene.selected);
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Deselect", nullptr, false, scene.selected >= 0)) { scene.selected = -1; }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Tools")) {
+                if (ImGui::MenuItem("Move", "W", gizmoOp == ImGuizmo::TRANSLATE)) { gizmoOp = ImGuizmo::TRANSLATE; }
+                if (ImGui::MenuItem("Rotate", "E", gizmoOp == ImGuizmo::ROTATE)) { gizmoOp = ImGuizmo::ROTATE; }
+                if (ImGui::MenuItem("Scale", "R", gizmoOp == ImGuizmo::SCALE)) { gizmoOp = ImGuizmo::SCALE; }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Local Space", "X", gizmoMode == ImGuizmo::LOCAL)) {
+                    gizmoMode = (gizmoMode == ImGuizmo::LOCAL) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+                }
+                ImGui::Separator();
+                ImGui::MenuItem("Spin", nullptr, &spin);
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("View")) {
+                ImGui::MenuItem("Playback", nullptr, &showPlayback);
+                ImGui::MenuItem("Scene Hierarchy", nullptr, &showHierarchy);
+                ImGui::MenuItem("Inspector", nullptr, &showInspector);
+                ImGui::MenuItem("ToonEngine Debug", nullptr, &showDebug);
+                ImGui::MenuItem("Asset Browser", nullptr, &showAssetBrowser);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Reset Camera")) { camera = cameraDefault; }
+                ImGui::Separator();
+                if (ImGui::BeginMenu("Theme")) {
+                    for (int i = 0; i < static_cast<int>(Theme::Count); ++i) {
+                        const Theme t = static_cast<Theme>(i);
+                        if (ImGui::MenuItem(ThemeName(t), nullptr, t == uiTheme)) {
+                            uiTheme = t;
+                            ApplyTheme(uiTheme, uiScale, window);
+                        }
+                    }
+                    ImGui::EndMenu();
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Help")) {
+                if (ImGui::MenuItem("About ToonEngine")) { aboutPopupRequested = true; }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMainMenuBar();
+        }
+
+        // Modals queued by the menu above. OpenPopup runs here, at the same ID-stack depth
+        // BeginPopupModal below reads from -- see the comment on the request bools' declaration.
+        if (openScenePopupRequested) {
+            ImGui::OpenPopup("Open Scene");
+            openScenePopupRequested = false;
+        }
+        if (saveScenePopupRequested) {
+            ImGui::OpenPopup("Save Scene As");
+            saveScenePopupRequested = false;
+        }
+        if (aboutPopupRequested) {
+            ImGui::OpenPopup("About ToonEngine");
+            aboutPopupRequested = false;
+        }
+
+        if (ImGui::BeginPopupModal("Open Scene", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::InputText("Path", scenePathBuf, sizeof(scenePathBuf));
+            if (ImGui::Button("Open")) {
+                loadScene(scenePathBuf);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) { ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopupModal("Save Scene As", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::InputText("Path", scenePathBuf, sizeof(scenePathBuf));
+            if (ImGui::Button("Save")) {
+                sceneStatus =
+                    toon::SaveScene(scenePathBuf, scene, camera) ? "Saved." : "Save failed (see console).";
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) { ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopupModal("About ToonEngine", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("ToonEngine");
+            ImGui::TextDisabled("A from-scratch, cross-platform toon-shaded game engine.");
+            ImGui::Separator();
+            ImGui::Text("Built on Diligent Engine (Vulkan) + GLFW + Dear ImGui.");
+            if (ImGui::Button("Close")) { ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
+        }
+
 #ifdef IMGUI_HAS_DOCK
         // Full-window dock space with a see-through center so the scene shows
-        // through; panels dock around it. Build the default layout (debug panel
-        // docked left) once — after that, whatever the user arranges sticks.
+        // through; panels dock around it. Build the default layout once — after that,
+        // whatever the user arranges sticks. DockSpaceOverViewport reads the main viewport's
+        // WorkPos/WorkSize, which Dear ImGui already shrinks around the main menu bar above
+        // (BeginMainMenuBar, submitted earlier this frame) — so this whole dockspace, Playback
+        // strip included, composes below it automatically; no coordinate math needed here.
         const ImGuiID dockspaceId =
             ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
         if (!dockLayoutBuilt) {
@@ -715,14 +904,18 @@ int main() {
             ImGui::DockBuilderRemoveNode(dockspaceId);
             ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
-            // Hierarchy on the far left; Inspector (top) + Debug (bottom) stacked on the
-            // right; Asset Browser along the bottom of what's left; the 3D scene shows
-            // through the remaining pass-through center.
+            // A thin Playback strip across the very top (M1.2); Hierarchy on the far left;
+            // Inspector (top) + Debug (bottom) stacked on the right; Asset Browser along the
+            // bottom of what's left; the 3D scene shows through the remaining pass-through
+            // center. The top split runs FIRST so every other split operates on the region
+            // already below it.
             ImGuiID centerId = dockspaceId;
+            const ImGuiID playbackId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Up, 0.06f, nullptr, &centerId);
             const ImGuiID leftId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, 0.20f, nullptr, &centerId);
             ImGuiID rightId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.34f, nullptr, &centerId);
             const ImGuiID rightTopId = ImGui::DockBuilderSplitNode(rightId, ImGuiDir_Up, 0.55f, nullptr, &rightId);
             const ImGuiID bottomId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.28f, nullptr, &centerId);
+            ImGui::DockBuilderDockWindow("Playback", playbackId);
             ImGui::DockBuilderDockWindow("Scene Hierarchy", leftId);
             ImGui::DockBuilderDockWindow("Inspector", rightTopId);
             ImGui::DockBuilderDockWindow("ToonEngine Debug", rightId);
@@ -730,6 +923,61 @@ int main() {
             ImGui::DockBuilderFinish(dockspaceId);
         }
 #endif
+
+        // --- Playback: Play / Pause / Step / Stop for the fixed-timestep sim (M1.2) -----
+        // Docked as the thin top strip set up above. Editing (default): nothing simulates.
+        // Playing: today's M1.1 accumulator runs. Paused: frozen mid-play, scene stays put.
+        // Stop always restores sceneBackup -- Play is a disposable sandbox, never a permanent
+        // edit, which is what makes testing future gameplay/physics safe to experiment with.
+        // playbackOpen captures the pre-Begin value: Begin(..., &showPlayback) may flip
+        // showPlayback to false itself (the window's own close button), but Begin was still
+        // CALLED this frame whenever we entered here, so End() below must still be paired
+        // against that, not against showPlayback's possibly-just-changed value (same reasoning
+        // the other panels below use for their own hierarchyOpen/inspectorOpen/debugOpen).
+        const bool playbackOpen = showPlayback;
+        if (playbackOpen &&
+            ImGui::Begin("Playback", &showPlayback,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            const bool isPlaying = (mode == EditorMode::Playing);
+            if (ImGui::Button(isPlaying ? "Pause" : "Play")) {
+                if (mode == EditorMode::Editing) {
+                    sceneBackup = scene; // snapshot: Stop restores exactly this
+                    mode = EditorMode::Playing;
+                    accumulator = 0.0;
+                } else if (mode == EditorMode::Playing) {
+                    mode = EditorMode::Paused;
+                } else { // Paused -> resume
+                    mode = EditorMode::Playing;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(isPlaying); // stepping while already continuously ticking isn't meaningful
+            if (ImGui::Button("Step")) {
+                if (mode == EditorMode::Editing) {
+                    sceneBackup = scene;
+                    mode = EditorMode::Paused; // step lands paused, not playing
+                    accumulator = 0.0;
+                }
+                stepRequested = true;
+                suppressNextFrameHistory = true; // one tick's worth of pose jump, not smooth motion
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(mode == EditorMode::Editing); // nothing to stop yet
+            if (ImGui::Button("Stop")) {
+                scene = sceneBackup; // discard everything Play did -- see the panel comment above
+                spinners.clear();    // wholesale restore invalidates cached indices, same reason loadScene clears it
+                mode = EditorMode::Editing;
+                accumulator = 0.0;
+                suppressNextFrameHistory = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("Mode: %s", mode == EditorMode::Editing    ? "EDITING"
+                                             : mode == EditorMode::Playing ? "PLAYING"
+                                                                            : "PAUSED");
+        }
+        if (playbackOpen) { ImGui::End(); }
 
         // --- Scene Hierarchy: select / add / duplicate / delete / drag-drop reparent -----
         // A flat list over scene.entities (parents always precede children), indented by
@@ -742,7 +990,12 @@ int main() {
         int dropSrc = -1, dropDst = -1;
         DropKind dropKind = DropKind::Child;
 
-        if (ImGui::Begin("Scene Hierarchy")) {
+        // hierarchyOpen captures the pre-Begin value: Begin(..., &showHierarchy) may flip
+        // showHierarchy to false itself (the window's own close button), but Begin was still
+        // CALLED this frame whenever we entered here, so End() below must still be paired
+        // against that, not against showHierarchy's possibly-just-changed value.
+        const bool hierarchyOpen = showHierarchy;
+        if (hierarchyOpen && ImGui::Begin("Scene Hierarchy", &showHierarchy)) {
             const int n = static_cast<int>(scene.entities.size());
             for (int i = 0; i < n; ++i) {
                 const toon::Entity &e = scene.entities[i];
@@ -812,7 +1065,7 @@ int main() {
                 ImGui::PopID();
             }
         }
-        ImGui::End();
+        if (hierarchyOpen) { ImGui::End(); }
 
         // Apply the one recorded structural op, then the drag-drop — indices are stable now.
         switch (pendingOp) {
@@ -838,7 +1091,8 @@ int main() {
         }
 
         // --- Inspector: edit the selected entity (name / transform / material) -----------
-        if (ImGui::Begin("Inspector")) {
+        const bool inspectorOpen = showInspector; // see hierarchyOpen's comment above
+        if (inspectorOpen && ImGui::Begin("Inspector", &showInspector)) {
             if (scene.selected < 0 || scene.selected >= static_cast<int>(scene.entities.size())) {
                 ImGui::TextDisabled("Select an entity in the hierarchy.");
             } else {
@@ -911,7 +1165,7 @@ int main() {
                 }
             }
         }
-        ImGui::End();
+        if (inspectorOpen) { ImGui::End(); }
 
         // --- Transform gizmo over the scene (ImGuizmo) -----------------------------------
         // Manipulate the selected entity's world matrix; on edit, fold the parent back out and
@@ -938,7 +1192,8 @@ int main() {
             }
         }
 
-        if (ImGui::Begin("ToonEngine Debug")) {
+        const bool debugOpen = showDebug; // see hierarchyOpen's comment above
+        if (debugOpen && ImGui::Begin("ToonEngine Debug", &showDebug)) {
             ImGui::Text("%.1f FPS (%.3f ms/frame)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
 
             ImGui::SeparatorText("Editor");
@@ -947,7 +1202,7 @@ int main() {
                     const Theme t = static_cast<Theme>(i);
                     if (ImGui::Selectable(ThemeName(t), t == uiTheme)) {
                         uiTheme = t;
-                        ApplyTheme(uiTheme, uiScale);
+                        ApplyTheme(uiTheme, uiScale, window);
                     }
                 }
                 ImGui::EndCombo();
@@ -1012,13 +1267,17 @@ int main() {
             ImGui::Checkbox("SSR (reflections in the ground)", &post.ssr);
             if (post.ssr) { ImGui::SliderFloat("Reflection strength", &post.ssrStrength, 0.0f, 1.5f); }
         }
-        ImGui::End();
+        if (debugOpen) { ImGui::End(); }
 
         // Asset browser: passive navigation/preview, except a double-clicked .scene file,
         // which loads through the same path as the Debug panel's button (see loadScene).
-        if (const std::string activated = assetBrowser.Render(renderer);
-            !activated.empty() && std::filesystem::path(activated).extension() == ".scene") {
-            loadScene(activated.c_str());
+        // FileBrowser::Render owns its Begin/End internally (no p_open param), so unlike the
+        // three panels above, hiding it via the View menu has no in-panel close button.
+        if (showAssetBrowser) {
+            if (const std::string activated = assetBrowser.Render(renderer);
+                !activated.empty() && std::filesystem::path(activated).extension() == ".scene") {
+                loadScene(activated.c_str());
+            }
         }
 
         renderer.EndUI();

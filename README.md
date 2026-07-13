@@ -30,6 +30,10 @@ panels](docs/screenshots/editor-overview.png)
 - Real scene graph: an entity tree with hierarchy-composed world transforms, parent/child
   relationships, and world-preserving reparenting, so dragging an object under a new parent
   doesn't move it in world space.
+- Play / Pause / Step simulation control on a fixed 60 Hz sim tick, decoupled from and
+  interpolated into the render rate: an explicit editing-vs-playing mode with a
+  snapshot-and-restore sandbox, so testing gameplay never permanently alters a hand-placed
+  scene.
 - Scene serialization: save/load the full hierarchy, transforms, materials, and lighting to
   a human-readable text file. Procedural geometry round-trips from its generator parameters
   (radius, segment counts), not baked mesh data, so a saved scene has no binary blobs.
