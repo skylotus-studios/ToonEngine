@@ -45,6 +45,22 @@
 #include "TemporalAntiAliasing.hpp"
 #include "ScreenSpaceReflection.hpp"
 
+// Cascaded shadow maps: DiligentFX's ShadowMapManager component (see the #include further
+// down, after the HLSL mirror-struct block below -- ShadowMapManager.hpp does its own
+// "namespace Diligent { #include BasicStructures.fxh ... }" internally, unnested, unlike
+// this file's namespace Diligent::HLSL wrapper that PostFXContext.hpp/Bloom.hpp/etc. all
+// expect; BasicStructures.fxh's include guard means whichever inclusion runs FIRST wins for
+// this whole translation unit, so ShadowMapManager.hpp must come after ours, not before).
+// ShaderSourceFactoryUtils' CreateCompoundShaderSourceFactory + DiligentFXShaderSourceStreamFactory
+// let our own toon shaders #include DiligentFX's shared Shadows.fxh/BasicStructures.fxh (see
+// Renderer::Init) -- those live embedded in the DiligentFX lib, not under assets/shaders, so
+// our own shader factory alone can't see them.
+#include "ShaderSourceFactoryUtils.hpp"
+// Utilities/ doesn't add its own public include dir (unlike Components/, PostProcess/*),
+// only the DiligentFX root does (target_include_directories(DiligentFX PUBLIC .) in its
+// top-level CMakeLists.txt) -- so this one needs the path relative to that root.
+#include "Utilities/interface/DiligentFXShaderSourceStreamFactory.hpp"
+
 // DiligentTools asset loading: the glTF/GLB loader (Diligent::GLTF::Model owns the
 // vertex/index buffers + textures). Self-contained in DiligentTools — no DiligentFX /
 // PBR renderer needed (we cel-shade with our own PSO).
@@ -91,6 +107,24 @@ namespace Diligent {
 #include "Shaders/PostProcess/ScreenSpaceReflection/public/ScreenSpaceReflectionStructures.fxh"
     } // namespace HLSL
 } // namespace Diligent
+
+// ShadowMapManager.hpp/.cpp (external/DiligentFX/Components) wrap BasicStructures.fxh in
+// plain "namespace Diligent { ... }", unnested -- unlike the PostProcess/Common family
+// above, which all forward-declare/expect Diligent::HLSL::CameraAttribs (see PostFXContext.hpp).
+// Both conventions are needed in this one translation unit, but BasicStructures.fxh's own
+// #include guard makes a second, unmodified #include a no-op: a using-directive bridge
+// isn't enough here (tried first) -- ShadowMapManager.cpp is a SEPARATE translation unit
+// that always resolves ShadowMapAttribs to bare Diligent::ShadowMapAttribs when IT compiles
+// DistributeCascades, so our call site must match that exact (mangled) type, not merely be
+// able to *find* the nested one under a different name. Force a second, independent
+// expansion of the header at bare Diligent:: scope via #undef, so our declaration and the
+// library's actual compiled symbol agree.
+#undef _BASIC_STRUCTURES_FXH_
+namespace Diligent {
+#include "Shaders/Common/public/BasicStructures.fxh"
+} // namespace Diligent
+
+#include "ShadowMapManager.hpp"
 
 namespace toon {
 
@@ -164,6 +198,11 @@ namespace toon {
     static constexpr TEXTURE_FORMAT kNormalFormat = TEX_FORMAT_RGBA16_FLOAT;
     static constexpr TEXTURE_FORMAT kMotionFormat = TEX_FORMAT_RG16_FLOAT; // NDC motion (SSAO temporal/DoF)
     static constexpr TEXTURE_FORMAT kSceneDepthFormat = TEX_FORMAT_D32_FLOAT;
+
+    // Cascaded shadow maps: fixed at Init (unlike the window-sized offscreen targets, the
+    // shadow map atlas doesn't need to resize with the swap chain).
+    static constexpr Uint32 kShadowCascades = 4;
+    static constexpr Uint32 kShadowResolution = 2048;
 
     // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
     // (five row-major float4x4 rows + five float4 rows = 400 bytes, 16-aligned).
@@ -258,6 +297,26 @@ namespace toon {
         RefCntAutoPtr<ITexture> aoWhite;       // 1x1 white = "fully visible" default
         RefCntAutoPtr<ITexture> ssrBlack;      // 1x1 black = "no reflection" default
         RefCntAutoPtr<ITexture> modelWhite;    // 1x1 white 2D-ARRAY = untextured model albedo
+
+        // Cascaded shadow maps (Diligent's ShadowMapManager) -- a forward-rendering
+        // technique, not a PostFXContext effect: rendered before BeginFrame, into its own
+        // depth-only cascade targets, then sampled by the main fill PSOs (toon_fill.hlsl /
+        // model_fill.hlsl's ComputeShadowFactor). See Renderer::BeginShadowPass.
+        ShadowMapManager shadowMap;
+        // Bare (not HLSL::-nested): ShadowMapManager.cpp is a separate translation unit
+        // that always resolves this to plain Diligent::ShadowMapAttribs -- see the #undef
+        // block near the top of this file for why that's a hard requirement, not a style
+        // choice.
+        ShadowMapAttribs shadowMapAttribs{}; // filled by DistributeCascades each frame
+        RefCntAutoPtr<IBuffer> shadowAttribsCB;    // uploaded once/frame; read by the fill PSOs
+        RefCntAutoPtr<IBuffer> shadowDrawConstants; // per-draw light-space WVP (shadow pass only)
+        RefCntAutoPtr<IPipelineState> shadowPSO;         // depth-only, procedural mesh layout
+        RefCntAutoPtr<IShaderResourceBinding> shadowSRB;
+        RefCntAutoPtr<IPipelineState> modelShadowPSO; // depth-only, glTF model layout
+        RefCntAutoPtr<IShaderResourceBinding> modelShadowSRB;
+        RefCntAutoPtr<ISampler> shadowSampler; // comparison sampler for g_ShadowMap_sampler
+        Uint32 currentShadowCascade = 0;       // set by BeginShadowCascade, read by DrawMeshShadow/DrawModelShadow
+
         HLSL::CameraAttribs postCamera{};
         // Last frame's postCamera -- a REAL previous-camera snapshot for PostFXContext
         // (see RunPostFX). Without this, PostFXContext's own camera-matrix-based
@@ -515,10 +574,16 @@ namespace toon {
         return nw;
     }
 
-    // Compile one HLSL shader stage from the shaders directory.
+    // Compile one HLSL shader stage from the shaders directory. `compileFlags` defaults to
+    // none; toon_fill.hlsl/model_fill.hlsl's shaders pass PACK_MATRIX_ROW_MAJOR (see
+    // Renderer::CreateToonPipeline) because DiligentFX's ShadowMapAttribs/CascadeAttribs
+    // (Shaders/Common/public/BasicStructures.fxh) declare their float4x4 fields with no
+    // explicit row_major/column_major keyword -- unlike our own Constants cbuffer, which
+    // marks every matrix row_major explicitly and so is unaffected by this flag either way.
     static RefCntAutoPtr<IShader> CreateToonShader(IRenderDevice *device, IShaderSourceInputStreamFactory *factory,
                                                    SHADER_TYPE type, const char *name, const char *file,
-                                                   const char *entry) {
+                                                   const char *entry,
+                                                   SHADER_COMPILE_FLAGS compileFlags = SHADER_COMPILE_FLAG_NONE) {
         ShaderCreateInfo ci;
         ci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
         ci.Desc.ShaderType = type;
@@ -527,6 +592,7 @@ namespace toon {
         ci.EntryPoint = entry;
         ci.FilePath = file;
         ci.pShaderSourceStreamFactory = factory;
+        ci.CompileFlags = compileFlags;
 
         RefCntAutoPtr<IShader> shader;
         device->CreateShader(ci, &shader);
@@ -578,10 +644,26 @@ namespace toon {
             return false;
         }
 
-        // Shader source loader (reads the .hlsl files, resolves #include).
+        // Shader source loader (reads the .hlsl files, resolves #include). Wrapped in a
+        // compound factory so our own shaders can ALSO #include DiligentFX's shared headers
+        // (Shadows.fxh, BasicStructures.fxh) -- those are embedded in the DiligentFX lib, not
+        // under assets/shaders, so our own factory alone can't resolve them. The compound
+        // factory tries ours first (existing #include "toon_common.hlsli" etc. still resolve
+        // exactly as before), falling back to DiligentFX's for names only it has.
         factory->CreateDefaultShaderSourceStreamFactory(TOON_SHADERS_DIR, &m_impl->shaderFactory);
         if (!m_impl->shaderFactory) {
             std::fprintf(stderr, "Renderer: failed to create shader source factory for '%s'\n", TOON_SHADERS_DIR);
+            return false;
+        }
+        m_impl->shaderFactory = CreateCompoundShaderSourceFactory(
+            {m_impl->shaderFactory, &DiligentFXShaderSourceStreamFactory::GetInstance()});
+
+        // Before the toon/model pipelines: CreateShadowMap builds the shadow map atlas +
+        // its own depth-only PSOs, and CreateToonPipeline/CreateModelPipeline bind it into
+        // the fill PSOs as a STATIC variable, which must happen before those PSOs' SRBs are
+        // created (a static variable can't be set after CreateShaderResourceBinding).
+        if (!CreateShadowMap()) {
+            std::fprintf(stderr, "Renderer: failed to create shadow map\n");
             return false;
         }
 
@@ -686,6 +768,171 @@ namespace toon {
 
         return m_impl->hdrColor && m_impl->normalBuffer && m_impl->sceneDepth && m_impl->prevSceneDepth &&
                m_impl->motionVectors;
+    }
+
+    // Cascaded shadow maps: Diligent's ShadowMapManager owns cascade distribution + the
+    // shadow-map atlas (an array texture, one slice per cascade). Depth-only PSOs render
+    // the scene into it from the light's viewpoint (Renderer::DrawMeshShadow/DrawModelShadow);
+    // the main fill PSOs then sample it via Shadows.fxh's FilterShadowMap (see
+    // toon_common.hlsli's ComputeShadowFactor). Must run before CreateToonPipeline /
+    // CreateModelPipeline (see Init) so those can bind g_ShadowMap as a STATIC variable
+    // before their SRBs are created -- a static variable can't be set afterward.
+    bool Renderer::CreateShadowMap() {
+        IRenderDevice *device = m_impl->device;
+
+        ShadowMapManager::InitInfo smInfo;
+        smInfo.Format = kSceneDepthFormat;
+        smInfo.Resolution = kShadowResolution;
+        smInfo.NumCascades = kShadowCascades;
+        smInfo.ShadowMode = SHADOW_MODE_PCF;
+        m_impl->shadowMap.Initialize(device, nullptr, smInfo);
+
+        // Comparison sampler for g_ShadowMap_sampler's hardware PCF (SampleCmp): LESS ("is
+        // this pixel's depth less than the stored occluder depth" -> lit). BORDER address
+        // with a white border so sampling past every cascade's edge reads as fully lit, not
+        // an arbitrary wrapped/clamped shadow-map texel.
+        SamplerDesc shadowSamplerDesc;
+        shadowSamplerDesc.MinFilter = FILTER_TYPE_COMPARISON_LINEAR;
+        shadowSamplerDesc.MagFilter = FILTER_TYPE_COMPARISON_LINEAR;
+        shadowSamplerDesc.MipFilter = FILTER_TYPE_COMPARISON_LINEAR;
+        shadowSamplerDesc.ComparisonFunc = COMPARISON_FUNC_LESS;
+        shadowSamplerDesc.AddressU = TEXTURE_ADDRESS_BORDER;
+        shadowSamplerDesc.AddressV = TEXTURE_ADDRESS_BORDER;
+        shadowSamplerDesc.AddressW = TEXTURE_ADDRESS_BORDER;
+        shadowSamplerDesc.BorderColor[0] = shadowSamplerDesc.BorderColor[1] = shadowSamplerDesc.BorderColor[2] =
+            shadowSamplerDesc.BorderColor[3] = 1.0f;
+        device->CreateSampler(shadowSamplerDesc, &m_impl->shadowSampler);
+        if (!m_impl->shadowSampler) { return false; }
+
+        // Combined-sampler mode (UseCombinedTextureSamplers = true, set on every shader in
+        // this file) attaches a texture's sampler to the TEXTURE VIEW itself, not as a
+        // separately bindable "g_ShadowMap_sampler" SRB/PSO variable -- unlike g_Albedo/
+        // g_HDRColor's ImmutableSamplerDesc, ITextureView::SetSampler is the mechanism here
+        // (confirmed by a real Vulkan validation error when this was missing: "no sampler is
+        // set in texture view 'Default SRV of texture 'Shadow map SRV''"). The view keeps its
+        // own strong ref, so this is the one place the sampler needs to be attached.
+        m_impl->shadowMap.GetSRV()->SetSampler(m_impl->shadowSampler);
+
+        // ShadowMapAttribs constant buffer -- filled once per frame (BeginShadowPass) by
+        // DistributeCascades, read by the main fill PSOs (ComputeShadowFactor).
+        {
+            BufferDesc cbDesc;
+            cbDesc.Name = "shadow attribs";
+            cbDesc.Size = sizeof(ShadowMapAttribs);
+            cbDesc.Usage = USAGE_DYNAMIC;
+            cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
+            cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            device->CreateBuffer(cbDesc, nullptr, &m_impl->shadowAttribsCB);
+            if (!m_impl->shadowAttribsCB) { return false; }
+        }
+
+        // Per-draw light-space world-view-proj, remapped before each shadow-pass draw --
+        // the same MapHelper-per-draw idiom the main toon Constants CB already uses.
+        {
+            BufferDesc cbDesc;
+            cbDesc.Name = "shadow draw constants";
+            cbDesc.Size = sizeof(float4x4);
+            cbDesc.Usage = USAGE_DYNAMIC;
+            cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
+            cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            device->CreateBuffer(cbDesc, nullptr, &m_impl->shadowDrawConstants);
+            if (!m_impl->shadowDrawConstants) { return false; }
+        }
+
+        IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
+
+        // Procedural-mesh shadow PSO: same vertex layout as the toon pipeline (position only
+        // read; Normal/SmoothNormal are declared just to get the stride right -- see
+        // shadow_depth.hlsl). Cull FRONT (render only back faces), the standard shadow-acne
+        // mitigation, matching the toon outline PSO's own cull/winding for these primitives.
+        // Depth-only: no render targets, no pixel shader.
+        {
+            auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "shadow VS", "shadow_depth.hlsl", "VSMain");
+            if (!vs) { return false; }
+
+            LayoutElement layoutElems[] = {
+                LayoutElement{0, 0, 3, VT_FLOAT32, False},
+                LayoutElement{1, 0, 3, VT_FLOAT32, False},
+                LayoutElement{2, 0, 3, VT_FLOAT32, False},
+            };
+
+            GraphicsPipelineStateCreateInfo ci;
+            ci.PSODesc.Name = "shadow PSO";
+            ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+            GraphicsPipelineDesc &gp = ci.GraphicsPipeline;
+            gp.NumRenderTargets = 0;
+            gp.DSVFormat = kSceneDepthFormat;
+            gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            gp.RasterizerDesc.CullMode = CULL_MODE_FRONT;
+            gp.RasterizerDesc.FrontCounterClockwise = True; // matches our own primitives' winding
+            gp.DepthStencilDesc.DepthEnable = True;
+            gp.DepthStencilDesc.DepthWriteEnable = True;
+            gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+            gp.InputLayout.LayoutElements = layoutElems;
+            gp.InputLayout.NumElements = sizeof(layoutElems) / sizeof(layoutElems[0]);
+
+            ci.pVS = vs;
+            ci.pPS = nullptr; // depth-only
+            ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
+
+            device->CreateGraphicsPipelineState(ci, &m_impl->shadowPSO);
+            if (!m_impl->shadowPSO) { return false; }
+            if (auto *v = m_impl->shadowPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "ShadowConstants")) {
+                v->Set(m_impl->shadowDrawConstants);
+            }
+            m_impl->shadowPSO->CreateShaderResourceBinding(&m_impl->shadowSRB, true);
+            if (!m_impl->shadowSRB) { return false; }
+        }
+
+        // glTF-model shadow PSO: same vertex layout + winding as the model outline PSO.
+        {
+            auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "model shadow VS", "model_shadow_depth.hlsl",
+                                       "VSMain");
+            if (!vs) { return false; }
+
+            LayoutElement modelLayout[] = {
+                LayoutElement{0, 0, 3, VT_FLOAT32, False},
+                LayoutElement{1, 0, 3, VT_FLOAT32, False},
+                LayoutElement{2, 0, 2, VT_FLOAT32, False},
+            };
+
+            GraphicsPipelineStateCreateInfo ci;
+            ci.PSODesc.Name = "model shadow PSO";
+            ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+            GraphicsPipelineDesc &gp = ci.GraphicsPipeline;
+            gp.NumRenderTargets = 0;
+            gp.DSVFormat = kSceneDepthFormat;
+            gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            gp.RasterizerDesc.CullMode = CULL_MODE_FRONT;
+            gp.RasterizerDesc.FrontCounterClockwise = False; // model winding (matches its outline PSO)
+            gp.DepthStencilDesc.DepthEnable = True;
+            gp.DepthStencilDesc.DepthWriteEnable = True;
+            gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+            gp.InputLayout.LayoutElements = modelLayout;
+            gp.InputLayout.NumElements = sizeof(modelLayout) / sizeof(modelLayout[0]);
+
+            ci.pVS = vs;
+            ci.pPS = nullptr;
+            ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
+
+            device->CreateGraphicsPipelineState(ci, &m_impl->modelShadowPSO);
+            if (!m_impl->modelShadowPSO) { return false; }
+            if (auto *v = m_impl->modelShadowPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "ShadowConstants")) {
+                v->Set(m_impl->shadowDrawConstants);
+            }
+            m_impl->modelShadowPSO->CreateShaderResourceBinding(&m_impl->modelShadowSRB, true);
+            if (!m_impl->modelShadowSRB) { return false; }
+        }
+
+        // A touch-up over the struct defaults DistributeCascades doesn't set: a small nonzero
+        // world-space PCF filter so the shadow edge isn't a hard single-tap-aliased line (the
+        // library default, fFilterWorldSize = 0, means no kernel spread at all). Persists
+        // across frames -- DistributeCascades only ever writes cascade geometry.
+        m_impl->shadowMapAttribs.fFilterWorldSize = 0.02f;
+
+        return m_impl->shadowPSO && m_impl->shadowSRB && m_impl->modelShadowPSO && m_impl->modelShadowSRB;
     }
 
     bool Renderer::CreatePostPipeline() {
@@ -883,14 +1130,31 @@ namespace toon {
             if (!pso) { return false; }
             if (auto *v = pso->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) { v->Set(m_impl->constants); }
             if (auto *p = pso->GetStaticVariableByName(SHADER_TYPE_PIXEL, "Constants")) { p->Set(m_impl->constants); }
+            // Shadow-map inputs: only toon_fill.hlsl's PS actually declares these (the
+            // outline pass never calls ComputeShadowFactor), so GetStaticVariableByName
+            // returns null there and these are harmlessly skipped -- same "set if present"
+            // pattern as Constants above, just gracefully absent on the outline PSO. The
+            // sampler is NOT bound here -- combined-sampler mode attaches it to the shadow
+            // map's texture VIEW directly (see CreateShadowMap's SetSampler call), not as a
+            // separate SRB/PSO variable.
+            if (auto *v = pso->GetStaticVariableByName(SHADER_TYPE_PIXEL, "ShadowAttribsCB")) {
+                v->Set(m_impl->shadowAttribsCB);
+            }
+            if (auto *v = pso->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMap")) {
+                v->Set(m_impl->shadowMap.GetSRV());
+            }
             pso->CreateShaderResourceBinding(&srb, true);
             return srb != nullptr;
         };
 
         IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
 
-        auto fillVS = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "toon fill VS", "toon_fill.hlsl", "VSMain");
-        auto fillPS = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "toon fill PS", "toon_fill.hlsl", "PSMain");
+        // Fill shaders alone need PACK_MATRIX_ROW_MAJOR (see CreateToonShader's comment) --
+        // they're the only ones that reference DiligentFX's ShadowMapAttribs/CascadeAttribs.
+        auto fillVS = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "toon fill VS", "toon_fill.hlsl", "VSMain",
+                                       SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
+        auto fillPS = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "toon fill PS", "toon_fill.hlsl", "PSMain",
+                                       SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
         auto outVS = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "toon outline VS", "toon_outline.hlsl", "VSMain");
         auto outPS = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "toon outline PS", "toon_outline.hlsl", "PSMain");
         if (!fillVS || !fillPS || !outVS || !outPS) { return false; }
@@ -909,8 +1173,12 @@ namespace toon {
         IRenderDevice *device = m_impl->device;
         IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
 
-        auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "model fill VS", "model_fill.hlsl", "VSMain");
-        auto ps = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "model fill PS", "model_fill.hlsl", "PSMain");
+        // PACK_MATRIX_ROW_MAJOR: model_fill.hlsl also references DiligentFX's ShadowMapAttribs/
+        // CascadeAttribs (via ComputeShadowFactor) -- see CreateToonShader's comment.
+        auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "model fill VS", "model_fill.hlsl", "VSMain",
+                                   SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
+        auto ps = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "model fill PS", "model_fill.hlsl", "PSMain",
+                                   SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
         if (!vs || !ps) { return false; }
 
         // Input layout matching the interleaved buffer the loader fills from ModelVertexAttribs
@@ -952,11 +1220,18 @@ namespace toon {
 
         // Shared static Constants CB (like the toon PSOs); g_Albedo is DYNAMIC — DrawModel
         // re-Sets it per primitive — with a linear-wrap immutable sampler (combined-sampler
-        // "g_Albedo", same pattern as tonemap's g_HDRColor).
+        // "g_Albedo", same pattern as tonemap's g_HDRColor). ShadowAttribsCB/g_ShadowMap are
+        // STATIC (set once below, like Constants) -- model_fill.hlsl's ComputeShadowFactor
+        // call is what pulls these into this PSO's reflected resources. No separate
+        // g_ShadowMap_sampler entry: combined-sampler mode attaches that sampler to the
+        // shadow map's texture VIEW directly (CreateShadowMap's SetSampler call), not as an
+        // SRB/PSO variable.
         ShaderResourceVariableDesc vars[] = {
             {SHADER_TYPE_VERTEX, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
             {SHADER_TYPE_PIXEL, "g_Albedo", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            {SHADER_TYPE_PIXEL, "ShadowAttribsCB", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_ShadowMap", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
         };
         ci.PSODesc.ResourceLayout.Variables = vars;
         ci.PSODesc.ResourceLayout.NumVariables = sizeof(vars) / sizeof(vars[0]);
@@ -981,6 +1256,12 @@ namespace toon {
         }
         if (auto *p = m_impl->modelPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "Constants")) {
             p->Set(m_impl->constants);
+        }
+        if (auto *v = m_impl->modelPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "ShadowAttribsCB")) {
+            v->Set(m_impl->shadowAttribsCB);
+        }
+        if (auto *v = m_impl->modelPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMap")) {
+            v->Set(m_impl->shadowMap.GetSRV());
         }
         m_impl->modelPSO->CreateShaderResourceBinding(&m_impl->modelSRB, true);
         if (!m_impl->modelSRB) { return false; }
@@ -1057,6 +1338,13 @@ namespace toon {
         m_impl->aoWhite.Release();
         m_impl->ssrBlack.Release();
         m_impl->modelWhite.Release();
+        m_impl->shadowSRB.Release();
+        m_impl->shadowPSO.Release();
+        m_impl->modelShadowSRB.Release();
+        m_impl->modelShadowPSO.Release();
+        m_impl->shadowSampler.Release();
+        m_impl->shadowDrawConstants.Release();
+        m_impl->shadowAttribsCB.Release();
         m_impl->tonemapSRB.Release();
         m_impl->tonemapPSO.Release();
         m_impl->postConstants.Release();
@@ -1274,6 +1562,150 @@ namespace toon {
         }
         return out;
     }
+
+    // --- Cascaded shadow maps ----------------------------------------------------
+
+    // Distributes cascades from the current camera (SetCamera) + light (SetLight) and
+    // uploads ShadowMapAttribs for the main fill PSOs to read. Returns the cascade count to
+    // loop over: 0 when PostParams::shadows is off (or no cascades were configured), in
+    // which case the shadow map is untouched and the fill shaders skip sampling it entirely
+    // -- iNumCascades = 0 is Shadows.fxh's own "no shadows" sentinel (FindCascade's search
+    // loop never runs, FilterShadowMap short-circuits to fLightAmount = 1.0), so this is
+    // also what correctly blanks a stale/never-rendered shadow map on the first frame or
+    // right after the toggle turns shadows off.
+    uint32_t Renderer::BeginShadowPass() {
+        if (!m_impl->post.shadows) {
+            m_impl->shadowMapAttribs.iNumCascades = 0;
+            MapHelper<ShadowMapAttribs> cb(m_impl->context, m_impl->shadowAttribsCB, MAP_WRITE, MAP_FLAG_DISCARD);
+            *cb = m_impl->shadowMapAttribs;
+            return 0;
+        }
+
+        ShadowMapManager::DistributeCascadeInfo distInfo;
+        distInfo.pCameraView = &m_impl->view;
+        distInfo.pCameraProj = &m_impl->proj;
+        distInfo.pLightDir = &m_impl->lightDir;
+        // Matches the SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR set on the fill shaders
+        // (see CreateToonShader's comment): row-major throughout, no transpose mismatch.
+        distInfo.PackMatrixRowMajor = true;
+        m_impl->shadowMap.DistributeCascades(distInfo, m_impl->shadowMapAttribs);
+
+        MapHelper<ShadowMapAttribs> cb(m_impl->context, m_impl->shadowAttribsCB, MAP_WRITE, MAP_FLAG_DISCARD);
+        *cb = m_impl->shadowMapAttribs;
+
+        return kShadowCascades;
+    }
+
+    // Binds cascade `cascadeIndex`'s depth target and clears it. DrawMeshShadow/
+    // DrawModelShadow calls in between render into whichever cascade was bound last.
+    void Renderer::BeginShadowCascade(uint32_t cascadeIndex) {
+        m_impl->currentShadowCascade = cascadeIndex;
+        ITextureView *dsv = m_impl->shadowMap.GetCascadeDSV(cascadeIndex);
+        m_impl->context->SetRenderTargets(0, nullptr, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_impl->context->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    }
+
+    // Depth-only draw into the currently-bound cascade: position transformed straight into
+    // that cascade's light-space clip position (no material, no motion vectors -- the
+    // shadow map carries no color/history of its own).
+    void Renderer::DrawMeshShadow(MeshHandle handle, const Mat4 &worldM) {
+        const uint32_t idx = static_cast<uint32_t>(handle);
+        if (idx == 0 || idx > m_impl->meshes.size()) { return; }
+        const Impl::GpuMesh &mesh = m_impl->meshes[idx - 1];
+
+        const float4x4 world = ToFloat4x4(worldM);
+        const float4x4 &lightProj = m_impl->shadowMap.GetCascadeTransform(m_impl->currentShadowCascade).WorldToLightProjSpace;
+
+        {
+            MapHelper<float4x4> cb(m_impl->context, m_impl->shadowDrawConstants, MAP_WRITE, MAP_FLAG_DISCARD);
+            *cb = world * lightProj;
+        }
+
+        IBuffer *vbs[] = {mesh.vertexBuffer};
+        const Uint64 offsets[] = {0};
+        m_impl->context->SetVertexBuffers(0, 1, vbs, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                                          SET_VERTEX_BUFFERS_FLAG_RESET);
+        m_impl->context->SetIndexBuffer(mesh.indexBuffer, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+        DrawIndexedAttribs draw;
+        draw.IndexType = VT_UINT32;
+        draw.NumIndices = mesh.indexCount;
+        draw.Flags = DRAW_FLAG_VERIFY_ALL;
+
+        m_impl->context->SetPipelineState(m_impl->shadowPSO);
+        m_impl->context->CommitShaderResources(m_impl->shadowSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_impl->context->DrawIndexed(draw);
+    }
+
+    // Same idea as DrawModel, stripped to depth-only: walk the model's nodes, transform each
+    // into the currently-bound cascade's light-space clip position, no material/albedo.
+    void Renderer::DrawModelShadow(ModelHandle handle, const Mat4 &worldM) {
+        const uint32_t idx = static_cast<uint32_t>(handle);
+        if (idx == 0 || idx > m_impl->models.size()) { return; }
+        GLTF::Model &model = *m_impl->models[idx - 1];
+        if (model.Scenes.empty()) { return; }
+        const int sceneId = model.DefaultSceneId;
+
+        const float4x4 objWorld = ToFloat4x4(worldM);
+        const float4x4 &lightProj = m_impl->shadowMap.GetCascadeTransform(m_impl->currentShadowCascade).WorldToLightProjSpace;
+
+        GLTF::ModelTransforms xforms;
+        model.ComputeTransforms(sceneId, xforms);
+
+        IBuffer *vbs[8] = {};
+        const Uint32 numVBs = static_cast<Uint32>(model.GetVertexBufferCount());
+        for (Uint32 i = 0; i < numVBs; ++i) {
+            vbs[i] = model.GetVertexBuffer(i, m_impl->device, m_impl->context);
+        }
+        m_impl->context->SetVertexBuffers(0, numVBs, vbs, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                                          SET_VERTEX_BUFFERS_FLAG_RESET);
+        IBuffer *ib = model.GetIndexBuffer(m_impl->device, m_impl->context);
+        if (ib) { m_impl->context->SetIndexBuffer(ib, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION); }
+
+        const Uint32 baseIndex = model.GetFirstIndexLocation();
+        const Uint32 baseVertex = model.GetBaseVertex();
+
+        m_impl->context->SetPipelineState(m_impl->modelShadowPSO);
+
+        const GLTF::Scene &scene = model.Scenes[sceneId];
+        for (const GLTF::Node *node : scene.LinearNodes) {
+            if (node->pMesh == nullptr) { continue; }
+            const float4x4 world = xforms.NodeGlobalMatrices[node->Index] * objWorld;
+
+            {
+                MapHelper<float4x4> cb(m_impl->context, m_impl->shadowDrawConstants, MAP_WRITE, MAP_FLAG_DISCARD);
+                *cb = world * lightProj;
+            }
+            // Re-commit after every remap: a fresh Map/Discard may hand back a different
+            // underlying GPU allocation, which the SRB needs to be told about again before
+            // the next draw -- same idiom DrawMesh/DrawModel already use per primitive.
+            m_impl->context->CommitShaderResources(m_impl->modelShadowSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+            for (const GLTF::Primitive &prim : node->pMesh->Primitives) {
+                if (prim.VertexCount == 0 && prim.IndexCount == 0) { continue; }
+                if (prim.IndexCount > 0) {
+                    DrawIndexedAttribs draw;
+                    draw.IndexType = VT_UINT32;
+                    draw.NumIndices = prim.IndexCount;
+                    draw.FirstIndexLocation = baseIndex + prim.FirstIndex;
+                    draw.BaseVertex = baseVertex + prim.FirstVertex;
+                    draw.Flags = DRAW_FLAG_VERIFY_ALL;
+                    m_impl->context->DrawIndexed(draw);
+                } else {
+                    DrawAttribs draw;
+                    draw.NumVertices = prim.VertexCount;
+                    draw.StartVertexLocation = baseVertex + prim.FirstVertex;
+                    draw.Flags = DRAW_FLAG_VERIFY_ALL;
+                    m_impl->context->Draw(draw);
+                }
+            }
+        }
+    }
+
+    // No-op today (PCF needs no post-pass); present for symmetry with BeginShadowPass and as
+    // the one seam entry point future filtering modes (VSM/EVSM's ConvertToFilterable) would
+    // hook into without changing main.cpp's call shape.
+    void Renderer::EndShadowPass() {}
 
     // Expose the current view + projection (as of the last SetCamera) for the editor's transform
     // gizmo. ImGuizmo (in main.cpp) needs them to project the gizmo onto the selected entity; the

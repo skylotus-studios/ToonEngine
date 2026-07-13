@@ -32,6 +32,7 @@ struct ModelPSInput
     float2 UV          : TEXCOORD1;
     float4 CurrClip    : TEXCOORD2;  // clip pos this frame (motion vectors)
     float4 PrevClip    : TEXCOORD3;  // clip pos last frame
+    float3 WorldPos    : TEXCOORD4;  // world-space pos (shadow-map lookup)
 };
 
 ModelPSInput VSMain(ModelVSInput vin)
@@ -42,12 +43,14 @@ ModelPSInput VSMain(ModelVSInput vin)
     o.UV          = vin.UV;
     o.CurrClip    = o.Pos;
     o.PrevClip    = mul(float4(vin.Pos, 1.0), g_PrevWorldViewProj);
+    o.WorldPos    = mul(float4(vin.Pos, 1.0), g_World).xyz;
     return o;
 }
 
 PSOutput PSMain(ModelPSInput pin)
 {
     float3 N      = normalize(pin.WorldNormal);
+    float shadow  = ComputeShadowFactor(pin.WorldPos, pin.CurrClip.w);
     // Albedo x base-color factor (g_BaseColor carries the material factor * app tint).
     // Slice 0: each glTF texture is its own 1-layer array in the non-atlas path.
     float3 albedo = g_Albedo.Sample(g_Albedo_sampler, float3(pin.UV, 0.0)).rgb * g_BaseColor.rgb;
@@ -55,7 +58,7 @@ PSOutput PSMain(ModelPSInput pin)
     PSOutput o;
     // g_LightColor tints/scales the whole ramp (including the ambient floor) by the light's
     // color * intensity -- see toon_fill.hlsl.
-    o.Color  = float4(CelShade(albedo, N, g_LightDir.xyz, g_Params.x, g_Params.y) * g_LightColor.rgb, 1.0);
+    o.Color  = float4(CelShade(albedo, N, g_LightDir.xyz, g_Params.x, g_Params.y, shadow) * g_LightColor.rgb, 1.0);
     o.Normal = float4(N, g_Params.z);   // world normal (SSAO) + roughness in w (SSR)
     o.Motion = ComputeMotion(pin.CurrClip, pin.PrevClip);
     return o;

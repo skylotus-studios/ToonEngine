@@ -596,13 +596,12 @@ int main() {
             }
         }
 
-        renderer.BeginFrame(clearColor);
-
-        // Post params up front: SetCamera reads them to decide the TAA jitter.
+        // Post params + camera + light up front: SetCamera reads post.taa to decide the TAA
+        // jitter, and the shadow cascade pre-pass below needs the camera + light already set
+        // -- it renders into its own depth-only targets, so it must run before BeginFrame
+        // binds the main G-buffer (scene first, so the debug UI still overlays it, below).
         post.suppressTemporalHistory = suppressTemporalHistory;
         renderer.SetPostParams(post);
-
-        // Scene first, so the debug UI overlays it.
         renderer.SetCamera(camera);
 
         // Light: driven by the scene's first light entity (aimed via its rotation), falling
@@ -612,6 +611,26 @@ int main() {
         float lightIntensity = 1.0f;
         toon::GetActiveLight(scene, lightDir, lightColor, lightIntensity);
         renderer.SetLight(lightDir, lightColor, lightIntensity);
+
+        // Cascaded shadow map pre-pass: walks the same renderable entities as the main pass
+        // below, once per cascade, into the shadow map's own depth-only targets. Must run
+        // before BeginFrame (separate render targets, no interaction with the main G-buffer).
+        // BeginShadowPass returns 0 (the loop below becomes a no-op) when the Debug panel's
+        // Shadows toggle is off.
+        const uint32_t shadowCascades = renderer.BeginShadowPass();
+        for (uint32_t cascade = 0; cascade < shadowCascades; ++cascade) {
+            renderer.BeginShadowCascade(cascade);
+            for (const toon::Entity &e : scene.entities) {
+                if (e.mesh != toon::MeshHandle::Invalid) {
+                    renderer.DrawMeshShadow(e.mesh, e.worldMatrix);
+                } else if (e.model != toon::ModelHandle::Invalid) {
+                    renderer.DrawModelShadow(e.model, e.worldMatrix);
+                }
+            }
+        }
+        renderer.EndShadowPass();
+
+        renderer.BeginFrame(clearColor);
 
         // Walk the scene, drawing every renderable entity with its hierarchy-composed world
         // matrix (+ last frame's, for motion vectors). The shared style overlays band count,
@@ -945,6 +964,8 @@ int main() {
                 ImGui::SliderFloat("AO radius", &post.ssaoRadius, 0.1f, 3.0f);
                 ImGui::Checkbox("AO temporal (motion-vector denoise)", &post.ssaoTemporal);
             }
+
+            ImGui::Checkbox("Shadows (cascaded shadow maps)", &post.shadows);
 
             ImGui::Checkbox("Depth of field", &post.dof);
             if (post.dof) {

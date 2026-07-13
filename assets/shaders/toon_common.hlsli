@@ -6,6 +6,16 @@
 //  row_major so Diligent's row-major float4x4 uploads verbatim (no transpose),
 //  and vectors are transformed row-vector style: mul(v, M).
 //============================================================================
+
+// Cascaded shadow maps: DiligentFX's own shared structures + PCF sampling helpers
+// (ShadowMapAttribs/CascadeAttribs, FilterShadowMap). Bare filenames, not full paths --
+// DiligentFX's shaders reference each other the same way (see e.g. ComputeReprojectedDepth.fx's
+// own "#include "BasicStructures.fxh""), and its embedded shader source factory
+// (DiligentFXShaderSourceStreamFactory, folded into our shader factory as a compound one in
+// Renderer::Init) resolves bare names, not full "Shaders/Common/public/..." paths.
+#include "BasicStructures.fxh"
+#include "Shadows.fxh"
+
 cbuffer Constants
 {
     row_major float4x4 g_WorldViewProj;     // object -> clip (this frame)
@@ -42,6 +52,7 @@ struct PSInput
     float3 WorldNormal : TEXCOORD0;
     float4 CurrClip    : TEXCOORD1;  // clip-space pos this frame (for motion vectors)
     float4 PrevClip    : TEXCOORD2;  // clip-space pos last frame
+    float3 WorldPos    : TEXCOORD3;  // world-space pos (shadow-map lookup)
 };
 
 // The scene pass writes three targets (MRT), all read by DiligentFX post effects:
@@ -68,11 +79,43 @@ float2 ComputeMotion(float4 currClip, float4 prevClip)
 // Cel (toon) shading: quantize the diffuse term N·L into `bands` flat levels spanning
 // [0,1], floored by an `ambient` shadow term (keeps the dark side off pure black), then
 // modulate the base color. Shared by the procedural fill and the glTF model fill.
-float3 CelShade(float3 baseRGB, float3 N, float3 L, float bands, float ambient)
+// `shadow` (1 = lit, 0 = fully shadowed) multiplies N·L BEFORE quantizing, so a shadowed
+// pixel just lands on a darker rung of the same band ladder N·L already uses -- shadow
+// reads as "less light reached this surface," not a separate flat overlay color.
+float3 CelShade(float3 baseRGB, float3 N, float3 L, float bands, float ambient, float shadow)
 {
-    float NdotL = saturate(dot(normalize(N), normalize(L)));
+    float NdotL = saturate(dot(normalize(N), normalize(L))) * shadow;
     float b     = max(bands, 1.0);
     float ramp  = saturate(floor(NdotL * b) / max(b - 1.0, 1.0));
     float shade = lerp(ambient, 1.0, ramp);
     return baseRGB * shade;
+}
+
+// --- Cascaded shadow maps (Diligent's ShadowMapManager + Shadows.fxh's PCF path) ---
+// Only toon_fill.hlsl / model_fill.hlsl call ComputeShadowFactor; toon_outline.hlsl /
+// model_outline.hlsl #include this file too (for PSInput/CelShade/ComputeMotion) but never
+// reference these declarations, so the shader compiler drops them from those PSOs' resource
+// layout entirely -- no extra bindings needed on the outline SRBs.
+cbuffer ShadowAttribsCB
+{
+    ShadowMapAttribs g_ShadowAttribs;
+}
+
+Texture2DArray<float>  g_ShadowMap;
+SamplerComparisonState g_ShadowMap_sampler;
+
+// Cascaded-shadow visibility for a surface point: 1 = fully lit, 0 = fully occluded.
+// `cameraSpaceZ` picks the cascade (our projection's clip-space W IS camera-space Z, so
+// callers pass pin.CurrClip.w -- no separate camera-view matrix needed in this cbuffer).
+// `worldPos` is transformed into the shared light-facing space every cascade shares
+// (ShadowMapAttribs.mWorldToLightView); each cascade then just scales/biases that shared
+// space into its own extent (see Shadows.fxh's FindCascade).
+float ComputeShadowFactor(float3 worldPos, float cameraSpaceZ)
+{
+    float3 posInLightViewSpace = mul(float4(worldPos, 1.0), g_ShadowAttribs.mWorldToLightView).xyz;
+    float3 ddXPos = ddx(posInLightViewSpace);
+    float3 ddYPos = ddy(posInLightViewSpace);
+    FilteredShadow shadow = FilterShadowMap(g_ShadowAttribs, g_ShadowMap, g_ShadowMap_sampler, posInLightViewSpace,
+                                            ddXPos, ddYPos, cameraSpaceZ);
+    return shadow.fLightAmount;
 }

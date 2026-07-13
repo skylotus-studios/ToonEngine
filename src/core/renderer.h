@@ -160,6 +160,11 @@ namespace toon {
         // BRDF/env-map). Off by default.
         bool ssr = false;
         float ssrStrength = 0.6f; // how strongly the reflection is added
+
+        // Cascaded shadow maps (Diligent's ShadowMapManager, forward-rendered — not a
+        // PostFXContext effect). Casts shadows from the scene light onto every cel-shaded
+        // surface; see Renderer::BeginShadowPass / DrawMeshShadow / DrawModelShadow.
+        bool shadows = true;
     };
 
     // --- Renderer ---------------------------------------------------------------
@@ -212,6 +217,20 @@ namespace toon {
         // Draw with a pre-composed world matrix (+ last frame's, for motion vectors) — the
         // path the scene graph uses, since it composes world transforms down the hierarchy.
         void DrawMesh(MeshHandle mesh, const Mat4 &world, const Mat4 &prevWorld, const Material &material);
+
+        // --- Cascaded shadow maps (Diligent's ShadowMapManager) -----------------
+        // Call once per frame, AFTER SetCamera + SetLight and BEFORE BeginFrame (the shadow
+        // pass renders into its own depth-only targets, separate from the main G-buffer).
+        // Returns the cascade count to loop over (0 if shadows are off in PostParams or the
+        // scene has no light). For each cascade: BeginShadowCascade(i), then DrawMeshShadow/
+        // DrawModelShadow for every shadow-casting entity, then move to the next cascade.
+        // EndShadowPass finalizes (a no-op today; present for symmetry / future filtering
+        // modes). The main pass's later DrawMesh/DrawModel calls read the finished shadow map.
+        uint32_t BeginShadowPass();
+        void BeginShadowCascade(uint32_t cascadeIndex);
+        void DrawMeshShadow(MeshHandle mesh, const Mat4 &world);
+        void DrawModelShadow(ModelHandle model, const Mat4 &world);
+        void EndShadowPass();
 
         // --- Scene: glTF models -------------------------------------------------
         // Load a glTF/GLB model via DiligentTools' loader (Diligent::GLTF::Model owns the
@@ -266,6 +285,7 @@ namespace toon {
         bool CreatePostPipeline();                                    // HDR tone-map resolve PSO
         bool CreatePostFX();                                          // PostFXContext + Bloom + SSAO effects
         bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + normal + depth + motion
+        bool CreateShadowMap();                                       // ShadowMapManager + depth-only PSOs
 
         struct Impl; // defined in renderer.cpp — hides all Diligent types
         Impl *m_impl = nullptr;

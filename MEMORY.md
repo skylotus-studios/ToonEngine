@@ -1446,6 +1446,59 @@ DiligentSamples is **not** a submodule here) plus Diligent's own docs/blog.
   thumbnails, per `ToonEngineOld/src/ui/thumbnail_cache.{h,cpp}` — a real implemented file
   the original carry-over survey above had missed (now added to the file_browser bullet).
 
+### Port gotchas for the un-shipped systems (capture before deletion, 2026-07-13)
+
+`ToonEngineOld`'s own `CLAUDE.md` has no salvage value beyond this file — it's a subset of
+the carry-over map above, and its two TODO lists (engine roadmap + ImGui) were already
+audited and dispositioned line-by-line in the entry above. What isn't fully captured
+anywhere else yet is the GL-specific-vs-portable split inside the source of the four
+un-shipped roadmap systems (grid+sky, CSM, sprites, skeletal animation). Recorded here so
+the folder can be deleted once those land without losing anything:
+
+- **CSM depth convention.** `ToonEngineOld`'s cascades are built with `glm::perspective` /
+  `glm::ortho`, which emit GL's `[-1,1]` NDC-Z convention; Diligent's is `[0,1]` and
+  left-handed (see "Matrix convention" above). The cascade split math, the per-cascade
+  light-space ortho bounds, and the shadow-space `z*0.5+0.5` remap all assume `[-1,1]` and
+  must be rederived, not transliterated. Everything else about the scheme ports directly:
+  4 cascades, 2048×2048 each, a practical (log-linear blend, `lambda = 0.5`) split, light
+  frustum built from the 8 unprojected NDC corners of each sub-frustum, far extended +20 to
+  catch casters standing outside the view frustum, and front-face culling on the shadow
+  pass to reduce peter-panning.
+- **Shadow sampling.** The old shader uses `sampler2DArrayShadow` with hardware PCF; the
+  Diligent equivalent is a comparison sampler + `SampleCmp`. The 3×3 PCF loop and the
+  per-cascade bias (`bias * (1 + layer)`, deeper cascades get more bias) port as-is — only
+  the sampler object and intrinsic name change.
+- **Grid pass.** `grid.frag` reconstructs a world-space ray from the inverse view-proj,
+  intersects it with the Y=0 plane, and draws two line scales (minor + major every 5th
+  line) via `abs(fract(coord - 0.5) - 0.5) / fwidth(coord)`, with distance fade. It writes
+  `gl_FragDepth` only where a grid line is actually visible, so the plane stays transparent
+  between lines and doesn't occlude scene geometry below Y=0 or corrupt an edge/SSAO pass
+  with bogus depth. Porting needs `gl_FragDepth` → `SV_Depth`; `fwidth`/`dFdx`/`dFdy` are
+  named identically in HLSL; the manual NDC depth reconstruction
+  (`(far+near - 2*near*far/hitT) / (far-near)`, then `*0.5+0.5`) is GL-convention and must
+  be rederived for Diligent's `[0,1]` the same way the CSM math does.
+- **`toon.frag` is a fidelity upgrade, not just a reference.** It cel-shades with up to 8
+  lights (directional + point with quadratic attenuation), a hard toon Blinn-Phong
+  specular (`smoothstep` over `pow(NdotH, shininess)`), a Fresnel rim term, derivative-based
+  normal mapping (TBN from `dFdx`/`dFdy`, no tangent attribute needed), and tints the
+  non-highlight cel bands when a fragment is in shadow. All pure math over the existing
+  `CelShade`/lighting inputs — a near-direct GLSL→HLSL port, and every one of its dozens of
+  `glUniform` calls collapses into the engine's existing shared `Constants` cbuffer.
+- **Skeletal animation.** `animator.cpp` (keyframe sampling + hierarchy evaluation) is
+  portable line-for-line modulo glm→Diligent math. Its two non-obvious correctness details
+  are worth keeping verbatim as reference: un-animated joints fall back to **bind-pose
+  local TRS** (not identity) so they don't collapse, and the joint hierarchy is walked
+  **topologically** (iterate until every joint's parent is resolved) because glTF does not
+  guarantee parent-before-child node order. The glTF *extraction* side of the old loader
+  (cgltf) is superseded by DiligentTools' `GLTF::Model`, which parses skins/animations
+  itself — but the **ufbx FBX path has no current-engine equivalent at all** (DiligentTools
+  is glTF-only), so it's the only reference if FBX/skeleton import is ever wanted; only
+  `dragon.fbx` needs it, `dragon.gltf` already loads through the normal path.
+- **Deletion trigger.** Once grid+sky, CSM, skeletal animation, and sprites have all shipped
+  (roadmap M3), `ToonEngineOld/` can be deleted wholesale — its CLAUDE.md and every
+  already-ported subsystem (scene, camera, input, serializer, file browser/thumbnails/themes,
+  glTF loading) carry zero further value once that happens.
+
 ## Architecture decisions
 
 ### Renderer seam: PIMPL, not a virtual `IRenderer`
@@ -1962,3 +2015,140 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   **Blocked:** click-to-preview, double-click-navigate, and double-click-to-load-scene all
   need a manual check — no live input desktop, and no `.scene` file exists yet to test the
   last one against.
+- **2026-07-13** — **ToonEngineOld triage, roadmap reframed around a playable game,
+  docs/architecture.md added.** Audited `ToonEngineOld` in full against this file's own
+  carry-over map: its `CLAUDE.md` had zero salvage value left (a subset of the carry-over
+  survey, its TODO lists already dispositioned on 2026-07-11), so the folder stays only for
+  the un-shipped systems' source (grid/sky, CSM, sprites, skeletal animation) — see "Port
+  gotchas for the un-shipped systems" above for what was captured before a later deletion.
+  Reworked `CLAUDE.md`'s roadmap: it was rendering-fidelity-and-infra-only and didn't answer
+  "what's needed to build a game," so it's now milestone-based and dependency-sequenced
+  (M1 simulation foundation — fixed timestep, play mode, entity behavior; M2 physics + audio;
+  M3 characters/fidelity — the ToonEngineOld ports; M4 scale/polish), also fixing a garbled
+  line from a prior edit. Trimmed CLAUDE.md's "Current state" prose to stay under its
+  200-line cap now that the deep version lives in the new `docs/architecture.md` — an
+  11-section onboarding doc (seam, source layout, frame loop, rendering pipeline, scene
+  model, editor layer, data flow/ownership, build/dependencies) built from a fresh full-repo
+  architecture pass. Repointed README's "full architecture writeup" line at the new doc, and
+  extended the `tidy-md` skill to actively maintain `architecture.md` (it was going to fall
+  into `docs/**`'s passive "touch only if stale" bucket, which would have let it drift silently
+  as the code changes rather than the roadmap/docs).
+- **2026-07-13** — **Cascaded shadow maps shipped** (was M3 roadmap item, listed as
+  "un-shipped" in the ToonEngineOld triage entry just above — that was written earlier the
+  same day; superseded by this). Directional shadows from the scene light onto every
+  cel-shaded surface, via Diligent's own `ShadowMapManager` (`external/DiligentFX/Components`)
+  — cascade distribution, the shadow-map atlas, and cascade selection/PCF sampling
+  (`Shaders/Common/public/Shadows.fxh`) are all Diligent's, not hand-rolled, per the guiding
+  principle. 4 cascades, 2048² D32_FLOAT, PCF (not VSM/EVSM — cheap, no extra blur pass,
+  matches the toon aesthetic; user's explicit choice). Shadow darkens the *existing* band
+  ramp rather than painting a separate flat color: `CelShade` gained a `shadow` factor
+  multiplied into `NdotL` before quantization, so a shadowed pixel just lands on a darker
+  rung of the same ladder N·L already uses (also the user's explicit choice, after two rounds
+  of ELI5 — see the "shadow color" conversation if this needs revisiting later; the
+  alternative, clamping straight to the ambient floor color regardless of band, is a one-line
+  follow-up if the multiply-in look doesn't read well once tuned).
+
+  **Seam additions** (`renderer.h`): `BeginShadowPass()` (returns the cascade count to loop
+  over, 0 when `PostParams::shadows` is off), `BeginShadowCascade(i)`, `DrawMeshShadow`/
+  `DrawModelShadow` (position-only, no material — the shadow map carries no color or motion
+  history of its own), `EndShadowPass()` (a no-op today; the one hook a future VSM/EVSM
+  mode's `ConvertToFilterable` would land in). `main.cpp` calls these in a pre-pass, once per
+  cascade, walking the same `scene.entities` as the main draw loop, positioned *before*
+  `BeginFrame` (separate depth-only render targets, no interaction with the main G-buffer) —
+  which required moving `SetPostParams`/`SetCamera`/`SetLight` earlier in the frame too, since
+  the shadow pass needs the camera + light already set.
+
+  **`iNumCascades = 0` is the "shadows off" sentinel**, not a new shader branch: `Shadows.fxh`'s
+  own `FindCascade` treats it as "no cascade found," and `FilterShadowMap` short-circuits to
+  `fLightAmount = 1.0` without ever touching the shadow map texture. `BeginShadowPass` sets
+  it explicitly when `PostParams::shadows` is off, which also correctly blanks a stale-or-
+  never-rendered shadow map on the very first frame or right after the toggle flips off — no
+  separate "is this pixel shadowed at all" uniform needed.
+
+  **Two real, non-obvious bugs, both worth remembering if any future `Components`-module
+  Diligent header (ShadowMapManager, BoundBoxRenderer, EnvMapRenderer, VectorFieldRenderer —
+  same `namespace Diligent { #include BasicStructures.fxh }` pattern per a `grep`) gets added
+  here again:**
+  1. **A cross-module `BasicStructures.fxh` namespace collision, only caught at *link* time.**
+     This file's own `namespace Diligent { namespace HLSL { #include ".../BasicStructures.fxh"
+     ... } }` wrapper (needed because `PostFXContext.hpp`/`Bloom.hpp`/etc. all forward-declare
+     `Diligent::HLSL::CameraAttribs`) is NOT how `ShadowMapManager.hpp` itself includes the
+     same file — it does a *bare*, unnested `namespace Diligent { #include
+     "Shaders/Common/public/BasicStructures.fxh" ... class ShadowMapManager { ...
+     ShadowMapAttribs& ...}; }`. `BasicStructures.fxh` has a normal `#ifndef`/`#define` include
+     guard, which the C preprocessor enforces *before* C++ ever sees namespaces — so whichever
+     of the two inclusions is textually first in this translation unit wins, and the other
+     becomes a silent no-op. Putting `#include "ShadowMapManager.hpp"` before this file's own
+     `HLSL`-wrapped inclusion (the natural place, alongside the other DiligentFX effect
+     headers) made `ShadowMapManager.hpp`'s bare version win — which *compiled fine* (its own
+     class body found `ShadowMapAttribs` at plain `Diligent::` scope) but silently left
+     `Diligent::HLSL::CameraAttribs`/`ShadowMapAttribs` undefined, surfacing as "field has
+     incomplete type" on the *unrelated*, long-working `postCamera` field once the compiler
+     actually needed the complete type. Re-ordering so this file's `HLSL`-wrapped block runs
+     first, then bridging with `using namespace HLSL;` so `ShadowMapManager.hpp`'s own
+     unqualified references could still find it, fixed the *compile* — but not the *link*:
+     `ShadowMapManager.cpp` is a **separate translation unit** (compiled independently, as
+     part of building `DiligentFX.lib`), and its own copy of this exact same collision
+     resolves the *same* way every time, in isolation — always bare `Diligent::ShadowMapAttribs`,
+     since nothing in *its* TU ever wraps the include in `HLSL`. A `using`-directive bridge in
+     *this* file doesn't change what type `Diligent::HLSL::ShadowMapAttribs` and
+     `Diligent::ShadowMapAttribs` mangle to — they're genuinely different C++ types referring
+     to independently-compiled struct layouts, so calling `DistributeCascades` with the
+     `HLSL`-wrapped one produced `lld-link: error: undefined symbol` (the mangled name our TU
+     asked for doesn't exist; the library only has the bare-namespace one). **Real fix:**
+     `#undef` the include guard macro (`_BASIC_STRUCTURES_FXH_`) between the two placements
+     and force a second, genuinely independent expansion of the header at bare `Diligent::`
+     scope — so this TU ends up with *both* `Diligent::HLSL::CameraAttribs` (for the
+     PostFXContext family, matching how *their* separately-compiled `.cpp` files resolve it)
+     *and* `Diligent::ShadowMapAttribs` (for ShadowMapManager, matching how *its* separately-
+     compiled `.cpp` resolves it) as two distinct, correctly-typed structs — then used bare
+     `ShadowMapAttribs` (not `HLSL::ShadowMapAttribs`) in every place this file's own code
+     calls into `ShadowMapManager`. The general lesson: a namespace mismatch between a header
+     and its own separately-compiled `.cpp` is invisible until link time, and a `using`-
+     directive only fixes *lookup*, never *type identity* — cross-TU calls need the *actual*
+     matching type, not just a same-named alias.
+  2. **Combined-sampler mode binds a texture's sampler on the *view*, not as an SRB variable
+     — confirmed by a live Vulkan validation error, not by guessing from the header.** Every
+     shader in this file sets `UseCombinedTextureSamplers = true`; the existing `g_Albedo`/
+     `g_HDRColor` precedent bakes their samplers via `ImmutableSamplerDesc` at PSO-creation
+     time. Tried the same "set if present" `GetStaticVariableByName(..., "g_ShadowMap_sampler")`
+     pattern already used for `Constants`/`ShadowAttribsCB`/`g_ShadowMap` — it compiled, linked,
+     and ran, silently binding nothing (the call is a graceful no-op when the name isn't a
+     separately-reflected resource, exactly as intended for the *outline* PSOs that don't
+     reference shadows at all — so nothing here raised a red flag until the app actually ran).
+     The real signal was in a redirected console log: `Diligent Engine: ERROR: Failed to bind
+     sampler to sampler variable 'g_ShadowMap_sampler' assigned to separate image
+     'g_ShadowMap': no sampler is set in texture view 'Default SRV of texture 'Shadow map
+     SRV''`, followed by `VUID-vkCmdDrawIndexed-None-08114` every draw. **Fix:**
+     `ITextureView::SetSampler()` on the shadow map's SRV itself, once, in `CreateShadowMap`
+     right after both the sampler and the `ShadowMapManager` exist (`TextureView.h`: "the view
+     will keep a strong reference to the sampler" — no lifetime concern from the one-line call).
+     Removed the now-confirmed-dead `g_ShadowMap_sampler` SRB-variable-binding attempts and its
+     `ShaderResourceVariableDesc` entry in `modelPSO`'s explicit layout. General lesson: a
+     PSO/SRB variable lookup returning null is not evidence a resource doesn't need binding —
+     it can just as easily mean you're binding it through the wrong mechanism for this
+     resource's *kind* (combined-sampler textures go through the view, not the SRB).
+
+  **Verified:** clean `cmake --build --preset windows-debug` (0 warnings/errors touching any
+  file this change touched); a redirected-stdout relaunch caught bug 2 directly (14,674 lines
+  of repeated per-draw validation errors before the fix, 172 clean startup lines and zero
+  `error`/`ERROR`/`VUID` matches after); two `PrintWindow` screenshots (before and after the
+  sampler fix) both show a real, correctly-shaped soft-edged shadow cast by the sphere/cube/
+  helmet cluster onto the ground plane, shifted between the two captures in a way consistent
+  with `Spin` having continued to animate the objects in between — i.e. the shadow is
+  genuinely recomputed live each frame, not a frozen/cached artifact. Steady ~144 FPS, no
+  visual corruption elsewhere in the scene (SSAO contact shadows, SSR reflections, and the
+  rest of the post chain all still read correctly alongside the new shadow term). **Not yet
+  visually re-confirmed by the user** — same standing limitation as every other change in this
+  file (no live input desktop here; see the `verify` skill) — though shadow correctness here
+  doesn't depend on interactive input the way the SSAO temporal work did, so a static
+  screenshot is comparatively strong evidence for this particular feature.
+
+  **Not done / deliberately deferred:** per-cascade frustum culling of the shadow-casting draw
+  loop (draws every entity into every cascade unconditionally — fine for this scene's object
+  count, a real cost at scale); no cascade-boundary debug visualization
+  (`GetCascadeColor` exists in `Shadows.fxh` if this is ever needed); bias/`fFilterWorldSize`
+  (currently a single hand-picked `0.02`) untested against grazing-angle acne or peter-panning
+  beyond what the front-face-culled shadow pass already mitigates structurally. `docs/
+  architecture.md`'s rendering-pipeline section predates this and doesn't mention the shadow
+  pre-pass yet — worth a `/tidy-md` pass.

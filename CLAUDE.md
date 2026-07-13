@@ -30,31 +30,21 @@ re-implements it.
 
 ## Current state
 
-The app opens a window, creates a Vulkan device + swap chain, and each frame draws a
-small spinning scene — a smooth **sphere** (non-uniformly scaled into an **ellipsoid**,
-exercising the inverse-transpose normal matrix), a faceted **cube**, a **torus**, and a
-loaded **glTF model** (`helmet.glb`), on a **ground plane**. Everything is a node in an
-**entity-tree scene graph** (`core/scene.h`) with hierarchy-composed world transforms — a
-small satellite is parented to the cube and orbits it, and a directional **light entity**
-(aimed by rotating it) lights the scene. The procedural primitives are
-cel-shaded with a **banded diffuse fill + inverted-hull silhouette outline** in their own
-colors (base + a **per-object outline**); the model is cel-shaded with its **albedo
-texture** + an **inverted-hull outline** (via DiligentTools' glTF loader). The scene renders into an **HDR offscreen
-target + world-space normal + motion-vector G-buffers** (MRT); a **DiligentFX post
-chain** (via `PostFXContext`) applies **SSAO** (temporal-denoised contact shadows),
-optional **TAA**, **depth of field**, and **screen-space reflections**, and **Bloom**,
-then an **ACES tone-map pass** resolves to the back buffer. A docked **Dear ImGui editor**
-(Bai Jamjuree font, 3 selectable themes) drives it live: a **Scene Hierarchy** panel (select /
-add-child / duplicate / delete / drag-drop reparent), an **Inspector** for the selected entity
-(name, transform, material or light color/intensity, **ImGuizmo** move/rotate/scale gizmo
-with **W/E/R/X hotkeys + snapping**), a **Debug** panel (theme, **scene save/load** to a
-text `.scene` file, band count, global style, and every post effect), and an **Asset
-Browser** for `assets/` (breadcrumb navigation, a sortable file table, and image
-thumbnails/preview). An **editor camera** navigates the scene via mouse + keyboard
-(right-drag orbit/WASD/QE fly, middle-drag pan, scroll zoom, F focus) or a **gamepad**
-(left-stick fly, right-stick orbit), all through a rebindable **action-map input system**
-(`assets/input.json`) — with input
-suppressed while using the UI. HLSL shaders cross-compile to SPIR-V at runtime.
+The app opens a window, creates a Vulkan device + swap chain, and each frame draws a small
+demo scene — procedural primitives (sphere/cube/torus/plane) and a loaded glTF model, all
+nodes in an **entity-tree scene graph** with hierarchy-composed world transforms. Everything
+is **cel-shaded** with a banded diffuse fill + inverted-hull outline (per-object color/width),
+lit by **cascaded shadow maps** (Diligent's `ShadowMapManager`) from the scene light, rendered
+into an **HDR + normal + motion-vector G-buffer**; a **DiligentFX post chain** (SSAO, optional
+TAA/DoF/SSR, Bloom) resolves through ACES tone-mapping to the back buffer. A docked
+**Dear ImGui editor** (3 themes) provides a Scene Hierarchy, an Inspector with an ImGuizmo
+gizmo, a Debug panel (scene save/load, every post effect), and an Asset Browser with
+thumbnails. An **editor camera** and a rebindable **action-map input system** (mouse/keyboard/
+gamepad) drive it, with input suppressed while using the UI. HLSL shaders cross-compile to
+SPIR-V at runtime.
+
+See **[docs/architecture.md](docs/architecture.md)** for the full design: the renderer seam,
+frame loop, rendering pipeline, scene model, and data flow.
 
 ## Build
 
@@ -114,6 +104,7 @@ external/                 Git submodules (see .gitmodules): DiligentCore/Tools/F
 CMakeLists.txt            add_subdirectory the submodules; disables unused Diligent backends
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
 .clangd                   Points clangd at build/windows-debug's compile_commands.json
+docs/architecture.md          Full architecture writeup: seam, frame loop, pipeline, data flow
 docs/clion-setup-windows.md    CLion toolchain + preset + debug setup (Windows, active)
 docs/clion-setup-{linux,macos}.md  Setup notes for those platforms (planned)
 docs/cpp-style-guide.md        C++ house style (formatting + comments + seam rules)
@@ -170,26 +161,35 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-The renderer core is done (toon fill + outline, HDR, full DiligentFX post stack), and the
-**engine/editor layer** — `ToonEngineOld`'s scene graph, model loading, inspector, camera,
-serialization, input (action maps, rebinding, gamepad), and asset browser — has been ported
-too. See MEMORY.md → *ToonEngineOld carry-over* for the survey + per-system porting notes.
+The renderer and editor are done (toon fill + outline, HDR + full DiligentFX post stack;
+scene graph, inspector/gizmos, editor camera, action-map input, serialization, asset
+browser). Today the app is an editor that draws a scene; the arc below turns it into a
+runtime you can build a game on, sequenced by dependency. See docs/architecture.md for the
+current design and MEMORY.md for history + the ToonEngineOld carry-over survey.
 
-**A. Environment & fidelity**
-1. **Grid + sky gradient** — HLSL ports of the old editor backdrop.
-2. **Cascaded shadow maps** — toon-friendly directional shadows (needs seam framebuffer /
-   depth-array support).
+**M1 — Simulation foundation.** Turn the editor into a game runtime.
+1. Fixed-timestep sim loop — accumulator + render/sim decoupling (`main.cpp` runs a plain variable `dt` today).
+2. Play / pause / step mode — run gameplay in-editor, distinct from edit mode.
+3. Entity behavior system — per-entity Update hooks (a component/behavior layer, ECS as a
+   later scaling option). Entities are render-data only today; this is the core gap.
 
-**B. Later**
-1. **Skeletal animation** (play the fox/dragon clips), plu/comms the animation entity component
-2. **2D / sprites**, plus the sprite entity component
-3. **Instancing** (deferred — a per-instance draw path for many-object scenes).
+**M2 — Interaction and world.** Rules and feedback.
+1. Physics + collision — rigid bodies, colliders, raycasts (new submodule, e.g. Jolt).
+2. Audio — SFX + music, positional (new submodule, e.g. miniaudio).
+
+**M3 — Characters and fidelity.** Populate and light the world (ports from `ToonEngineOld`).
+1. Skeletal animation — play the fox/dragon clips; an animation entity component.
+2. Grid + sky gradient — HLSL port of the old editor backdrop.
+3. 2D / sprites, plus a sprite entity component.
+
+**M4 — Scale and polish** (later): instancing (a per-instance draw path for many-object
+scenes); particles / VFX; prefabs (reusable entity templates for runtime spawning).
 
 **Infra / cross-cutting** (unscheduled): Linux (Vulkan) then macOS (MoltenVK, needs the
-GLFW Cocoa `NSView` `.mm` helper); re-enable D3D11 for older Windows devices;
-**fixed-timestep** sim loop (`main.cpp` runs a plain variable `dt` today); **shader
-hot-reload** via Diligent's `IRenderStateCache` (`EnableHotReload` + `Reload()`, already
-reachable through the linked `Diligent-GraphicsTools`), not a hand-rolled file-watcher.
+GLFW Cocoa `NSView` `.mm` helper); re-enable D3D11 for older Windows devices; shader
+hot-reload via Diligent's `IRenderStateCache` (`EnableHotReload` + `Reload()`, already
+reachable through the linked `Diligent-GraphicsTools`); asset packaging + relative
+shader/asset paths for shipping a build.
 
 ## Constraints
 

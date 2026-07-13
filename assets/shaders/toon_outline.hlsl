@@ -33,6 +33,7 @@ PSInput VSMain(VSInput vin)
     float3x3 prevWorldInv    = transpose((float3x3)g_PrevNormalMatrix);
     float3   prevInflated    = vin.Pos + mul(prevWorldNormal, prevWorldInv) * g_Outline.w;
     o.PrevClip      = mul(float4(prevInflated, 1.0), g_PrevWorldViewProj);
+    o.WorldPos      = mul(float4(inflated, 1.0), g_World).xyz; // unused by PSMain; PSInput is shared with the fill pass
     return o;
 }
 
