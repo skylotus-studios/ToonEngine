@@ -126,12 +126,12 @@ namespace toon {
 
         ImGui::SetNextWindowPos(ImVec2(800, 36), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(700, 320), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Asset Browser");
+        ImGui::Begin("Contents");
 
-        // Breadcrumb bar: "<<" jumps to root, then one button per path segment below it.
+        // Breadcrumb bar: "«" jumps to root, then one button per path segment below it.
         {
             const auto rel = fs::relative(currentDir, root);
-            if (ImGui::SmallButton("<<")) { NavigateTo(root); }
+            if (ImGui::SmallButton("◄")) { NavigateTo(root); }
             ImGui::SameLine();
 
             fs::path accum = root;

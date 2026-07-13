@@ -527,7 +527,7 @@ int main() {
         sceneStatus = "New scene.";
     };
 
-    // Asset browser: browses assets/ with thumbnails; passive besides double-click, which
+    // Contents: browses assets/ with thumbnails; passive besides double-click, which
     // this routes through loadScene when the activated file is a .scene.
     toon::FileBrowser assetBrowser;
     assetBrowser.Init(TOON_ASSETS_DIR);
@@ -818,13 +818,7 @@ int main() {
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("View")) {
-                ImGui::MenuItem("Playback", nullptr, &showPlayback);
-                ImGui::MenuItem("Scene Hierarchy", nullptr, &showHierarchy);
-                ImGui::MenuItem("Inspector", nullptr, &showInspector);
-                ImGui::MenuItem("ToonEngine Debug", nullptr, &showDebug);
-                ImGui::MenuItem("Asset Browser", nullptr, &showAssetBrowser);
-                ImGui::Separator();
-                if (ImGui::BeginMenu("Theme")) {
+                if (ImGui::BeginMenu("Themes")) {
                     for (int i = 0; i < static_cast<int>(Theme::Count); ++i) {
                         const Theme t = static_cast<Theme>(i);
                         if (ImGui::MenuItem(ThemeName(t), nullptr, t == uiTheme)) {
@@ -834,6 +828,12 @@ int main() {
                     }
                     ImGui::EndMenu();
                 }
+                ImGui::Separator();
+                ImGui::MenuItem("Playback", nullptr, &showPlayback);
+                ImGui::MenuItem("Objects", nullptr, &showHierarchy);
+                ImGui::MenuItem("Properties", nullptr, &showInspector);
+                ImGui::MenuItem("Settings", nullptr, &showDebug);
+                ImGui::MenuItem("Contents", nullptr, &showAssetBrowser);
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Help")) {
@@ -902,31 +902,41 @@ int main() {
             ImGui::DockBuilderRemoveNode(dockspaceId);
             ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
-            // A thin Playback strip across the very top (M1.2); Hierarchy on the far left;
-            // Inspector (top) + Debug (bottom) stacked on the right; Asset Browser along the
-            // bottom of what's left; the 3D scene shows through the remaining pass-through
+            // A Playback strip across the very top (M1.2) -- two rows tall (transport +
+            // gizmo settings), hence 0.10 rather than a single row's ~0.06; Objects on the far
+            // left; Properties (top) + Settings (bottom) stacked on the right; Contents along
+            // the bottom of what's left; the 3D scene shows through the remaining pass-through
             // center. The top split runs FIRST so every other split operates on the region
             // already below it.
             ImGuiID centerId = dockspaceId;
-            const ImGuiID playbackId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Up, 0.06f, nullptr, &centerId);
+            const ImGuiID playbackId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Up, 0.10f, nullptr, &centerId);
             const ImGuiID leftId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, 0.20f, nullptr, &centerId);
             ImGuiID rightId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.34f, nullptr, &centerId);
             const ImGuiID rightTopId = ImGui::DockBuilderSplitNode(rightId, ImGuiDir_Up, 0.55f, nullptr, &rightId);
             const ImGuiID bottomId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.28f, nullptr, &centerId);
             ImGui::DockBuilderDockWindow("Playback", playbackId);
-            ImGui::DockBuilderDockWindow("Scene Hierarchy", leftId);
-            ImGui::DockBuilderDockWindow("Inspector", rightTopId);
-            ImGui::DockBuilderDockWindow("ToonEngine Debug", rightId);
-            ImGui::DockBuilderDockWindow("Asset Browser", bottomId);
+            ImGui::DockBuilderDockWindow("Objects", leftId);
+            ImGui::DockBuilderDockWindow("Properties", rightTopId);
+            ImGui::DockBuilderDockWindow("Settings", rightId);
+            ImGui::DockBuilderDockWindow("Contents", bottomId);
+            // Playback reads as a fixed toolbar, not a document -- no tab/title to show or drag.
+            if (ImGuiDockNode *playbackNode = ImGui::DockBuilderGetNode(playbackId)) {
+                playbackNode->SetLocalFlags(ImGuiDockNodeFlags_NoTabBar);
+            }
             ImGui::DockBuilderFinish(dockspaceId);
         }
 #endif
 
-        // --- Playback: Play / Pause / Step / Stop for the fixed-timestep sim (M1.2) -----
-        // Docked as the thin top strip set up above. Editing (default): nothing simulates.
-        // Playing: today's M1.1 accumulator runs. Paused: frozen mid-play, scene stays put.
-        // Stop always restores sceneBackup -- Play is a disposable sandbox, never a permanent
-        // edit, which is what makes testing future gameplay/physics safe to experiment with.
+        // --- Playback: Play / Pause / Step / Stop for the fixed-timestep sim (M1.2), plus the
+        // gizmo's Local/Snap/step-size controls (moved here from Properties -- they're global
+        // editing settings, not per-object, so they don't need a selection to be usable). Docked
+        // as the top strip set up above, with its dock node's tab bar suppressed (NoTabBar) so
+        // it reads as a fixed toolbar, not a document with a title. Editing (default): nothing
+        // simulates. Playing: today's M1.1 accumulator runs. Paused: frozen mid-play, scene
+        // stays put. Stop always restores sceneBackup -- Play is a disposable sandbox, never a
+        // permanent edit, which is what makes testing future gameplay/physics safe to experiment
+        // with. Mode itself has no text readout -- Play/Pause's label plus Step/Stop's enabled
+        // state already tell the whole story.
         // playbackOpen captures the pre-Begin value: Begin(..., &showPlayback) may flip
         // showPlayback to false itself (the window's own close button), but Begin was still
         // CALLED this frame whenever we entered here, so End() below must still be paired
@@ -936,8 +946,15 @@ int main() {
         if (playbackOpen &&
             ImGui::Begin("Playback", &showPlayback,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            // Row 1: Play/Pause, Step, Stop -- same fixed width (sized off "Pause", the longest
+            // label) so the group centers cleanly and reads as one toolbar instead of 3 buttons
+            // each hugging their own label.
+            const float btnW = ImGui::CalcTextSize("Pause").x + ImGui::GetStyle().FramePadding.x * 2.0f + 8.0f;
+            const float rowWidth = btnW * 3.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - rowWidth) * 0.5f);
+
             const bool isPlaying = (mode == EditorMode::Playing);
-            if (ImGui::Button(isPlaying ? "Pause" : "Play")) {
+            if (ImGui::Button(isPlaying ? "Pause" : "Play", ImVec2(btnW, 0.0f))) {
                 if (mode == EditorMode::Editing) {
                     sceneBackup = scene; // snapshot: Stop restores exactly this
                     mode = EditorMode::Playing;
@@ -950,7 +967,7 @@ int main() {
             }
             ImGui::SameLine();
             ImGui::BeginDisabled(isPlaying); // stepping while already continuously ticking isn't meaningful
-            if (ImGui::Button("Step")) {
+            if (ImGui::Button("Step", ImVec2(btnW, 0.0f))) {
                 if (mode == EditorMode::Editing) {
                     sceneBackup = scene;
                     mode = EditorMode::Paused; // step lands paused, not playing
@@ -962,7 +979,7 @@ int main() {
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::BeginDisabled(mode == EditorMode::Editing); // nothing to stop yet
-            if (ImGui::Button("Stop")) {
+            if (ImGui::Button("Stop", ImVec2(btnW, 0.0f))) {
                 scene = sceneBackup; // discard everything Play did -- see the panel comment above
                 spinners.clear();    // wholesale restore invalidates cached indices, same reason loadScene clears it
                 mode = EditorMode::Editing;
@@ -970,14 +987,27 @@ int main() {
                 suppressNextFrameHistory = true;
             }
             ImGui::EndDisabled();
+
+            // Row 2: gizmo editing settings (moved from Properties) -- Local space toggle, snap
+            // toggle, and the active op's step size, squeezed to ~4 characters since this is a
+            // quick-glance toolbar value, not a precision input.
+            bool localSpace = (gizmoMode == ImGuizmo::LOCAL);
+            if (ImGui::Checkbox("Local", &localSpace)) { gizmoMode = localSpace ? ImGuizmo::LOCAL : ImGuizmo::WORLD; }
             ImGui::SameLine();
-            ImGui::TextDisabled("Mode: %s", mode == EditorMode::Editing    ? "EDITING"
-                                             : mode == EditorMode::Playing ? "PLAYING"
-                                                                            : "PAUSED");
+            ImGui::Checkbox("Snap", &gizmoSnap);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(ImGui::CalcTextSize("0000").x + ImGui::GetStyle().FramePadding.x * 2.0f);
+            if (gizmoOp == ImGuizmo::ROTATE) {
+                ImGui::DragFloat("Angle", &snapRotateDeg, 1.0f, 1.0f, 90.0f, "%.0f");
+            } else if (gizmoOp == ImGuizmo::SCALE) {
+                ImGui::DragFloat("Scale", &snapScale, 0.05f, 0.001f, 10.0f, "%.2f");
+            } else {
+                ImGui::DragFloat("Move", &snapTranslate, 0.1f, 0.001f, 10.0f, "%.2f");
+            }
         }
         if (playbackOpen) { ImGui::End(); }
 
-        // --- Scene Hierarchy: select / add / duplicate / delete / drag-drop reparent -----
+        // --- Objects: select / add / duplicate / delete / drag-drop reparent -----
         // A flat list over scene.entities (parents always precede children), indented by
         // depth so it reads as a tree. Structural edits reorder the vector and invalidate
         // indices, so the loop only RECORDS a pending op / drop and applies them afterward.
@@ -993,7 +1023,7 @@ int main() {
         // CALLED this frame whenever we entered here, so End() below must still be paired
         // against that, not against showHierarchy's possibly-just-changed value.
         const bool hierarchyOpen = showHierarchy;
-        if (hierarchyOpen && ImGui::Begin("Scene Hierarchy", &showHierarchy)) {
+        if (hierarchyOpen && ImGui::Begin("Objects", &showHierarchy)) {
             const int n = static_cast<int>(scene.entities.size());
             for (int i = 0; i < n; ++i) {
                 const toon::Entity &e = scene.entities[i];
@@ -1088,9 +1118,9 @@ int main() {
             }
         }
 
-        // --- Inspector: edit the selected entity (name / transform / material) -----------
+        // --- Properties: edit the selected entity (name / transform / material) -----------
         const bool inspectorOpen = showInspector; // see hierarchyOpen's comment above
-        if (inspectorOpen && ImGui::Begin("Inspector", &showInspector)) {
+        if (inspectorOpen && ImGui::Begin("Properties", &showInspector)) {
             if (scene.selected < 0 || scene.selected >= static_cast<int>(scene.entities.size())) {
                 ImGui::TextDisabled("Select an entity in the hierarchy.");
             } else {
@@ -1135,32 +1165,6 @@ int main() {
                     ImGui::DragFloat("Intensity", &e.light->intensity, 0.01f, 0.0f, 10.0f, "%.2f");
                     ImGui::TextDisabled("Aim: rotate this entity (gizmo R).");
                 }
-
-                // Transform-gizmo controls (the gizmo itself draws over the scene, below).
-                if (e.transform && !isRoot) {
-                    ImGui::SeparatorText("Gizmo");
-                    if (ImGui::RadioButton("Move", gizmoOp == ImGuizmo::TRANSLATE)) { gizmoOp = ImGuizmo::TRANSLATE; }
-                    ImGui::SameLine();
-                    if (ImGui::RadioButton("Rotate", gizmoOp == ImGuizmo::ROTATE)) { gizmoOp = ImGuizmo::ROTATE; }
-                    ImGui::SameLine();
-                    if (ImGui::RadioButton("Scale", gizmoOp == ImGuizmo::SCALE)) { gizmoOp = ImGuizmo::SCALE; }
-                    bool localSpace = (gizmoMode == ImGuizmo::LOCAL);
-                    if (ImGui::Checkbox("Local space", &localSpace)) {
-                        gizmoMode = localSpace ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
-                    }
-
-                    ImGui::Checkbox("Snap", &gizmoSnap);
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(or hold Ctrl)");
-                    if (gizmoOp == ImGuizmo::ROTATE) {
-                        ImGui::DragFloat("Angle step", &snapRotateDeg, 0.5f, 1.0f, 90.0f, "%.1f");
-                    } else if (gizmoOp == ImGuizmo::SCALE) {
-                        ImGui::DragFloat("Scale step", &snapScale, 0.01f, 0.001f, 10.0f, "%.3f");
-                    } else {
-                        ImGui::DragFloat("Move step", &snapTranslate, 0.01f, 0.001f, 10.0f, "%.3f");
-                    }
-                    ImGui::TextDisabled("W/E/R move/rotate/scale   X space");
-                }
             }
         }
         if (inspectorOpen) { ImGui::End(); }
@@ -1191,35 +1195,15 @@ int main() {
         }
 
         const bool debugOpen = showDebug; // see hierarchyOpen's comment above
-        if (debugOpen && ImGui::Begin("ToonEngine Debug", &showDebug)) {
+        if (debugOpen && ImGui::Begin("Settings", &showDebug)) {
             ImGui::Text("%.1f FPS (%.3f ms/frame)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
 
-            ImGui::SeparatorText("Editor");
-            if (ImGui::BeginCombo("Theme", ThemeName(uiTheme))) {
-                for (int i = 0; i < static_cast<int>(Theme::Count); ++i) {
-                    const Theme t = static_cast<Theme>(i);
-                    if (ImGui::Selectable(ThemeName(t), t == uiTheme)) {
-                        uiTheme = t;
-                        ApplyTheme(uiTheme, uiScale, window);
-                    }
-                }
-                ImGui::EndCombo();
-            }
-
-            ImGui::SeparatorText("Scene");
-            ImGui::InputText("Path", scenePathBuf, sizeof(scenePathBuf));
-            if (ImGui::Button("Save Scene")) {
-                sceneStatus = toon::SaveScene(scenePathBuf, scene, camera) ? "Saved." : "Save failed (see console).";
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Load Scene")) { loadScene(scenePathBuf); }
-            if (!sceneStatus.empty()) { ImGui::TextDisabled("%s", sceneStatus.c_str()); }
-
-            ImGui::SeparatorText("Style (all objects)");
+            // Theme lives in the View menu now, and Save/Load in the File menu + Contents
+            // (double-click a .scene) -- both dropped here as redundant with those.
+            ImGui::SeparatorText("Shader");
             ImGui::SliderFloat("Bands", &style.bands, 1.0f, 8.0f, "%.0f");
             ImGui::SliderFloat("Ambient", &style.ambient, 0.0f, 1.0f);
-            ImGui::SliderFloat("Outline width x", &outlineScale, 0.0f, 3.0f);
-            ImGui::TextDisabled("Per-object color/outline: see the Inspector.");
+            ImGui::SliderFloat("Outline Thickness", &outlineScale, 0.0f, 3.0f);
 
             ImGui::SeparatorText("Camera");
             ImGui::TextDisabled("Right-drag: orbit (+WASD/QE fly)");
@@ -1267,8 +1251,8 @@ int main() {
         }
         if (debugOpen) { ImGui::End(); }
 
-        // Asset browser: passive navigation/preview, except a double-clicked .scene file,
-        // which loads through the same path as the Debug panel's button (see loadScene).
+        // Contents: passive navigation/preview, except a double-clicked .scene file, which
+        // loads through the same path as the File menu's Open Scene (see loadScene).
         // FileBrowser::Render owns its Begin/End internally (no p_open param), so unlike the
         // three panels above, hiding it via the View menu has no in-panel close button.
         if (showAssetBrowser) {
