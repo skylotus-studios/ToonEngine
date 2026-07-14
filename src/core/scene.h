@@ -10,6 +10,7 @@
 //============================================================================
 #include "core/renderer.h"    // Transform, Material, Mesh/ModelHandle, Mat4 (via math.h)
 #include "core/primitives.h"  // PrimitiveDesc — mesh-regeneration params for serialization
+#include "core/script.h"      // ScriptComponent — Entity's attached native scripts (M1.3)
 
 #include <optional>
 #include <string>
@@ -55,6 +56,24 @@ struct Entity {
     std::string   modelPath;
 
     std::optional<LightComponent> light;    // set -> this entity is a (directional) light
+
+    // Attached native scripts (core/script.h) — per-tick gameplay hooks (M1.3). A
+    // std::unique_ptr member makes ScriptComponent, and therefore Entity, NOT implicitly
+    // copyable — the copy constructor/assignment below deep-clone each script via the
+    // name registry (CreateScript) and its own Save/Load, instead of a raw memberwise
+    // copy. This is what keeps main.cpp's Play/Stop (`sceneBackup = scene` / `scene =
+    // sceneBackup`) and DuplicateEntity (scene.cpp) working unchanged: a copy is no
+    // longer free, but it's still just a copy from the caller's point of view, and it
+    // never touches the Renderer (mesh/model handles are copied as plain IDs), so it
+    // can't leak or re-upload a GPU resource the way a full scene-file reload would.
+    std::vector<ScriptComponent> scripts;
+
+    Entity() = default;
+    Entity(const Entity& other);
+    Entity& operator=(const Entity& other);
+    Entity(Entity&&) = default;            // cheap: moves the scripts vector's buffer,
+    Entity& operator=(Entity&&) = default; // never touches an individual ScriptComponent
+    ~Entity() = default;
 };
 
 // A scene is a flat vector with parents ALWAYS before their children, so a single forward

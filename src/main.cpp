@@ -8,6 +8,8 @@
 #include "core/renderer.h"
 #include "core/primitives.h"
 #include "core/scene.h"
+#include "core/script.h"
+#include "core/scripts/spin_script.h"
 #include "core/camera.h"
 #include "core/input/action_map.h"
 #include "core/input/binding_io.h"
@@ -27,21 +29,16 @@
 #include "imgui_internal.h" // DockBuilder API, for the one-time default layout
 #endif
 #include "ImGuizmo.h" // editor transform gizmos (built on ImGui; seam-exempt like it)
+#include "IconsFontAwesome6.h" // ICON_FA_* glyph macros for the Font Awesome icon font merged below
 
 #include <cstdint>
 #include <cstdio>
 #include <filesystem> // .scene extension check, routing an asset-browser double-click to loadScene
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace {
-    // A spinning entity: which scene entity, and the axis its local rotation animates around
-    // (each frame, rotationEuler = axis * angle).
-    struct Spinner {
-        int entity;
-        toon::Vec3 axis;
-    };
-
     // Upload a CPU mesh and return its handle (logs on failure).
     toon::MeshHandle Upload(toon::Renderer &r, const toon::MeshData &m, const char *name) {
         const toon::MeshHandle h = r.CreateMesh(m.vertices.data(), static_cast<uint32_t>(m.vertices.size()),
@@ -371,6 +368,19 @@ int main() {
     glfwGetWindowContentScale(window, &uiScale, &uiScaleY);
     ImGui::GetIO().Fonts->AddFontFromFileTTF(TOON_FONTS_DIR "/BaiJamjuree-Medium.ttf", 18.0f * uiScale);
 
+    // Merge Font Awesome 6 solid's icon glyphs into that same font (MergeMode stitches them
+    // into the range Bai Jamjuree just registered instead of starting a second font), so the
+    // ICON_FA_* macros (ui/file_browser.cpp) render inline with body text — same baseline,
+    // same line height. GlyphMinAdvanceX gives every icon the same advance width regardless
+    // of its natural glyph width, which keeps a column of mixed icons visually aligned.
+    ImFontConfig iconFontConfig;
+    iconFontConfig.MergeMode = true;
+    iconFontConfig.PixelSnapH = true;
+    iconFontConfig.GlyphMinAdvanceX = 18.0f * uiScale;
+    static const ImWchar iconRanges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
+    ImGui::GetIO().Fonts->AddFontFromFileTTF(TOON_FONTS_DIR "/fa-solid-900.ttf", 18.0f * uiScale, &iconFontConfig,
+                                              iconRanges);
+
     Theme uiTheme = Theme::AmberYellow;
     ApplyTheme(uiTheme, uiScale, window);
 
@@ -400,7 +410,16 @@ int main() {
     // to demonstrate hierarchy composition (it orbits the cube as the cube spins).
     toon::Scene scene;
     toon::EnsureSceneRoot(scene);
-    std::vector<Spinner> spinners; // entities whose local rotation animates each frame
+
+    // Attach a Spin script (core/scripts/spin_script.h) to entity `i` — replaces the old
+    // Spinner side-list; the script now lives inside the entity itself, so it survives
+    // reparent/reload/Stop with no external index bookkeeping to keep in sync.
+    auto addSpin = [&](int i, toon::Vec3 axis, float speed = 0.6f) {
+        auto s = std::make_unique<toon::SpinScript>();
+        s->axis = axis;
+        s->speed = speed;
+        scene.entities[i].scripts.push_back({toon::kSpinScriptName, std::move(s)});
+    };
 
     // Ground plane beneath the objects (catches their SSAO contact shadows; no spin/outline).
     {
@@ -420,7 +439,7 @@ int main() {
         e.transform->scale = {1.5f, 0.8f, 1.0f};
         e.material = toon::Material{{0.85f, 0.30f, 0.35f}, {0.24f, 0.05f, 0.08f}, 0.030f};
         e.material.roughness = 0.15f; // lightly glossy so SSR reflects on it
-        spinners.push_back({i, {0.0f, 1.0f, 0.0f}});
+        addSpin(i, {0.0f, 1.0f, 0.0f});
     }
     // Cube — the satellite's parent.
     const int cubeIdx = toon::AddEntity(scene, 0, "Cube");
@@ -429,7 +448,7 @@ int main() {
         SetPrimitive(renderer, e, toon::PrimitiveDesc::Cube(0.9f));
         e.material = toon::Material{{0.30f, 0.45f, 0.85f}, {0.02f, 0.02f, 0.05f}, 0.050f};
         e.material.roughness = 0.15f;
-        spinners.push_back({cubeIdx, {0.5f, 1.0f, 0.0f}});
+        addSpin(cubeIdx, {0.5f, 1.0f, 0.0f});
     }
     // Satellite — a small sphere PARENTED to the cube (the hierarchy demo). It has no spin of
     // its own; it orbits the cube purely by inheriting the cube's spinning world transform.
@@ -450,7 +469,7 @@ int main() {
         e.transform->position = {2.8f, 0.0f, 0.0f};
         e.material = toon::Material{{0.90f, 0.70f, 0.25f}, {0.32f, 0.20f, 0.03f}, 0.022f};
         e.material.roughness = 0.15f;
-        spinners.push_back({i, {1.0f, 0.0f, 0.0f}});
+        addSpin(i, {1.0f, 0.0f, 0.0f});
     }
     // Loaded glTF model (DiligentTools' loader): cel-shaded albedo + inverted-hull outline.
     const char *helmetPath = TOON_MODELS_DIR "/helmet.glb";
@@ -466,7 +485,7 @@ int main() {
         e.material.outlineColor = {0.02f, 0.02f, 0.03f};
         e.material.outlineWidth = 0.04f;
         e.material.roughness = 0.5f;
-        spinners.push_back({i, {0.0f, 1.0f, 0.0f}});
+        addSpin(i, {0.0f, 1.0f, 0.0f});
     }
     // Sun — a directional light entity (no mesh/model, so the draw loop's isMesh/isModel
     // check skips it). Aimed by rotation (MakeLightTransform), reproducing the scene's old
@@ -503,12 +522,9 @@ int main() {
     std::string sceneStatus;
 
     // Shared scene-load path for the Debug panel's "Load Scene" button AND the asset
-    // browser's double-click-a-.scene behavior (below): LoadScene resets scene.selected and
-    // invalidates every spinners[] index (see core/serializer.h), so spinners must be
-    // cleared at every call site, not just the button's own.
+    // browser's double-click-a-.scene behavior (below).
     auto loadScene = [&](const char *path) {
         if (toon::LoadScene(path, scene, camera, renderer)) {
-            spinners.clear(); // stale entity indices into the scene LoadScene just replaced
             sceneStatus = "Loaded.";
         } else {
             sceneStatus = "Load failed (see console).";
@@ -521,7 +537,6 @@ int main() {
     auto newScene = [&]() {
         toon::DestroyScene(scene);
         toon::EnsureSceneRoot(scene);
-        spinners.clear();
         scene.selected = -1;
         camera = cameraDefault;
         sceneStatus = "New scene.";
@@ -532,7 +547,10 @@ int main() {
     toon::FileBrowser assetBrowser;
     assetBrowser.Init(TOON_ASSETS_DIR);
 
-    bool spin = true;
+    // Gates UpdateScripts (core/script.h) below -- lets scripts be paused without stopping
+    // the rest of the simulation. Was a Spin-demo-specific toggle before M1.3; renamed now
+    // that it gates every attached script, not just the Sphere/Cube/Torus/Helmet's spin.
+    bool runScripts = true;
 #ifdef IMGUI_HAS_DOCK
     bool dockLayoutBuilt = false;
 #endif
@@ -591,9 +609,9 @@ int main() {
         const float dt = static_cast<float>(frameTime);
 
         // Fixed-timestep simulation: advance in whole kFixedDt-sized steps regardless of the
-        // variable frame rate above, so gameplay state (spin today; entity Update hooks /
-        // physics later -- see CLAUDE.md's roadmap) evolves deterministically. Usually one step
-        // per frame; zero if rendering outruns the sim rate, several if the sim fell behind.
+        // variable frame rate above, so gameplay state (script Update hooks; physics later --
+        // see CLAUDE.md's roadmap) evolves deterministically. Usually one step per frame; zero
+        // if rendering outruns the sim rate, several if the sim fell behind.
         // M1.2: only Playing feeds the accumulator from wall-clock time -- Editing/Paused freeze
         // it so no time debt piles up while stopped. Step (from the "Playback" panel, below)
         // credits it with exactly one kFixedDt instead, so the SAME while loop below drains
@@ -610,22 +628,13 @@ int main() {
                 // render pose across the tick this step just produced.
                 toon::SnapshotSimState(scene);
 
-                // Animate the spinning entities' local rotation incrementally (added to whatever
-                // rotationEuler currently is) -- the stand-in for a future per-entity Update hook.
-                // Incremental rather than an absolute axis*sharedClock formula so a gizmo-set
-                // orientation (set while paused) is the new baseline spin continues from on resume,
-                // instead of the whole spin group snapping back to where a shared clock says it
-                // "should" be.
-                if (spin) {
-                    constexpr float kSpinRate = 0.6f; // radians/sec
-                    for (const Spinner &s : spinners) {
-                        if (scene.entities[s.entity].transform) {
-                            scene.entities[s.entity].transform->rotationEuler =
-                                scene.entities[s.entity].transform->rotationEuler +
-                                s.axis * static_cast<float>(kFixedDt * kSpinRate);
-                        }
-                    }
-                }
+                // Run every entity's attached scripts for this tick (core/script.h) -- e.g. the
+                // Sphere/Cube/Torus/Helmet's SpinScript, replacing the old hardcoded spin block.
+                // Each script advances its own entity's state incrementally (SpinScript adds to
+                // whatever rotationEuler currently is), so a gizmo-set orientation (set while
+                // paused) is the new baseline it continues from on resume, instead of snapping
+                // back to where an absolute clock-based formula would say it "should" be.
+                if (runScripts) { toon::UpdateScripts(scene, static_cast<float>(kFixedDt)); }
                 accumulator -= kFixedDt;
             }
         }
@@ -651,11 +660,11 @@ int main() {
         const bool gizmoActive = ImGuizmo::IsUsing();
         toon::Input::SetCaptured(io.WantCaptureMouse || gizmoActive, io.WantCaptureKeyboard);
         // Feeds PostParams::suppressTemporalHistory (see its comment): an active gizmo
-        // drag, any ImGui widget being edited, Spin continuously animating, or a Stop-restore/
-        // Step from the Playback panel last frame (a pose jump, not smooth motion) all mean
-        // post-fx temporal history shouldn't be trusted this frame.
+        // drag, any ImGui widget being edited, scripts continuously animating, or a
+        // Stop-restore/Step from the Playback panel last frame (a pose jump, not smooth
+        // motion) all mean post-fx temporal history shouldn't be trusted this frame.
         const bool suppressTemporalHistory =
-            gizmoActive || ImGui::IsAnyItemActive() || spin || suppressNextFrameHistory;
+            gizmoActive || ImGui::IsAnyItemActive() || runScripts || suppressNextFrameHistory;
         suppressNextFrameHistory = false; // consumed -- only suppresses the one frame right after
         {
             using M = toon::Input::MouseButton;
@@ -814,7 +823,7 @@ int main() {
                     gizmoMode = (gizmoMode == ImGuizmo::LOCAL) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
                 }
                 ImGui::Separator();
-                ImGui::MenuItem("Spin", nullptr, &spin);
+                ImGui::MenuItem("Run Scripts", nullptr, &runScripts);
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("View")) {
@@ -949,16 +958,17 @@ int main() {
             // Row 1: Play/Pause, Step, Stop -- same fixed width (sized off "Pause", the longest
             // label) so the group centers cleanly and reads as one toolbar instead of 3 buttons
             // each hugging their own label.
-            const float btnW = ImGui::CalcTextSize("Pause").x + ImGui::GetStyle().FramePadding.x * 2.0f + 8.0f;
+            const float btnW = ImGui::CalcTextSize(ICON_FA_FORWARD_STEP).x + ImGui::GetStyle().FramePadding.x * 2.0f + 8.0f;
             const float rowWidth = btnW * 3.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - rowWidth) * 0.5f);
 
             const bool isPlaying = (mode == EditorMode::Playing);
-            if (ImGui::Button(isPlaying ? "Pause" : "Play", ImVec2(btnW, 0.0f))) {
+            if (ImGui::Button(isPlaying ? ICON_FA_PAUSE : ICON_FA_PLAY, ImVec2(btnW, 0.0f))) {
                 if (mode == EditorMode::Editing) {
                     sceneBackup = scene; // snapshot: Stop restores exactly this
                     mode = EditorMode::Playing;
                     accumulator = 0.0;
+                    toon::CreateScripts(scene); // fire OnCreate once, entering this Play session
                 } else if (mode == EditorMode::Playing) {
                     mode = EditorMode::Paused;
                 } else { // Paused -> resume
@@ -967,11 +977,12 @@ int main() {
             }
             ImGui::SameLine();
             ImGui::BeginDisabled(isPlaying); // stepping while already continuously ticking isn't meaningful
-            if (ImGui::Button("Step", ImVec2(btnW, 0.0f))) {
+            if (ImGui::Button(ICON_FA_FORWARD_STEP, ImVec2(btnW, 0.0f))) {
                 if (mode == EditorMode::Editing) {
                     sceneBackup = scene;
                     mode = EditorMode::Paused; // step lands paused, not playing
                     accumulator = 0.0;
+                    toon::CreateScripts(scene); // fire OnCreate once, entering this Play session
                 }
                 stepRequested = true;
                 suppressNextFrameHistory = true; // one tick's worth of pose jump, not smooth motion
@@ -979,9 +990,8 @@ int main() {
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::BeginDisabled(mode == EditorMode::Editing); // nothing to stop yet
-            if (ImGui::Button("Stop", ImVec2(btnW, 0.0f))) {
+            if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, 0.0f))) {
                 scene = sceneBackup; // discard everything Play did -- see the panel comment above
-                spinners.clear();    // wholesale restore invalidates cached indices, same reason loadScene clears it
                 mode = EditorMode::Editing;
                 accumulator = 0.0;
                 suppressNextFrameHistory = true;
@@ -1214,7 +1224,7 @@ int main() {
             ImGui::TextDisabled("Rebind: edit assets/input.json, then relaunch.");
             ImGui::SliderAngle("FOV", &camera.fovY, 20.0f, 100.0f);
             if (ImGui::Button("Reset camera")) { camera = cameraDefault; }
-            ImGui::Checkbox("Spin", &spin);
+            ImGui::Checkbox("Run Scripts", &runScripts);
 
             ImGui::SeparatorText("Post (HDR)");
             ImGui::Checkbox("Tone map (ACES)", &post.toneMap);

@@ -20,10 +20,9 @@ bool SaveScene(const char* path, const Scene& scene, const Camera& camera);
 
 // Load a scene from `path`, replacing `scene` and `camera` entirely on success. Procedural
 // entities rebuild their mesh via `renderer.CreateMesh` from the saved PrimitiveDesc; model
-// entities reload via `renderer.LoadModel`. Returns false (and logs to stderr, leaving
-// `scene`/`camera` untouched) if the file can't be opened. Resets `scene.selected` to -1 —
-// callers driving a `spinners`-style side list of entity indices (main.cpp's scripted demo
-// animation) must drop it too, since every index is stale after a load.
+// entities reload via `renderer.LoadModel`; scripts reconstruct via the name registry (see
+// core/script.h). Returns false (and logs to stderr, leaving `scene`/`camera` untouched) if
+// the file can't be opened. Resets `scene.selected` to -1.
 bool LoadScene(const char* path, Scene& scene, Camera& camera, Renderer& renderer);
 
 } // namespace toon

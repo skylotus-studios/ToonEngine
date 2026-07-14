@@ -4,6 +4,7 @@
 #include "ui/file_browser.h"
 
 #include "imgui.h" // ImGui is seam-exempt (see CLAUDE.md) — UI code may call it directly
+#include "IconsFontAwesome6.h" // ICON_FA_* glyphs, merged into the UI font in main.cpp
 
 #include <algorithm>
 #include <chrono>
@@ -131,7 +132,9 @@ namespace toon {
         // Breadcrumb bar: "«" jumps to root, then one button per path segment below it.
         {
             const auto rel = fs::relative(currentDir, root);
-            if (ImGui::SmallButton("◄")) { NavigateTo(root); }
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 4.0f));
+            if (ImGui::Button(ICON_FA_HOUSE "##nav_root")) { NavigateTo(root); }
+            ImGui::PopStyleVar();
             ImGui::SameLine();
 
             fs::path accum = root;
@@ -201,7 +204,7 @@ namespace toon {
                 const ImVec2 cursor = ImGui::GetCursorPos();
 
                 if (e.isDirectory) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "[D]");
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), ICON_FA_FOLDER);
                 } else if (ThumbnailCache::IsImageFile(e.extension)) {
                     if (const TextureHandle th = thumbnails.Get(renderer, e.fullPath.string());
                         th != TextureHandle::Invalid) {
@@ -211,12 +214,12 @@ namespace toon {
                         ImGui::Image(static_cast<ImTextureID>(renderer.GetTextureImGuiID(th)),
                                      ImVec2(kIconSize, kIconSize));
                     } else {
-                        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "[I]");
+                        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), ICON_FA_FILE_IMAGE);
                     }
                 } else if (IsModelFile(e.extension)) {
-                    ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "[M]");
+                    ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), ICON_FA_CUBE);
                 } else {
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "   ");
+                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), ICON_FA_FILE);
                 }
                 ImGui::SameLine();
                 ImGui::SetCursorPosY(cursor.y);

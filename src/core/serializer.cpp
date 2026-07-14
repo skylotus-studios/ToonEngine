@@ -9,6 +9,7 @@
 #include "core/serializer.h"
 
 #include "core/primitives.h"
+#include "core/script.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -120,6 +121,16 @@ bool SaveScene(const char* path, const Scene& scene, const Camera& camera) {
             WriteVec3(f, "  light.color", e.light->color);
             WriteFloat(f, "  light.intensity", e.light->intensity);
         }
+
+        // One line per script: "script <Name> <field...>" — the name resolves through
+        // the registry on load (see below); the fields are whatever that script's own
+        // Save writes, exactly like "primitive <kind> <field...>" above.
+        for (const ScriptComponent& sc : e.scripts) {
+            if (!sc.instance) continue;
+            f << "  script " << sc.name;
+            sc.instance->Save(f);
+            f << "\n";
+        }
         f << "\n";
     }
 
@@ -212,6 +223,16 @@ bool LoadScene(const char* path, Scene& scene, Camera& camera, Renderer& rendere
         } else if (key == "light.intensity") {
             if (!cur->light) cur->light.emplace();
             ss >> cur->light->intensity;
+        } else if (key == "script") {
+            std::string scriptName;
+            ss >> scriptName;
+            // CreateScript resolves the subclass by name; Load then reads the rest of
+            // THIS line as that script's own fields (see script.h). A name this build
+            // doesn't recognize logs and is skipped, not fatal to the rest of the load.
+            if (auto instance = CreateScript(scriptName)) {
+                instance->Load(ss);
+                cur->scripts.push_back({scriptName, std::move(instance)});
+            }
         }
     }
 

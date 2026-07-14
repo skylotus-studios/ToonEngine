@@ -12,8 +12,8 @@ shadow maps, an HDR G-buffer, and a DiligentFX post-processing chain — with a 
 UI for inspecting and editing the scene. The defining architectural decision, covered first
 below, is the renderer seam: every Diligent type and header is quarantined inside one
 translation unit, so the rest of the engine — the scene graph, the editor camera, the input
-system, the serializer, the UI panels, and eventually gameplay systems — never touches Diligent
-directly and stays backend-agnostic by construction.
+system, the serializer, the UI panels, and gameplay systems (native scripts today, physics and
+audio next) — never touches Diligent directly and stays backend-agnostic by construction.
 
 ## The renderer seam
 
@@ -160,6 +160,9 @@ src/
     renderer.cpp                Diligent (Vulkan) backend behind the seam: PSOs, MRT targets, cascaded shadow maps, DiligentFX post chain, ImGui glue.
     math.h                      Dependency-free Vec2/Vec3/Vec4 + a data-only row-major Mat4 — the seam's public-API vocabulary.
     scene.{h,cpp}                Entity-tree scene graph: hierarchy, world-transform composition, editor mutations.
+    script.{h,cpp}               Native gameplay scripts: per-entity Update hooks + name->factory registry (M1.3).
+    scripts/
+      spin_script.{h,cpp}         First concrete Script: replaces main.cpp's old hardcoded spin block.
     camera.{h,cpp}               Editor camera: orbit/pan/zoom/fly/focus, derived from the same Diligent matrices SetCamera uses.
     primitives.{h,cpp}          Procedural CPU mesh generators (sphere/cube/torus/plane) + PrimitiveDesc provenance for serialization.
     serializer.{h,cpp}          Scene save/load — entity/camera state to a text .scene file.
@@ -217,8 +220,9 @@ the app's own callbacks instead of overwriting them); register default editor in
 and load/create `assets/input.json`; `InitUI` (enables ImGui docking, loads the Bai Jamjuree
 font, applies one of three built-in themes); wire the framebuffer-resize callback to
 `Renderer::Resize`; build the demo scene graph (ground, sphere, cube, satellite orbiting the
-cube, torus, a loaded glTF helmet, a light entity); construct the editor `Camera`, the shared
-`Material style`, `PostParams post`, and the `FileBrowser`.
+cube, torus, a loaded glTF helmet, a light entity — the sphere/cube/torus/helmet each get a
+`SpinScript` attached, see "The scene model" -> "Scripts" below); construct the editor
+`Camera`, the shared `Material style`, `PostParams post`, and the `FileBrowser`.
 
 ### Per frame
 
@@ -236,7 +240,7 @@ if (stepRequested)   accumulator += kFixedDt
 if (mode == Playing || stepRequested):
     while (accumulator >= kFixedDt):
         SnapshotSimState(scene)          // prevSimTransform = transform, for every transformed entity
-        if (spin) advance spinning entities' rotationEuler by kFixedDt (not dt)
+        if (runScripts) UpdateScripts(scene, kFixedDt)   // every entity's attached scripts' OnUpdate (core/script.h)
         accumulator -= kFixedDt
 
 // Outside Playing, alpha is pinned to 1.0: the accumulator isn't draining, so any leftover
@@ -247,7 +251,7 @@ UpdateWorldTransforms(scene, alpha)  // snapshots prevWorldMatrix, then composes
 
 // Editor camera: gate on ImGui capture OR an active gizmo drag, then navigate
 Input::SetCaptured(io.WantCaptureMouse || gizmoActive, io.WantCaptureKeyboard)
-suppressTemporalHistory = gizmoActive || ImGui::IsAnyItemActive() || spin || suppressNextFrameHistory
+suppressTemporalHistory = gizmoActive || ImGui::IsAnyItemActive() || runScripts || suppressNextFrameHistory
   right-drag  -> CameraOrbit (+ WASD/QE fly via the "camera.fly.*" action map)
   middle-drag -> CameraPan
   scroll      -> CameraZoom
@@ -473,6 +477,7 @@ struct Entity {
     PrimitiveDesc primitive;    // provenance for serialization: regenerate a procedural mesh on load
     std::string   modelPath;    // provenance for serialization: reload a glTF model on load
     std::optional<LightComponent> light;                // set -> this entity is a directional light
+    std::vector<ScriptComponent> scripts;               // attached native scripts, see "Scripts" below
 };
 
 struct Scene {
@@ -510,6 +515,56 @@ while iterating and applies them only after the loop ends. `ReparentEntity` is w
 just clears the vector: entities hold only handles, never GPU resources, so there's nothing
 GPU-side to release here (see "Ownership" below).
 
+### Scripts
+
+`core/script.h` (M1.3) is where per-entity gameplay logic lives — a native-script layer in
+Cherno/Hazel's `NativeScriptComponent` shape, backed by `Entity::scripts` rather than an
+`entt` registry (ECS stays a deliberate later option, not built; see MEMORY.md's "Entity
+behavior system" section for the full survey and reasoning). `Script` is a virtual base:
+
+```cpp
+class Script {
+public:
+    virtual void OnCreate(Entity& self, Scene& scene) {}
+    virtual void OnUpdate(Entity& self, Scene& scene, float dt) {}
+    virtual void OnDestroy(Entity& self, Scene& scene) {}   // declared, not wired -- no mid-Play spawn/destroy yet
+    virtual void Save(std::ostream& out) const {}
+    virtual void Load(std::istream& in) {}
+};
+```
+
+`self`/`scene` are call-time parameters, never stored on the `Script` instance: storing
+either would dangle the moment `scene.entities` reallocates. A `Script` holds no private
+simulation state; anything persistent lives on the `Entity` (or a future component), so a
+script is a pure function of `(entity data, dt)`. See MEMORY.md for why: a future
+rollback-netcode-style fast snapshot only ever needs the data this way, never the script
+objects. `ScriptComponent` pairs a stable name with the live instance
+(`{ std::string name; std::unique_ptr<Script> instance; }`); `RegisterScript`/`CreateScript`
+form a name -> factory registry so a name loaded from a `.scene` file, or an in-memory clone
+(next paragraph), can reconstruct the right subclass. `CreateScripts(scene)` fires each
+script's `OnCreate` once, in entity order, when a Play session begins; `UpdateScripts(scene,
+dt)` dispatches every entity's `OnUpdate` each fixed tick (see "The frame loop" above).
+`core/scripts/spin_script.{h,cpp}`'s `SpinScript` is the first concrete example, replacing
+what used to be a hardcoded block in `main.cpp`.
+
+The load-bearing consequence: `Entity`/`Scene` lost their implicit copy operations. A
+`std::unique_ptr` inside `ScriptComponent` deletes `Entity`'s implicit copy constructor and
+assignment (and therefore `Scene`'s) the moment `scripts` isn't empty. `Entity` now declares
+an explicit copy constructor/assignment (`core/scene.cpp`) that copies every other field
+normally and deep-clones `scripts` by calling `CreateScript(name)`, then round-trips that one
+script's own `Save`/`Load` through an in-memory string stream. It never touches the
+`Renderer`, so mesh/model handles copy as plain IDs with no GPU re-upload. Move stays
+`= default` (cheap: moves the vector's buffer, never touches an individual
+`ScriptComponent`), required explicitly once a custom copy constructor is declared, or
+`std::move` call sites would silently fall back to the (now expensive) copy. This one change
+is what keeps `DuplicateEntity` (above) and Play/Stop's `sceneBackup = scene` / `scene =
+sceneBackup` (see "The editor layer" -> "Play / Pause / Step" below) compiling and correct
+with no call-site changes: a copy is no longer free, but it's still just a copy from the
+caller's side.
+
+A script serializes as one `.scene` line, `script <Name> <field...>`, resolved through the
+registry on load — the same shape `primitive <kind> <field...>` already uses.
+
 ## The editor layer
 
 Everything in this section is Diligent-free; it only ever reaches the GPU across the seam,
@@ -537,9 +592,9 @@ procedural mesh on load instead of needing a source file.
 `.scene` text file. `LoadScene` parses into a side buffer and only swaps it into the caller's
 `Scene`/`Camera` on full success, so a malformed file leaves the caller untouched. A procedural
 entity's mesh is rebuilt via `renderer.CreateMesh(MakePrimitiveMesh(desc))`; a model entity's is
-reloaded via `renderer.LoadModel(modelPath)` — the serializer's only contact with the GPU,
-always across the seam. Loading resets `scene.selected` to `-1` and invalidates every external
-entity index, which is why `main.cpp` clears its `spinners` side-list at every load site.
+reloaded via `renderer.LoadModel(modelPath)`; a script reconstructs via `CreateScript(name)`
+(see "The scene model" -> "Scripts" above) — the serializer's only contact with the GPU is the
+mesh/model path, always across the seam. Loading resets `scene.selected` to `-1`.
 
 ### The input system
 
@@ -583,21 +638,23 @@ panel (Play/Pause toggle, Step, Stop, a `Mode: EDITING/PLAYING/PAUSED` status la
 thin strip at the top of the main dockspace, one more `DockBuilderSplitNode` alongside the
 existing panel splits, not a new positioning mechanism.
 
-Pressing Play snapshots `scene` into a `sceneBackup` (a plain `Scene` copy: a `vector<Entity>`
-plus an `int`, with no manual resource ownership to duplicate, since mesh/model are handles the
-`Renderer` owns) and switches to Playing. Pressing Stop always restores `scene = sceneBackup`
-and switches back to Editing, discarding whatever happened during Play, the same
-disposable-sandbox convention Unity, Godot, and Unreal all use. This is deliberately the safety
-net for the entity behavior system (M1.3) and physics (M2) still to come: testing gameplay
-should never risk permanently scrambling a hand-placed scene. Step credits the accumulator with
-exactly one `kFixedDt` (starting a Play session first, landing in Paused, if pressed from
-Editing) so the existing fixed-step `while` loop drains exactly one tick, with no separate
-single-step code path.
+Pressing Play snapshots `scene` into a `sceneBackup` (a `Scene` copy: a `vector<Entity>` plus
+an `int`; mesh/model copy as plain handles, never touching the `Renderer` — see "The scene
+model" -> "Scripts" above for why this copy is an explicit `Entity` constructor rather than a
+free memberwise one now that entities can carry scripts) and switches to Playing, also firing
+each script's `OnCreate` once (`CreateScripts`). Pressing Stop always restores `scene =
+sceneBackup` and switches back to Editing, discarding whatever happened during Play, the same
+disposable-sandbox convention Unity, Godot, and Unreal all use. This was deliberately built as
+the safety net the entity behavior system (M1.3) now relies on, and physics (M2) will too:
+testing gameplay should never risk permanently scrambling a hand-placed scene. Step credits the
+accumulator with exactly one `kFixedDt` (starting a Play session first, landing in Paused, if
+pressed from Editing) so the existing fixed-step `while` loop drains exactly one tick, with no
+separate single-step code path.
 
 A Stop-restore or a Step both cause a one-frame pose jump rather than smooth motion (a spun
 transform snapping back on Stop; a whole tick advancing at once with no interpolation smoothing
 it in on Step), so both set `suppressNextFrameHistory`, folded into `suppressTemporalHistory`
-the next frame alongside the existing gizmo-drag/edited-widget/`spin` cases (see "The
+the next frame alongside the existing gizmo-drag/edited-widget/`runScripts` cases (see "The
 motion-history chain" below).
 
 ## Data flow and ownership
@@ -654,7 +711,7 @@ in the same order every frame:
    during rotation. The pixel shader writes `Motion = ComputeMotion(CurrClip, PrevClip) =
    currNDC - prevNDC` into the RG16F motion target.
 6. `main.cpp` sets `PostParams::suppressTemporalHistory` whenever a gizmo is active, an ImGui
-   item is being edited, the demo's Spin toggle is on, or a Stop-restore/Step just happened
+   item is being edited, the Run Scripts toggle is on, or a Stop-restore/Step just happened
    (see "The editor layer" -> "Play / Pause / Step" above -- both are a one-frame pose jump,
    not smooth motion). `RunPostFX` then forces
    `ResetAccumulation` on SSAO and TAA — the fix for a documented ghosting bug where a slowly
@@ -714,21 +771,26 @@ gradient is a new full-screen shader pass (like the tone-map resolve); 2D/sprite
 vertex format and a blended draw path; skeletal animation needs a bone/skinning vertex format
 and per-frame joint-matrix upload, alongside a new animation entity component in `core/scene.h`.
 
-Gameplay systems (the roadmap's M1 and M2) are a different shape: they're Diligent-free by
-default, since nothing about a fixed-timestep loop, an entity-behavior/update layer, physics, or
-audio needs to touch the renderer directly. The first of these, the fixed-timestep sim loop (see
-"The frame loop" above), shipped as a restructuring of `main.cpp`'s existing loop plus two new
-`core/scene.h` members (`prevSimTransform`, `SnapshotSimState`), not a new `core/` module. That
-was a scoped choice for this item, not a pattern to assume for what's next: an entity-behavior
-system would most naturally add an `Update`-style hook to `Entity` and a call inside the
-fixed-step loop (before `UpdateWorldTransforms`, alongside where the spin animation advances
-today, inheriting that loop's `EditorMode` gate for free -- see "The editor layer" -> "Play /
-Pause / Step" -- so a behavior hook only ever runs while Playing, never during Editing or
-Paused); physics would own its own body/collider handles (its own small seam, following the same
-opaque-handle pattern `renderer.h` uses), step inside that same fixed-step loop (physics engines
-assume a fixed tick), and write results back into entity transforms each fixed step. Either would
-plausibly be the second consumer that justifies extracting a shared `core/sim_clock`-style module
-out of `main.cpp`, evaluated when it's actually being built, not before.
+Gameplay systems (the roadmap's M1, now shipped, and M2) are a different shape: they're
+Diligent-free by default, since nothing about a fixed-timestep loop, an entity-behavior/update
+layer, physics, or audio needs to touch the renderer directly. The first of M1, the
+fixed-timestep sim loop (see "The frame loop" above), shipped as a restructuring of
+`main.cpp`'s existing loop plus two new `core/scene.h` members (`prevSimTransform`,
+`SnapshotSimState`), not a new `core/` module: a scoped choice for that item, not a pattern
+the next one had to follow. The second, the entity behavior system (M1.3, see "The scene
+model" -> "Scripts" above), landed close to what this section used to predict: an
+`Update`-style hook (`Script::OnUpdate`) called inside the fixed-step loop, before
+`UpdateWorldTransforms`, right where the demo's spin used to advance inline, inheriting the
+`EditorMode` gate for free. It did *not* stay a two-member addition, though. An open, growing
+subsystem, and the landing spot for a future Lua bridge, got its own module (`core/script.h`
+plus `core/scripts/`) rather than folding into `scene.cpp`. Physics (M2) is expected to
+follow the fixed-loop half of that pattern: its own body/collider handles (a small seam,
+the same opaque-handle pattern `renderer.h` uses), stepping inside the same fixed-step loop
+(physics engines assume a fixed tick), writing results back into entity transforms each
+tick. It remains the one candidate left for extracting a shared `core/sim_clock`-style
+module out of `main.cpp`'s fixed-timestep mechanics, if it turns out to need one; M1.3
+didn't, since the accumulator/`kFixedDt` loop itself didn't change shape, only what runs
+inside it did. Evaluate that extraction when physics is actually being built, not before.
 
 See MEMORY.md's "ToonEngineOld carry-over" section (and its "Port gotchas for the un-shipped
 systems" subsection) for the concrete algorithms and gotchas behind the still-open M3 items.

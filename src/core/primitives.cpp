@@ -120,12 +120,24 @@ MeshData MakePlane(float halfExtent) {
 
     // Wound to match the +Y face of MakeCube (CCW seen from above under the
     // left-handed projection), so it survives the fill's back-face culling.
+    //
+    // smoothNormal drives the outline pass's hull-extrude direction, not shading -- and here
+    // it deliberately ISN'T `n`. A flat quad's true normal is identical at all four corners, so
+    // extruding along it (like the curved primitives do) only lifts the whole quad toward the
+    // camera instead of widening its silhouette, and the "outline" ends up covering the entire
+    // face rather than just its border. Pointing it outward in-plane (center-through-corner,
+    // the same idea as MakeCube's corner bulge) grows the hull sideways instead, so only a
+    // border rim survives past the fill's edges.
+    const Vec3 out[4] = {
+        Normalize(Vec3{-1.0f, 0.0f, -1.0f}), Normalize(Vec3{-1.0f, 0.0f, 1.0f}),
+        Normalize(Vec3{ 1.0f, 0.0f,  1.0f}), Normalize(Vec3{ 1.0f, 0.0f, -1.0f}),
+    };
     MeshData mesh;
     mesh.vertices = {
-        Vertex{ {-h, 0.0f, -h}, n, n },
-        Vertex{ {-h, 0.0f,  h}, n, n },
-        Vertex{ { h, 0.0f,  h}, n, n },
-        Vertex{ { h, 0.0f, -h}, n, n },
+        Vertex{ {-h, 0.0f, -h}, n, out[0] },
+        Vertex{ {-h, 0.0f,  h}, n, out[1] },
+        Vertex{ { h, 0.0f,  h}, n, out[2] },
+        Vertex{ { h, 0.0f, -h}, n, out[3] },
     };
     AddQuad(mesh.indices, 0, 1, 2, 3);
     return mesh;

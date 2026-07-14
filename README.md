@@ -34,6 +34,9 @@ panels](docs/screenshots/editor-overview.png)
   interpolated into the render rate: an explicit editing-vs-playing mode with a
   snapshot-and-restore sandbox, so testing gameplay never permanently alters a hand-placed
   scene.
+- Native gameplay scripting: per-entity `Update` hooks through a script-component slot
+  (Unity/Hazel-style), reconstructed from a name registry so scripts round-trip through
+  scene save/load and the Play/Pause/Step sandbox alike.
 - Scene serialization: save/load the full hierarchy, transforms, materials, and lighting to
   a human-readable text file. Procedural geometry round-trips from its generator parameters
   (radius, segment counts), not baked mesh data, so a saved scene has no binary blobs.

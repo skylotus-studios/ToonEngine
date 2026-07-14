@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -164,6 +165,42 @@ void PreserveWorldOnReparent(Scene& scene, int idx, int newParent) {
 }
 
 } // namespace
+
+// --- Entity copy semantics (M1.3) --------------------------------------------
+// A std::unique_ptr inside ScriptComponent makes Entity's implicit copy operations
+// deleted (see scene.h) — these deep-clone `scripts` via the name registry and each
+// script's own Save/Load instead. Everything else is a plain member copy: mesh/model
+// handles are just IDs (never touches the Renderer, so no GPU re-upload/leak).
+
+Entity::Entity(const Entity& other)
+    : name(other.name), parent(other.parent), transform(other.transform),
+      prevSimTransform(other.prevSimTransform), worldMatrix(other.worldMatrix),
+      prevWorldMatrix(other.prevWorldMatrix), mesh(other.mesh), model(other.model),
+      material(other.material), primitive(other.primitive), modelPath(other.modelPath),
+      light(other.light) {
+    scripts.reserve(other.scripts.size());
+    for (const ScriptComponent& src : other.scripts) {
+        ScriptComponent dup;
+        dup.name = src.name;
+        dup.instance = CreateScript(src.name);
+        if (dup.instance && src.instance) {
+            // Round-trip through a memory buffer, not the entity's own fields — a
+            // script's Save/Load only ever touches its own state (see script.h).
+            std::ostringstream buf;
+            src.instance->Save(buf);
+            std::istringstream in(buf.str());
+            dup.instance->Load(in);
+        }
+        scripts.push_back(std::move(dup));
+    }
+}
+
+Entity& Entity::operator=(const Entity& other) {
+    if (this == &other) return *this;
+    Entity tmp(other);       // copy-construct via the ctor above (exception-safe: `this`
+    *this = std::move(tmp);  // is untouched if CreateScript/Save/Load throws), then move in
+    return *this;
+}
 
 void EnsureSceneRoot(Scene& scene) {
     const bool hasRoot = !scene.entities.empty() &&
@@ -363,7 +400,9 @@ int DuplicateEntity(Scene& scene, int idx) {
         oldToNew[subtree[k]] = base + static_cast<int>(k);
 
     for (int oldIdx : subtree) {
-        Entity dup = scene.entities[oldIdx];   // copies transform/mesh/model/material (handles shared)
+        Entity dup = scene.entities[oldIdx];   // copies transform/mesh/model/material (handles
+                                                // shared); scripts deep-clone via the registry
+                                                // (Entity's copy ctor, above)
         if (oldIdx == idx) dup.name += " (copy)";
         else               dup.parent = oldToNew[scene.entities[oldIdx].parent];
         scene.entities.push_back(std::move(dup));

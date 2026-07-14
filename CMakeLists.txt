@@ -69,6 +69,8 @@ add_executable(ToonEngine
     src/core/renderer.cpp
     src/core/primitives.cpp
     src/core/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
+    src/core/script.cpp         # native script registry + per-tick dispatch (M1.3)
+    src/core/scripts/spin_script.cpp   # first concrete Script (replaces the old spin block)
     src/core/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
     src/core/input/input_system.cpp   # GLFW device polling + capture gate + callback wiring
     src/core/input/action_map.cpp     # named actions/axes, context stack, default bindings
@@ -97,9 +99,13 @@ endif()
 # src/ is the include root: cross-directory includes read "core/renderer.h".
 # ImGuizmo/src so main.cpp (and ImGuizmo.cpp) can #include "ImGuizmo.h"; ImGuizmo itself
 # pulls in imgui.h/imgui_internal.h, which come transitively from the Diligent-Imgui link.
+# IconFontCppHeaders is header-only (no CMakeLists of its own, just the generated
+# IconsFontAwesome6.h etc. at its repo root) -- ui/file_browser.cpp and main.cpp read its
+# headers for the Font Awesome icon-glyph macros merged into the UI font (see main.cpp).
 target_include_directories(ToonEngine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/ImGuizmo/src)
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/ImGuizmo/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/IconFontCppHeaders)
 
 # core/renderer.cpp includes DiligentFX's C++-side shader-structure headers
 # (BasicStructures.fxh -> CameraAttribs, BloomStructures.fxh -> BloomAttribs) to

@@ -1323,6 +1323,128 @@ without re-importing the VS env in that specific call, failed the same way even 
 explicit `cmake --preset` reconfigure had just succeeded moments earlier in the environment —
 the import genuinely doesn't outlive the shell process it ran in.
 
+## Entity behavior system (roadmap M1.3)
+
+The last M1 item: per-entity `Update` hooks, replacing `main.cpp`'s hardcoded spin block
+(the last hardcoded gameplay stand-in in the engine). Planned via the `plan-roadmap`
+skill, then implemented in the same session; see that plan
+(`.claude/plans/snug-squishing-rabbit.md` at the time, not repo-tracked) for the full
+ELI5 trade-off writeup. This entry is the durable technical record.
+
+The design is native scripts (Cherno/Hazel's `NativeScriptComponent` shape), with EnTT
+deferred. Surveyed Casey Muratori (Handmade Hero: flat data + enum, no framework), Jonathan
+Blow (ECS is premature before you feel the need), and The Cherno (Hazel: full `entt` ECS
+plus a `NativeScriptComponent` script slot with `OnCreate`/`OnUpdate`/`OnDestroy`). Landed
+on the `NativeScriptComponent` *shape*, backed by the existing entity vector rather than an
+`entt` registry. CLAUDE.md's roadmap already called for "a component/behavior layer, ECS
+as a later scaling option," matching Casey/Blow's position independently of this research.
+
+`Entity` gained `std::vector<ScriptComponent> scripts`: a vector, not a single optional,
+since entities can carry more than one independent concern (e.g. a future `Health` script
+beside `PlayerMovement`). `ScriptComponent` = `{ name; unique_ptr<Script> }`. `Script`
+(`core/script.h`) is a virtual base: `OnCreate(Entity&, Scene&)`, `OnUpdate(Entity&,
+Scene&, float dt)`, `OnDestroy(Entity&, Scene&)` (declared, not wired; no mid-Play
+spawn/destroy yet), `Save(ostream&) const` / `Load(istream&)`. A name -> factory registry
+(`RegisterScript`/`CreateScript`, a function-local static map to dodge
+static-init-order issues) lets a saved name or an in-memory clone reconstruct the right
+subclass.
+
+The class itself states the rule: a `Script` holds no private simulation state.
+Anything persistent lives on the `Entity`, so a script is a pure function of `(entity
+data, dt)`. Checked specifically against the user's confirmed long-term direction
+(determinism, rollback netcode, Jolt, multi-game reuse) during planning: virtual dispatch
+itself isn't a determinism hazard, since it's a deterministic indirect call like any other
+vtable call, but a script with hidden state would force a future rollback snapshot to
+know about every script type. The "no private state" rule keeps that future fast/binary
+snapshot needing only the data, never the script objects; that snapshot, and a
+cross-platform floating-point determinism audit, are real, separate, deliberately
+un-built future work, not contradicted by this design.
+
+The load-bearing consequence: `Entity`/`Scene` lose their implicit copy operations.
+`std::unique_ptr` inside `ScriptComponent` deletes `Entity`'s implicit copy ctor/assignment
+(and therefore `Scene`'s); this is real, not a footnote. Gave `Entity` an explicit
+deep-cloning copy constructor/assignment (`core/scene.cpp`): every field copies normally
+except `scripts`, which reconstructs each entry via `CreateScript(name)` then round-trips
+that one script's `Save`/`Load` through an in-memory `ostringstream`/`istringstream`,
+never touching the `Renderer`, so mesh/model handles are copied as plain IDs with no GPU
+re-upload. Move stays `= default` (cheap: moves the vector's buffer, never touches an
+individual `ScriptComponent`), required explicitly once a custom copy ctor is declared:
+every `std::move(entity)` call site (`AddEntity`, `ApplyReorder`, `LoadScene`'s
+side-buffer swap) would otherwise silently fall back to the expensive copy path instead
+of moving.
+
+This one change is what kept `main.cpp`'s Play/Stop and `DuplicateEntity` compiling
+with *zero* call-site changes: `sceneBackup = scene` / `scene = sceneBackup` and
+`Entity dup = scene.entities[oldIdx];` all just keep working. The copy is no longer free,
+but it's still a copy from the caller's side. This is a deliberate deviation from the
+original plan, which anticipated splitting the file serializer into stream-based
+`WriteScene`/`ReadScene` functions specifically so Play/Stop could reuse them. That would
+have been wrong in practice: routing Play/Stop through a full scene-file-style reload
+means calling `renderer.CreateMesh`/`LoadModel` again on every Play press and every Stop
+press, and this engine never frees an individual mesh (only at `Renderer::Shutdown`):
+that's a real, cumulative GPU memory leak across a single editing session's worth of
+Play/Stop cycles. The explicit `Entity` copy ctor avoids the renderer entirely, so the
+stream/file split turned out unnecessary and was dropped; `SaveScene`/`LoadScene` gained
+script support directly instead (see below), which is all the plan's persistence
+requirement actually needed.
+
+Persistence: one line per script, `script <Name> <field...>`, mirroring how
+`primitive <kind> <field...>` already works: the name resolves through the registry on
+load, and the fields are whatever that script's own `Save` writes to the *same* line (no
+multi-line format needed). `SpinScript::Save` uses `std::fixed`/`setprecision(6)` to match
+the rest of the file's `%.6f` convention, deliberately not bit-exact (that's the
+rollback-grade concern named above, not this).
+
+First concrete script and the cleanup it enabled: `SpinScript` (`core/scripts/spin_script.{h,cpp}`)
+ports the old hardcoded spin verbatim (`axis`, `speed` fields; `OnUpdate` does the same
+incremental `rotationEuler +=` math). This deleted the `spinners` side-list entirely: the
+`Spinner` struct, the vector, every `push_back`, and its clear-on-load/clear-on-Stop
+bookkeeping. That's the exact bug class (external index list going stale on
+reparent/reload/Stop) that motivated storing behavior *inside* the entity in the first
+place. The `spin` bool (Tools menu / Settings panel checkbox) was renamed `runScripts` and
+now gates `UpdateScripts` generally, since it no longer only affects a literal spin.
+
+Where it plugs in (matches `docs/architecture.md`'s pre-existing "Where new systems
+plug in" prediction almost exactly): `UpdateScripts(scene, dt)` runs inside the fixed
+`while (accumulator >= kFixedDt)` loop, right where the spin block used to sit, before
+`UpdateWorldTransforms`, inheriting the `EditorMode` gate for free (scripts never run
+outside Playing/Step). `CreateScripts(scene)` fires once, at both places a Play session
+begins (the Play button from Editing, and Step from Editing), alongside the existing
+`sceneBackup = scene`.
+
+Verified non-interactively (no synthetic input reaches this environment; see the
+`verify` skill): clean build. A temporary default-to-`Playing` build captured two
+screenshots 5s apart and showed the Cube's rotation advance from
+`(123.186°, 246.372°, 0°)` to `(212.856°, 425.712°, 0°)`, an exact 2:1 X:Y ratio matching
+its `{0.5, 1.0, 0}` axis and a magnitude consistent with 0.6 rad/s given normal
+wall-clock capture slop, with the visual cube, its shadow, and the parented Satellite all
+rotating in the screenshots too. A second temporary block (removed after use, like the
+first) exercised the copy constructor and the save/load round-trip directly by calling
+them from `main()` and dumping results to stderr: the copy produced a *different* script
+pointer with *identical* field values (a genuine deep clone, not aliased), and a
+save-then-load round trip preserved all 8 entities including the Cube's script and its
+exact field values. Both temporary instrumentation blocks were fully removed and the
+final build reconfirmed clean (identical warning count to the pre-instrumentation build).
+
+Deferred, named so they aren't forgotten: EnTT/ECS (revisit only when entity count or
+a profiled hotspot demands it); Lua scripting (the script slot is shaped for a
+`LuaScript : Script` drop-in, same lifecycle shape, not a redesign); rigidbody/collider
+components (M2, via the same opaque-handle pattern `renderer.h` already uses, confirmed
+consistent with Jolt's own `SaveState`/`RestoreState` rollback model); UI components;
+inspector "Add Script" UI (scripts attach in code for now); `OnDestroy` actually firing;
+the fast binary rollback snapshot path; the cross-platform FP determinism audit; a
+non-real-time (`OnAction`) `Script` sibling for a future turn-based/card game.
+
+Docs sync done in a follow-up `tidy-md` pass, not folded into the implementation
+session: pruned the M1 roadmap entry out of CLAUDE.md, added `core/script.{h,cpp}` +
+`core/scripts/` to its source layout (attempted inline during implementation, but
+reverted then, since it pushed the file 2 lines past its hard 200-line cap; the `tidy-md`
+pass found a line to trim instead), and rewrote `docs/architecture.md`'s "Where new
+systems plug in" from speculative future tense into a descriptive account of what
+actually got built, plus a new "Scripts" subsection under "The scene model" documenting
+the `Entity`-copy-constructor consequence. README's Highlights gained a native-scripting
+bullet.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -2278,3 +2400,15 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   **Not verified live (same standing limitation as M1.1, no live input desktop here, see the
   `verify` skill):** actually clicking Play/Pause/Step/Stop and observing the transitions.
   Established by code reasoning (traced above), not a live click-through.
+- **2026-07-13** — **Entity behavior system shipped** (M1.3, the last M1 item). Native
+  scripts (`core/script.h`, Cherno/Hazel's `NativeScriptComponent` shape, EnTT deferred),
+  `SpinScript` replacing the hardcoded spin block and the `spinners` side-list entirely, an
+  explicit deep-cloning `Entity` copy constructor (the load-bearing consequence of
+  `ScriptComponent` holding a `unique_ptr`), and `.scene` file persistence for scripts. See
+  "Entity behavior system (roadmap M1.3)" above for the full design, the mid-implementation
+  deviation from the original plan (dropped a planned stream/file serializer split once the
+  `Entity` copy ctor made it unnecessary and avoided a GPU-resource leak it would have
+  caused), and the verification evidence (a real rotation delta matching the spin axis
+  exactly, plus a temporarily-instrumented copy-ctor/save-load test). CLAUDE.md's roadmap
+  pruning, its source-layout update, and `docs/architecture.md`'s corresponding update are
+  deliberately left for a follow-up `tidy-md` pass, not done in this session.

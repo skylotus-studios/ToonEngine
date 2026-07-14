@@ -41,10 +41,11 @@ TAA/DoF/SSR, Bloom) resolves through ACES tone-mapping to the back buffer. A doc
 gizmo, a Debug panel (scene save/load, every post effect), and an Asset Browser with
 thumbnails. An **editor camera** and a rebindable **action-map input system** (mouse/keyboard/
 gamepad) drive it, with input suppressed while using the UI. HLSL shaders cross-compile to
-SPIR-V at runtime. Gameplay state (today: the demo spin) advances on a fixed 60 Hz sim tick,
-decoupled from and interpolated into the render rate, and only while an explicit Editing /
-Playing / Paused mode (Play/Step/Stop controls in a **Playback** panel) is set to Playing.
-Stop always reverts the scene to how it was before Play started.
+SPIR-V at runtime. Gameplay state advances via per-entity native scripts (a demo spin
+today) on a fixed 60 Hz sim tick, decoupled from and interpolated into the render rate,
+and only while an explicit Editing / Playing / Paused mode (Play/Step/Stop controls in a
+**Playback** panel) is set to Playing. Stop always reverts the scene to how it was before
+Play started.
 
 See **[docs/architecture.md](docs/architecture.md)** for the full design: the renderer seam,
 frame loop, rendering pipeline, scene model, and data flow.
@@ -93,6 +94,8 @@ src/
     math.h                Minimal Diligent-free vector/matrix types for the seam's public API
     primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus/plane) -> toon::MeshData
     scene.{h,cpp}         Entity-tree scene graph: hierarchy, world-transform composition, editor mutations
+    script.{h,cpp}        Native gameplay scripts: per-entity Update hooks + name->factory registry
+    scripts/spin_script.{h,cpp}  First concrete Script (replaces the old hardcoded spin)
     camera.{h,cpp}        Editor camera controls: orbit/pan/zoom/fly/focus
     input/                 GLFW device/gamepad polling, action maps + rebinding (assets/input.json)
     serializer.{h,cpp}    Scene save/load — entity/camera state to a text .scene file
@@ -166,13 +169,10 @@ matrix-convention, winding, and outline-ordering details.
 
 The renderer and editor are done (toon fill + outline, HDR + full DiligentFX post stack;
 scene graph, inspector/gizmos, editor camera, action-map input, serialization, asset
-browser). Today the app is an editor that draws a scene; the arc below turns it into a
-runtime you can build a game on, sequenced by dependency. See docs/architecture.md for the
+browser), and so is M1's simulation foundation (see Current state above). The app is an
+editor with a working simulation loop; the arc below adds the interaction and world
+systems a real game needs, sequenced by dependency. See docs/architecture.md for the
 current design and MEMORY.md for history + the ToonEngineOld carry-over survey.
-
-**M1 — Simulation foundation.** Turn the editor into a game runtime.
-1. Entity behavior system — per-entity Update hooks (a component/behavior layer, ECS as a
-   later scaling option). Entities are render-data only today; this is the core gap.
 
 **M2 — Interaction and world.** Rules and feedback.
 1. Physics + collision — rigid bodies, colliders, raycasts (new submodule, e.g. Jolt).
