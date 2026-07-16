@@ -61,6 +61,11 @@ void RegisterScript(const std::string& name, ScriptFactory factory);
 // this build doesn't have.
 std::unique_ptr<Script> CreateScript(const std::string& name);
 
+// List every registered script type name, alphabetically — for an editor "Add Script"
+// picker (main.cpp's Inspector). Registration happens via each script's self-registering
+// static before main() ever runs, so this list is fixed for the process's whole lifetime.
+std::vector<std::string> GetRegisteredScriptNames();
+
 // One entity's attached script: a stable name (for the registry + save file) plus
 // the live instance. A vector, not a single optional, on Entity — an entity
 // plausibly carries more than one independent concern (e.g. a Health script

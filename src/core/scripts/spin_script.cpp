@@ -12,7 +12,13 @@ namespace toon {
 
 void SpinScript::OnUpdate(Entity& self, Scene&, float dt) {
     if (!self.transform) return; // anchor/grouping node — nothing to spin
-    self.transform->rotationEuler = self.transform->rotationEuler + axis * (speed * dt);
+    // Pre-multiply a small delta rotation around the FIXED world-space `axis` onto the
+    // entity's current orientation (core/math.h's hand-rolled Quat -- this file must stay
+    // Diligent-free, see script.h's banner). Re-normalize every tick: repeated float
+    // multiplication drifts a unit quaternion's length slightly, and an un-normalized
+    // quaternion feeds a subtly wrong (non-rigid) matrix into LocalFromTransform.
+    const Quat delta = QuatFromAxisAngle(axis, speed * dt);
+    self.transform->rotation = Normalize(delta * self.transform->rotation);
 }
 
 // %.6f-equivalent precision (std::fixed + setprecision(6)) to match the rest of the

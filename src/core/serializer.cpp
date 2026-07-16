@@ -35,6 +35,35 @@ void WriteFloat(std::ofstream& f, const char* key, float v) {
     f << buf;
 }
 
+void WriteQuat(std::ofstream& f, const char* key, const Quat& q) {
+    char buf[192];
+    std::snprintf(buf, sizeof(buf), "%s %.6f %.6f %.6f %.6f\n", key, q.x, q.y, q.z, q.w);
+    f << buf;
+}
+
+// "collider <box|sphere|capsule> <ex ey ez>". `extents`' meaning depends on shape (see
+// BodyDesc's own comment: Box = half-extents, Sphere = radius in .x, Capsule = half-height
+// in .x + radius in .y) but is always 3 floats, so — unlike WritePrimitive below — one
+// line shape covers every ColliderShape; load only needs to parse the shape name once.
+void WriteCollider(std::ofstream& f, const ColliderComponent& c) {
+    const char* kind =
+        c.shape == ColliderShape::Sphere ? "sphere" : c.shape == ColliderShape::Capsule ? "capsule" : "box";
+    char buf[192];
+    std::snprintf(buf, sizeof(buf), "  collider %s %.6f %.6f %.6f\n", kind, c.extents.x, c.extents.y, c.extents.z);
+    f << buf;
+}
+
+// "rigidbody <static|dynamic|kinematic> <mass friction restitution>". The runtime
+// BodyHandle is deliberately NOT written — like Entity::worldMatrix, it's populated when
+// Play builds the physics world (main.cpp), not part of the saved scene's data.
+void WriteRigidBody(std::ofstream& f, const RigidBodyComponent& b) {
+    const char* kind =
+        b.type == BodyType::Static ? "static" : b.type == BodyType::Kinematic ? "kinematic" : "dynamic";
+    char buf[192];
+    std::snprintf(buf, sizeof(buf), "  rigidbody %s %.6f %.6f %.6f\n", kind, b.mass, b.friction, b.restitution);
+    f << buf;
+}
+
 // One line per PrimitiveKind, since each generator takes a different param list (see
 // PrimitiveDesc's field comments in primitives.h for the kind -> field mapping).
 void WritePrimitive(std::ofstream& f, const PrimitiveDesc& d) {
@@ -97,7 +126,7 @@ bool SaveScene(const char* path, const Scene& scene, const Camera& camera) {
 
         if (e.transform) {   // absent only for a pure anchor node (the root)
             WriteVec3(f, "  position", e.transform->position);
-            WriteVec3(f, "  rotation", e.transform->rotationEuler);
+            WriteQuat(f, "  rotation", e.transform->rotation);
             WriteVec3(f, "  scale", e.transform->scale);
         }
 
@@ -121,6 +150,9 @@ bool SaveScene(const char* path, const Scene& scene, const Camera& camera) {
             WriteVec3(f, "  light.color", e.light->color);
             WriteFloat(f, "  light.intensity", e.light->intensity);
         }
+
+        if (e.collider) { WriteCollider(f, *e.collider); }
+        if (e.body)     { WriteRigidBody(f, *e.body); }
 
         // One line per script: "script <Name> <field...>" — the name resolves through
         // the registry on load (see below); the fields are whatever that script's own
@@ -185,7 +217,17 @@ bool LoadScene(const char* path, Scene& scene, Camera& camera, Renderer& rendere
             cur->transform->position = ParseVec3(ss);
         } else if (key == "rotation") {
             if (!cur->transform) cur->transform.emplace();
-            cur->transform->rotationEuler = ParseVec3(ss);
+            // Current format is 4 floats (a quaternion, see WriteQuat above); a file saved
+            // before the M2.1 quaternion refactor has 3 (Euler radians) -- detect which by
+            // trying to read a 4th token, and convert the legacy form so old .scene files
+            // keep loading unchanged.
+            float v0, v1, v2, v3;
+            ss >> v0 >> v1 >> v2;
+            if (ss >> v3) {
+                cur->transform->rotation = {v0, v1, v2, v3};
+            } else {
+                cur->transform->rotation = QuatFromEuler({v0, v1, v2});
+            }
         } else if (key == "scale") {
             if (!cur->transform) cur->transform.emplace();
             cur->transform->scale = ParseVec3(ss);
@@ -223,6 +265,24 @@ bool LoadScene(const char* path, Scene& scene, Camera& camera, Renderer& rendere
         } else if (key == "light.intensity") {
             if (!cur->light) cur->light.emplace();
             ss >> cur->light->intensity;
+        } else if (key == "collider") {
+            std::string kind;
+            ss >> kind;
+            ColliderComponent c;
+            c.shape = kind == "sphere"    ? ColliderShape::Sphere
+                      : kind == "capsule" ? ColliderShape::Capsule
+                                          : ColliderShape::Box;
+            c.extents = ParseVec3(ss);
+            cur->collider = c;
+        } else if (key == "rigidbody") {
+            std::string kind;
+            ss >> kind;
+            RigidBodyComponent b;
+            b.type = kind == "static"      ? BodyType::Static
+                     : kind == "kinematic" ? BodyType::Kinematic
+                                           : BodyType::Dynamic;
+            ss >> b.mass >> b.friction >> b.restitution;
+            cur->body = b;
         } else if (key == "script") {
             std::string scriptName;
             ss >> scriptName;

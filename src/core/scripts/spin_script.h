@@ -4,9 +4,9 @@
 //  rotation around a fixed axis at a constant rate.
 //
 //  Ports main.cpp's old hardcoded spin block (the "Spinner" side-list) onto the
-//  general script system as its end-to-end proof: the same incremental
-//  rotationEuler-advance math, now living on the entity instead of an external
-//  index list, so it survives reparent/reload/Stop with no side-list bookkeeping.
+//  general script system as its end-to-end proof: the same incremental spin, now living
+//  on the entity instead of an external index list, so it survives reparent/reload/Stop
+//  with no side-list bookkeeping.
 //============================================================================
 #include "core/math.h"
 #include "core/script.h"

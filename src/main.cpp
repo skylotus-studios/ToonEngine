@@ -8,6 +8,7 @@
 #include "core/renderer.h"
 #include "core/primitives.h"
 #include "core/scene.h"
+#include "core/physics.h"
 #include "core/script.h"
 #include "core/scripts/spin_script.h"
 #include "core/camera.h"
@@ -31,6 +32,8 @@
 #include "ImGuizmo.h" // editor transform gizmos (built on ImGui; seam-exempt like it)
 #include "IconsFontAwesome6.h" // ICON_FA_* glyph macros for the Font Awesome icon font merged below
 
+#include <algorithm> // std::max -- ScaledColliderExtents' non-uniform-scale fallback
+#include <cmath>     // std::abs -- ScaledColliderExtents' non-uniform-scale detection
 #include <cstdint>
 #include <cstdio>
 #include <filesystem> // .scene extension check, routing an asset-browser double-click to loadScene
@@ -52,6 +55,85 @@ namespace {
     void SetPrimitive(toon::Renderer &r, toon::Entity &e, const toon::PrimitiveDesc &desc) {
         e.primitive = desc;
         e.mesh = Upload(r, toon::MakePrimitiveMesh(desc), e.name.c_str());
+    }
+
+    // --- Physics (M2.1) -----------------------------------------------------------
+    // A Box collider's half-extents are already 3 independent values, so a non-uniform
+    // scale bakes in cleanly, one axis at a time. Sphere/Capsule only have 1-2 degrees of
+    // freedom (a radius, a half-height), so a non-uniform scale there has no exact
+    // representation as a plain SphereShape/CapsuleShape -- approximate with the largest
+    // relevant axis and say so, rather than silently picking one. Exact ellipsoid/deformed-
+    // capsule shapes are out of scope for M2.1's Box/Sphere/Capsule set.
+    // logWarnings defaults on for the once-per-Play BuildPhysicsWorld call site; the
+    // per-frame collider-wireframe overlay (Phase F, below) passes false so a misconfigured
+    // entity doesn't spam stderr 60+ times a second on top of the warning Play already gave it.
+    toon::Vec3 ScaledColliderExtents(const toon::ColliderComponent &collider, const toon::Vec3 &scale,
+                                     const std::string &entityName, bool logWarnings = true) {
+        switch (collider.shape) {
+            case toon::ColliderShape::Box:
+                return {collider.extents.x * scale.x, collider.extents.y * scale.y, collider.extents.z * scale.z};
+            case toon::ColliderShape::Sphere: {
+                const float s = std::max(scale.x, std::max(scale.y, scale.z));
+                if (logWarnings &&
+                    (std::abs(scale.x - scale.y) > 1e-4f || std::abs(scale.y - scale.z) > 1e-4f)) {
+                    std::fprintf(stderr,
+                                 "Entity '%s': non-uniform scale on a Sphere collider isn't supported -- using the "
+                                 "largest axis (%.3f)\n",
+                                 entityName.c_str(), s);
+                }
+                return {collider.extents.x * s, 0.0f, 0.0f};
+            }
+            case toon::ColliderShape::Capsule: {
+                // extents.x = half-height (along the capsule's local Y), extents.y = radius
+                // (the X/Z plane) -- see core/physics.h's BodyDesc comment.
+                const float radialScale = std::max(scale.x, scale.z);
+                if (logWarnings && std::abs(scale.x - scale.z) > 1e-4f) {
+                    std::fprintf(stderr,
+                                 "Entity '%s': non-uniform (x/z) scale on a Capsule collider isn't supported -- "
+                                 "using the larger axis (%.3f)\n",
+                                 entityName.c_str(), radialScale);
+                }
+                return {collider.extents.x * scale.y, collider.extents.y * radialScale, 0.0f};
+            }
+        }
+        return collider.extents;
+    }
+
+    // Rebuild the physics world from the scene's current collider-bearing entities. Called
+    // once whenever a Play/Step session starts (the Playback panel, below) -- Stop just
+    // Clear()s, no rebuild, since the scene reverts to its pre-Play snapshot anyway.
+    //
+    // Assumes every collider-bearing entity is root-parented, so its local `transform` IS
+    // its world pose: a real hierarchy fold (parent's world * local) is deliberately out of
+    // scope for M2.1 (see the plan's "physics bodies should be root-parented" scope note) --
+    // a collider on a nested entity is seeded once here but never correctly re-synced.
+    void BuildPhysicsWorld(toon::PhysicsWorld &physicsWorld, toon::Scene &scene) {
+        physicsWorld.Clear();
+        for (toon::Entity &e : scene.entities) {
+            if (!e.collider || !e.transform) continue;
+
+            // A bare collider (no authored RigidBodyComponent) is an implicit static
+            // collider -- a wall/floor. Synthesize one for this Play session only; Stop's
+            // `scene = sceneBackup` discards it, same as everything else Play does (see
+            // core/scene.h's RigidBodyComponent comment).
+            if (!e.body) {
+                toon::RigidBodyComponent implicitStatic;
+                implicitStatic.type = toon::BodyType::Static;
+                e.body = implicitStatic;
+            }
+
+            toon::BodyDesc desc;
+            desc.shape = e.collider->shape;
+            desc.extents = ScaledColliderExtents(*e.collider, e.transform->scale, e.name);
+            desc.type = e.body->type;
+            desc.mass = e.body->mass;
+            desc.friction = e.body->friction;
+            desc.restitution = e.body->restitution;
+            desc.position = e.transform->position;
+            desc.rotation = e.transform->rotation;
+
+            e.body->handle = physicsWorld.CreateBody(desc);
+        }
     }
 
     // --- Editor themes (ported from ToonEngineOld/src/ui/themes.cpp) --------------
@@ -328,6 +410,12 @@ int main() {
         return 1;
     }
 
+    // Physics (M2.1): Jolt's process-global setup (allocator/factory/type registry) happens
+    // once here, alongside the renderer's own Init -- the world stays empty (no bodies)
+    // until a Play/Step session calls BuildPhysicsWorld, below.
+    toon::PhysicsWorld physicsWorld;
+    if (!physicsWorld.Init()) { std::fprintf(stderr, "PhysicsWorld init failed\n"); }
+
     // Install input callbacks BEFORE InitUI, so ImGui's GLFW backend chains ours instead of
     // overwriting them (see core/input/input_system.h's Init banner).
     toon::Input::Init(window);
@@ -429,6 +517,13 @@ int main() {
         e.material.baseColor = {0.60f, 0.60f, 0.63f};
         e.material.outlineWidth = 0.0f;
         e.material.roughness = 0.05f; // smooth -> reflective (SSR)
+
+        // Static physics collider (M2.1): a thin box matching the plane's own 5.0 half-extent.
+        // Its center sits at the same position as the (zero-thickness) visual plane, so its
+        // top surface reads ~0.1 units ABOVE the rendered ground -- a collider has no local
+        // offset from its entity today, so this small mismatch is a deliberate simplification,
+        // not an oversight (a future collider-offset field would let it align exactly).
+        e.collider = toon::ColliderComponent{toon::ColliderShape::Box, {5.0f, 0.1f, 5.0f}};
     }
     // Sphere — non-uniformly scaled into a spinning ellipsoid (exercises the normal matrix).
     {
@@ -470,6 +565,41 @@ int main() {
         e.material = toon::Material{{0.90f, 0.70f, 0.25f}, {0.32f, 0.20f, 0.03f}, 0.022f};
         e.material.roughness = 0.15f;
         addSpin(i, {1.0f, 0.0f, 0.0f});
+    }
+    // Falling primitives (M2.1 physics demo): dynamic rigid bodies, no spin script -- physics
+    // owns their transform each Play tick, unlike the spinning showcase above. Dropped above
+    // the ground at a clear spot (x=4) and stacked at increasing height, so pressing Play
+    // makes them fall and land on one another as well as the ground -- the visible proof of
+    // physics, the same role the spin demo (above) plays for native scripts.
+    {
+        const int i = toon::AddEntity(scene, 0, "PhysicsCube1");
+        toon::Entity &e = scene.entities[i];
+        SetPrimitive(renderer, e, toon::PrimitiveDesc::Cube(0.4f));
+        e.transform->position = {4.0f, 3.0f, 0.0f};
+        e.material = toon::Material{{0.25f, 0.80f, 0.35f}, {0.04f, 0.12f, 0.06f}, 0.018f};
+        e.material.roughness = 0.4f;
+        e.collider = toon::ColliderComponent{toon::ColliderShape::Box, {0.4f, 0.4f, 0.4f}};
+        e.body = toon::RigidBodyComponent{toon::BodyType::Dynamic, 1.0f};
+    }
+    {
+        const int i = toon::AddEntity(scene, 0, "PhysicsSphere1");
+        toon::Entity &e = scene.entities[i];
+        SetPrimitive(renderer, e, toon::PrimitiveDesc::Sphere(0.35f, 24, 32));
+        e.transform->position = {4.0f, 5.0f, 0.0f};
+        e.material = toon::Material{{0.90f, 0.55f, 0.15f}, {0.28f, 0.16f, 0.03f}, 0.015f};
+        e.material.roughness = 0.3f;
+        e.collider = toon::ColliderComponent{toon::ColliderShape::Sphere, {0.35f, 0.0f, 0.0f}};
+        e.body = toon::RigidBodyComponent{toon::BodyType::Dynamic, 0.8f};
+    }
+    {
+        const int i = toon::AddEntity(scene, 0, "PhysicsCube2");
+        toon::Entity &e = scene.entities[i];
+        SetPrimitive(renderer, e, toon::PrimitiveDesc::Cube(0.3f));
+        e.transform->position = {4.0f, 7.0f, 0.0f};
+        e.material = toon::Material{{0.55f, 0.30f, 0.80f}, {0.10f, 0.05f, 0.14f}, 0.014f};
+        e.material.roughness = 0.4f;
+        e.collider = toon::ColliderComponent{toon::ColliderShape::Box, {0.3f, 0.3f, 0.3f}};
+        e.body = toon::RigidBodyComponent{toon::BodyType::Dynamic, 0.6f};
     }
     // Loaded glTF model (DiligentTools' loader): cel-shaded albedo + inverted-hull outline.
     const char *helmetPath = TOON_MODELS_DIR "/helmet.glb";
@@ -551,6 +681,9 @@ int main() {
     // the rest of the simulation. Was a Spin-demo-specific toggle before M1.3; renamed now
     // that it gates every attached script, not just the Sphere/Cube/Torus/Helmet's spin.
     bool runScripts = true;
+
+    // M2.1: overlay each collider-bearing entity's shape as a wireframe (Settings panel).
+    bool showColliders = false;
 #ifdef IMGUI_HAS_DOCK
     bool dockLayoutBuilt = false;
 #endif
@@ -630,11 +763,36 @@ int main() {
 
                 // Run every entity's attached scripts for this tick (core/script.h) -- e.g. the
                 // Sphere/Cube/Torus/Helmet's SpinScript, replacing the old hardcoded spin block.
-                // Each script advances its own entity's state incrementally (SpinScript adds to
-                // whatever rotationEuler currently is), so a gizmo-set orientation (set while
-                // paused) is the new baseline it continues from on resume, instead of snapping
-                // back to where an absolute clock-based formula would say it "should" be.
+                // Each script advances its own entity's state incrementally (SpinScript
+                // pre-multiplies a small delta rotation onto whatever `rotation` currently is),
+                // so a gizmo-set orientation (set while paused) is the new baseline it continues
+                // from on resume, instead of snapping back to where an absolute clock-based
+                // formula would say it "should" be.
                 if (runScripts) { toon::UpdateScripts(scene, static_cast<float>(kFixedDt)); }
+
+                // Physics (M2.1): push this tick's static/kinematic transforms into Jolt (so a
+                // gizmo-dragged wall, say, is reflected before the step that would otherwise
+                // ignore it), step once, then read every dynamic body back into its entity's
+                // transform via ComposeWorldMatrix + SetEntityWorldMatrix (the same fold-out-
+                // the-parent path the gizmo write-back uses). No separate "run physics" toggle,
+                // unlike scripts' Run Scripts checkbox -- nothing in the roadmap called for one.
+                for (const toon::Entity &e : scene.entities) {
+                    if (e.body && e.body->type != toon::BodyType::Dynamic && e.transform) {
+                        physicsWorld.SetBodyTransform(e.body->handle, e.transform->position, e.transform->rotation);
+                    }
+                }
+                physicsWorld.Step(static_cast<float>(kFixedDt));
+                for (int i = 0; i < static_cast<int>(scene.entities.size()); ++i) {
+                    toon::Entity &e = scene.entities[i];
+                    if (!e.body || e.body->type != toon::BodyType::Dynamic || !e.transform) { continue; }
+                    toon::Vec3 bodyPos;
+                    toon::Quat bodyRot;
+                    if (physicsWorld.GetBodyTransform(e.body->handle, bodyPos, bodyRot)) {
+                        const toon::Mat4 world = toon::ComposeWorldMatrix(bodyPos, bodyRot, e.transform->scale);
+                        toon::SetEntityWorldMatrix(scene, i, world);
+                    }
+                }
+
                 accumulator -= kFixedDt;
             }
         }
@@ -765,6 +923,30 @@ int main() {
 
         // Resolve the HDR scene to the back buffer (post effects + exposure + tone map).
         renderer.EndScene();
+
+        // Collider debug wireframes (M2.1) -- after EndScene, before the UI overlay (see
+        // Renderer::DrawWireframe's call-timing contract). A fixed yellow-ish color for
+        // every shape; distinguishing static/dynamic by color is future polish, not needed
+        // to see whether a collider matches its entity's visual size/position.
+        //
+        // Mirrors BuildPhysicsWorld exactly (scaled extents via ScaledColliderExtents, a
+        // scale-free position/rotation matrix, no parent-chain fold) rather than using
+        // e.worldMatrix + raw extents directly -- so the overlay always shows what Jolt is
+        // actually simulating, not the renderer's own (possibly-scaled, possibly-nested)
+        // placement of the entity. The two agree for today's root-parented, unit-scale demo
+        // entities, but only one of them is correct in general.
+        if (showColliders) {
+            const toon::Color wireColor{1.0f, 0.9f, 0.2f, 1.0f};
+            for (const toon::Entity &e : scene.entities) {
+                if (!e.collider || !e.transform) { continue; }
+                const toon::Vec3 scaledExtents =
+                    ScaledColliderExtents(*e.collider, e.transform->scale, e.name, /*logWarnings=*/false);
+                const toon::Mat4 world =
+                    toon::ComposeWorldMatrix(e.transform->position, e.transform->rotation, {1.0f, 1.0f, 1.0f});
+                const std::vector<toon::Vec3> wireframe = toon::ColliderWireframe(e.collider->shape, scaledExtents);
+                renderer.DrawWireframe(world, wireframe.data(), static_cast<uint32_t>(wireframe.size()), wireColor);
+            }
+        }
 
         renderer.BeginUI();
         ImGuizmo::BeginFrame(); // must follow ImGui's NewFrame (inside BeginUI), before Manipulate
@@ -969,6 +1151,7 @@ int main() {
                     mode = EditorMode::Playing;
                     accumulator = 0.0;
                     toon::CreateScripts(scene); // fire OnCreate once, entering this Play session
+                    BuildPhysicsWorld(physicsWorld, scene); // seed bodies from collider-bearing entities
                 } else if (mode == EditorMode::Playing) {
                     mode = EditorMode::Paused;
                 } else { // Paused -> resume
@@ -983,6 +1166,7 @@ int main() {
                     mode = EditorMode::Paused; // step lands paused, not playing
                     accumulator = 0.0;
                     toon::CreateScripts(scene); // fire OnCreate once, entering this Play session
+                    BuildPhysicsWorld(physicsWorld, scene); // seed bodies from collider-bearing entities
                 }
                 stepRequested = true;
                 suppressNextFrameHistory = true; // one tick's worth of pose jump, not smooth motion
@@ -991,6 +1175,7 @@ int main() {
             ImGui::SameLine();
             ImGui::BeginDisabled(mode == EditorMode::Editing); // nothing to stop yet
             if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, 0.0f))) {
+                physicsWorld.Clear(); // release this session's bodies before the scene reverts
                 scene = sceneBackup; // discard everything Play did -- see the panel comment above
                 mode = EditorMode::Editing;
                 accumulator = 0.0;
@@ -1141,16 +1326,22 @@ int main() {
                 std::snprintf(nameBuf, sizeof(nameBuf), "%s", e.name.c_str());
                 if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) { e.name = nameBuf; }
 
-                // Transform — rotation shown in DEGREES for editing, stored in radians.
+                // Transform — rotation shown in DEGREES for editing, stored as a quaternion
+                // (core/renderer.h's Transform::rotation); QuatToEuler/QuatFromEuler
+                // (core/math.h) convert at this widget boundary only. Euler is re-derived
+                // from the live quaternion every frame rather than cached, so a value can
+                // display renormalized (e.g. 190 shown as -170) and, near gimbal lock, the
+                // other two axes can jump when one is edited — the same trade-off Unity's
+                // inspector accepts without its extra hidden-Euler-cache bookkeeping.
                 if (e.transform && !isRoot) {
                     ImGui::SeparatorText("Transform");
                     toon::Transform &t = *e.transform;
                     constexpr float kRad2Deg = 57.29578f, kDeg2Rad = 0.01745329f;
                     ImGui::DragFloat3("Position", &t.position.x, 0.01f);
-                    float deg[3] = {t.rotationEuler.x * kRad2Deg, t.rotationEuler.y * kRad2Deg,
-                                    t.rotationEuler.z * kRad2Deg};
+                    const toon::Vec3 eulerRad = toon::QuatToEuler(t.rotation);
+                    float deg[3] = {eulerRad.x * kRad2Deg, eulerRad.y * kRad2Deg, eulerRad.z * kRad2Deg};
                     if (ImGui::DragFloat3("Rotation", deg, 0.5f)) {
-                        t.rotationEuler = {deg[0] * kDeg2Rad, deg[1] * kDeg2Rad, deg[2] * kDeg2Rad};
+                        t.rotation = toon::QuatFromEuler({deg[0] * kDeg2Rad, deg[1] * kDeg2Rad, deg[2] * kDeg2Rad});
                     }
                     ImGui::DragFloat3("Scale", &t.scale.x, 0.01f, 0.001f, 100.0f);
                 } else if (isRoot) {
@@ -1166,14 +1357,125 @@ int main() {
                     ImGui::SliderFloat("Roughness", &e.material.roughness, 0.0f, 1.0f);
                 }
 
-                // Light — only for light entities. Direction isn't a field here: it comes
-                // from the entity's rotation (aim it with the gizmo, like Material's
-                // transform above).
+                // Light — a true optional component (core/scene.h): Add/Remove it directly,
+                // rather than assuming it's attached in code. Direction isn't a field here:
+                // it comes from the entity's rotation (aim it with the gizmo, like
+                // Material's transform above).
                 if (e.light) {
                     ImGui::SeparatorText("Light");
-                    ImGui::ColorEdit3("Color", &e.light->color.x);
-                    ImGui::DragFloat("Intensity", &e.light->intensity, 0.01f, 0.0f, 10.0f, "%.2f");
-                    ImGui::TextDisabled("Aim: rotate this entity (gizmo R).");
+                    if (ImGui::Button("Remove Light")) {
+                        e.light.reset();
+                    } else {
+                        ImGui::ColorEdit3("Color", &e.light->color.x);
+                        ImGui::DragFloat("Intensity", &e.light->intensity, 0.01f, 0.0f, 10.0f, "%.2f");
+                        ImGui::TextDisabled("Aim: rotate this entity (gizmo R).");
+                    }
+                } else {
+                    ImGui::SeparatorText("Light");
+                    if (ImGui::Button("Add Light")) { e.light = toon::LightComponent{}; }
+                }
+
+                // Collider and Rigid Body (M2.1) — two fully independent optional
+                // components (core/scene.h), each Add/Remove-able on its own; neither gates
+                // the other's visibility here, even though a RigidBody only does anything
+                // once the entity also has a Collider (BuildPhysicsWorld, below, silently
+                // skips a body with no collider). Both need a transform to be placed at,
+                // same gate as the Transform section above. Edits here only take effect on
+                // the NEXT Play session -- the physics world is (re)built once when Play
+                // starts, not continuously re-read from these fields while it's running.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Collider");
+                    if (e.collider) {
+                        if (ImGui::Button("Remove Collider")) {
+                            e.collider.reset();
+                        } else {
+                            const char *kShapeNames[] = {"Box", "Sphere", "Capsule"};
+                            int shapeIdx = static_cast<int>(e.collider->shape);
+                            if (ImGui::Combo("Shape", &shapeIdx, kShapeNames, IM_ARRAYSIZE(kShapeNames))) {
+                                e.collider->shape = static_cast<toon::ColliderShape>(shapeIdx);
+                            }
+                            switch (e.collider->shape) {
+                                case toon::ColliderShape::Box:
+                                    ImGui::DragFloat3("Half-extents", &e.collider->extents.x, 0.01f, 0.001f, 100.0f);
+                                    break;
+                                case toon::ColliderShape::Sphere:
+                                    ImGui::DragFloat("Radius", &e.collider->extents.x, 0.01f, 0.001f, 100.0f);
+                                    break;
+                                case toon::ColliderShape::Capsule:
+                                    ImGui::DragFloat("Half-height", &e.collider->extents.x, 0.01f, 0.001f, 100.0f);
+                                    ImGui::DragFloat("Radius", &e.collider->extents.y, 0.01f, 0.001f, 100.0f);
+                                    break;
+                            }
+                        }
+                    } else {
+                        if (ImGui::Button("Add Collider")) { e.collider = toon::ColliderComponent{}; }
+                    }
+
+                    ImGui::SeparatorText("Rigid Body");
+                    if (e.body) {
+                        if (ImGui::Button("Remove Rigid Body")) {
+                            e.body.reset();
+                        } else {
+                            const char *kTypeNames[] = {"Static", "Dynamic", "Kinematic"};
+                            int typeIdx = static_cast<int>(e.body->type);
+                            if (ImGui::Combo("Type", &typeIdx, kTypeNames, IM_ARRAYSIZE(kTypeNames))) {
+                                e.body->type = static_cast<toon::BodyType>(typeIdx);
+                            }
+                            ImGui::BeginDisabled(e.body->type != toon::BodyType::Dynamic); // ignored otherwise
+                            ImGui::DragFloat("Mass", &e.body->mass, 0.01f, 0.001f, 1000.0f);
+                            ImGui::EndDisabled();
+                            ImGui::DragFloat("Friction", &e.body->friction, 0.01f, 0.0f, 2.0f);
+                            ImGui::DragFloat("Restitution", &e.body->restitution, 0.01f, 0.0f, 1.0f);
+                        }
+                    } else {
+                        if (ImGui::Button("Add Rigid Body")) { e.body = toon::RigidBodyComponent{}; }
+                    }
+                }
+
+                // Scripts (core/script.h) — a vector, not a single optional component: an
+                // entity can carry several independent scripts at once (M1.3's own
+                // reasoning, e.g. a Health script alongside a PlayerMovement script), so
+                // each attached script gets its own Remove button, and "Add Script" picks a
+                // registered type by name (the same registry CreateScript/serialization use)
+                // rather than a single attach/detach toggle. Editing a script's OWN fields
+                // (e.g. SpinScript's axis/speed) is deliberately not exposed here — that
+                // needs Script to grow its own ImGui-drawing hook (beyond Save/Load), a
+                // separate, larger feature this pass doesn't include.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Scripts");
+
+                    int pendingRemove = -1;
+                    for (int si = 0; si < static_cast<int>(e.scripts.size()); ++si) {
+                        ImGui::PushID(si);
+                        ImGui::TextUnformatted(e.scripts[si].name.c_str());
+                        ImGui::SameLine();
+                        if (ImGui::Button("Remove")) { pendingRemove = si; }
+                        ImGui::PopID();
+                    }
+                    if (pendingRemove >= 0) { e.scripts.erase(e.scripts.begin() + pendingRemove); }
+
+                    const std::vector<std::string> availableScripts = toon::GetRegisteredScriptNames();
+                    if (availableScripts.empty()) {
+                        ImGui::TextDisabled("(no script types registered)");
+                    } else {
+                        static int addScriptTypeIdx = 0;
+                        addScriptTypeIdx = std::min(addScriptTypeIdx, static_cast<int>(availableScripts.size()) - 1);
+                        if (ImGui::BeginCombo("##AddScriptType", availableScripts[addScriptTypeIdx].c_str())) {
+                            for (int ti = 0; ti < static_cast<int>(availableScripts.size()); ++ti) {
+                                const bool isSelected = (ti == addScriptTypeIdx);
+                                if (ImGui::Selectable(availableScripts[ti].c_str(), isSelected)) { addScriptTypeIdx = ti; }
+                                if (isSelected) { ImGui::SetItemDefaultFocus(); }
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Add Script")) {
+                            const std::string &typeName = availableScripts[addScriptTypeIdx];
+                            if (auto instance = toon::CreateScript(typeName)) {
+                                e.scripts.push_back({typeName, std::move(instance)});
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1225,6 +1527,9 @@ int main() {
             ImGui::SliderAngle("FOV", &camera.fovY, 20.0f, 100.0f);
             if (ImGui::Button("Reset camera")) { camera = cameraDefault; }
             ImGui::Checkbox("Run Scripts", &runScripts);
+
+            ImGui::SeparatorText("Physics");
+            ImGui::Checkbox("Show Colliders", &showColliders);
 
             ImGui::SeparatorText("Post (HDR)");
             ImGui::Checkbox("Tone map (ACES)", &post.toneMap);
@@ -1279,6 +1584,7 @@ int main() {
 
     toon::Input::Shutdown();
     assetBrowser.Shutdown(renderer); // frees cached thumbnails; must run before the device does
+    physicsWorld.Shutdown();
     renderer.Shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();

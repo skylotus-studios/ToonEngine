@@ -23,26 +23,26 @@ namespace toon {
 namespace {
 
 // object -> local matrix from a Transform. MUST match renderer.cpp's WorldFromTransform
-// convention (row-major, scale · Rx · Ry · Rz · translation) so scene-composed and
-// single-object world matrices agree.
+// convention (row-major, scale · R · translation) so scene-composed and single-object
+// world matrices agree.
 float4x4 LocalFromTransform(const Transform& t) {
-    return float4x4::Scale(t.scale.x, t.scale.y, t.scale.z) *
-           float4x4::RotationX(t.rotationEuler.x) *
-           float4x4::RotationY(t.rotationEuler.y) *
-           float4x4::RotationZ(t.rotationEuler.z) *
+    const QuaternionF q(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w);
+    return float4x4::Scale(t.scale.x, t.scale.y, t.scale.z) * q.ToMatrix() *
            float4x4::Translation(t.position.x, t.position.y, t.position.z);
 }
 
 // Component-wise lerp between two sim ticks' local poses, for UpdateWorldTransforms' render
-// interpolation (see scene.h). Lerping rotationEuler directly (rather than a quaternion slerp)
-// is an approximation, valid for the small per-tick deltas smooth animation produces; a fast
-// spin or a large single-tick rotation could show the "long way round" or gimbal wobble a
-// quaternion wouldn't -- an upgrade to make only if that's ever actually visible.
+// interpolation (see scene.h). Rotation is a proper spherical interpolation (slerp) between
+// the two quaternions -- unlike lerping Euler angles, this always takes the short way round
+// and never gimbal-wobbles, even across a fast spin or a large single-tick rotation.
 Transform LerpTransform(const Transform& a, const Transform& b, float t) {
     Transform out;
-    out.position      = a.position + (b.position - a.position) * t;
-    out.rotationEuler = a.rotationEuler + (b.rotationEuler - a.rotationEuler) * t;
-    out.scale         = a.scale + (b.scale - a.scale) * t;
+    out.position = a.position + (b.position - a.position) * t;
+    const QuaternionF qa(a.rotation.x, a.rotation.y, a.rotation.z, a.rotation.w);
+    const QuaternionF qb(b.rotation.x, b.rotation.y, b.rotation.z, b.rotation.w);
+    const QuaternionF qs = slerp(qa, qb, t);
+    out.rotation = { qs.q.x, qs.q.y, qs.q.z, qs.q.w };
+    out.scale    = a.scale + (b.scale - a.scale) * t;
     return out;
 }
 
@@ -63,9 +63,8 @@ float4x4 ToFloat4x4(const Mat4& in) {
 }
 
 // Decompose a local (object->parent) matrix back into a Transform — the exact inverse of
-// LocalFromTransform (Scale · Rx · Ry · Rz, row-vector), derived from Diligent's RotationX/Y/Z.
-// Used by the gizmo write-back + world-preserving reparent, so a matrix round-trips to the
-// same TRS the renderer would rebuild.
+// LocalFromTransform (Scale · R, row-vector). Used by the gizmo write-back + world-preserving
+// reparent, so a matrix round-trips to the same TRS the renderer would rebuild.
 void DecomposeToTransform(const float4x4& m, Transform& out) {
     // Translation is the 4th row (row-vector convention: local = S·R·T).
     out.position = { m[3][0], m[3][1], m[3][2] };
@@ -85,23 +84,16 @@ void DecomposeToTransform(const float4x4& m, Transform& out) {
     if (sy > 1e-8f)           r1 = r1 / sy;
     if (sz > 1e-8f)           r2 = r2 / sz;
 
-    // Now [r0;r1;r2] = R = Rx(a)·Ry(b)·Rz(g), for which (see the derivation in MEMORY.md):
-    //   R[0][2] = -sin b,  R[1][2] = sin a·cos b,  R[2][2] = cos a·cos b,
-    //   R[0][0] = cos b·cos g,  R[0][1] = cos b·sin g.
-    const float sinB = r0.z < -1.0f ? 1.0f : (r0.z > 1.0f ? -1.0f : -r0.z);
-    const float b    = std::asin(sinB);
-    const float cosB = std::cos(b);
-    float a, g;
-    if (std::abs(cosB) > 1e-4f) {
-        a = std::atan2(r1.z, r2.z);   // atan2(sin a·cos b, cos a·cos b)
-        g = std::atan2(r0.y, r0.x);   // atan2(cos b·sin g, cos b·cos g)
-    } else {
-        // Gimbal lock (cos b ~ 0, pitch ~ ±90°): a and g are coupled — pin g = 0.
-        g = 0.0f;
-        a = (r0.z < 0.0f) ? std::atan2(r1.x, r1.y)    // b ~ +90°
-                          : std::atan2(-r1.x, r1.y);  // b ~ -90°
-    }
-    out.rotationEuler = { a, b, g };
+    // [r0;r1;r2] is now a proper (unscaled) rotation matrix -- hand it to Diligent's own
+    // matrix->quaternion conversion rather than re-deriving Euler angles by hand (the old
+    // atan2/asin extraction this replaced had its own gimbal-lock branch to worry about;
+    // FromRotationMatrix needs none).
+    float4x4 rot = float4x4::Identity();
+    rot[0][0] = r0.x; rot[0][1] = r0.y; rot[0][2] = r0.z;
+    rot[1][0] = r1.x; rot[1][1] = r1.y; rot[1][2] = r1.z;
+    rot[2][0] = r2.x; rot[2][1] = r2.y; rot[2][2] = r2.z;
+    const QuaternionF q = QuaternionF::FromRotationMatrix(rot);
+    out.rotation = { q.q.x, q.q.y, q.q.z, q.q.w };
 }
 
 // --- Hierarchy re-ordering helpers (plain index/vector work) ---------------
@@ -177,7 +169,7 @@ Entity::Entity(const Entity& other)
       prevSimTransform(other.prevSimTransform), worldMatrix(other.worldMatrix),
       prevWorldMatrix(other.prevWorldMatrix), mesh(other.mesh), model(other.model),
       material(other.material), primitive(other.primitive), modelPath(other.modelPath),
-      light(other.light) {
+      light(other.light), collider(other.collider), body(other.body) {
     scripts.reserve(other.scripts.size());
     for (const ScriptComponent& src : other.scripts) {
         ScriptComponent dup;
@@ -299,10 +291,14 @@ Transform MakeLightTransform(const Vec3& position, const Vec3& dirToLight) {
     rot[2][0] = fwd.x;   rot[2][1] = fwd.y;   rot[2][2] = fwd.z;
 
     Transform out;
-    DecomposeToTransform(rot, out);   // extracts rotationEuler (position/scale overwritten below)
+    DecomposeToTransform(rot, out);   // extracts rotation (position/scale overwritten below)
     out.position = position;
     out.scale    = {1.0f, 1.0f, 1.0f};
     return out;
+}
+
+Mat4 ComposeWorldMatrix(const Vec3& position, const Quat& rotation, const Vec3& scale) {
+    return ToMat4(LocalFromTransform(Transform{position, rotation, scale}));
 }
 
 bool GetActiveLight(const Scene& scene, Vec3& dirToLight, Vec3& color, float& intensity) {

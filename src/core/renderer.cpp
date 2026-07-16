@@ -255,6 +255,11 @@ namespace toon {
     static constexpr Uint32 kShadowCascades = 4;
     static constexpr Uint32 kShadowResolution = 2048;
 
+    // Debug wireframe overlay (M2.1): a fixed-capacity dynamic vertex buffer, remapped per
+    // DrawWireframe call. Comfortably above any ColliderWireframe shape's point count
+    // (Capsule, the largest, is ~200) with headroom to spare.
+    static constexpr Uint32 kMaxWireframeVertices = 1024;
+
     // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
     // (five row-major float4x4 rows + five float4 rows = 400 bytes, 16-aligned).
     struct ShaderConstants {
@@ -278,6 +283,12 @@ namespace toon {
         float ssaoStrength; // 0 = AO ignored, 1 = full occlusion
         float ssrStrength;  // reflection add strength
         float pad0, pad1, pad2;
+    };
+
+    // GPU mirror of wireframe.hlsl's cbuffer (M2.1's collider debug overlay).
+    struct WireframeConstants {
+        float4x4 worldViewProj;
+        float4 color;
     };
 
     // All Diligent state hides here, behind the PIMPL boundary.
@@ -330,6 +341,14 @@ namespace toon {
         RefCntAutoPtr<IShaderResourceBinding> tonemapSRB;
         RefCntAutoPtr<IBuffer> postConstants;
         bool outputSRGB = false; // back buffer is a non-sRGB UNORM
+
+        // Debug wireframe overlay (M2.1's collider visualization, DrawWireframe) -- drawn
+        // directly onto the resolved back buffer, same "1 RTV, no depth" shape as the
+        // tonemap PSO above (see CreateWireframePipeline).
+        RefCntAutoPtr<IPipelineState> wireframePSO;
+        RefCntAutoPtr<IShaderResourceBinding> wireframeSRB;
+        RefCntAutoPtr<IBuffer> wireframeConstants;
+        RefCntAutoPtr<IBuffer> wireframeVB; // dynamic, kMaxWireframeVertices capacity
 
         // DiligentFX post effects (Bloom + SSAO) share a PostFXContext. It requires
         // depth + motion + camera to reach its "PSOs ready" gate (which both effects
@@ -745,6 +764,11 @@ namespace toon {
             return false;
         }
 
+        if (!CreateWireframePipeline()) {
+            std::fprintf(stderr, "Renderer: failed to create wireframe pipeline\n");
+            return false;
+        }
+
         // If the back buffer isn't an sRGB format, the tone-map shader encodes sRGB.
         m_impl->outputSRGB = !(sc.ColorBufferFormat == TEX_FORMAT_RGBA8_UNORM_SRGB ||
                                sc.ColorBufferFormat == TEX_FORMAT_BGRA8_UNORM_SRGB);
@@ -1059,6 +1083,72 @@ namespace toon {
         }
         m_impl->tonemapPSO->CreateShaderResourceBinding(&m_impl->tonemapSRB, true);
         return m_impl->tonemapSRB != nullptr;
+    }
+
+    bool Renderer::CreateWireframePipeline() {
+        IRenderDevice *device = m_impl->device;
+        const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
+
+        {
+            BufferDesc cbDesc;
+            cbDesc.Name = "wireframe constants";
+            cbDesc.Size = sizeof(WireframeConstants);
+            cbDesc.Usage = USAGE_DYNAMIC;
+            cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
+            cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            device->CreateBuffer(cbDesc, nullptr, &m_impl->wireframeConstants);
+            if (!m_impl->wireframeConstants) { return false; }
+        }
+        {
+            BufferDesc vbDesc;
+            vbDesc.Name = "wireframe VB";
+            vbDesc.Usage = USAGE_DYNAMIC;
+            vbDesc.BindFlags = BIND_VERTEX_BUFFER;
+            vbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            vbDesc.Size = static_cast<Uint64>(kMaxWireframeVertices) * sizeof(float3);
+            device->CreateBuffer(vbDesc, nullptr, &m_impl->wireframeVB);
+            if (!m_impl->wireframeVB) { return false; }
+        }
+
+        IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
+        auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "wireframe VS", "wireframe.hlsl", "VSMain");
+        auto ps = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "wireframe PS", "wireframe.hlsl", "PSMain");
+        if (!vs || !ps) { return false; }
+
+        LayoutElement layoutElems[] = {
+            LayoutElement{0, 0, 3, VT_FLOAT32, False}, // ATTRIB0 position
+        };
+
+        GraphicsPipelineStateCreateInfo ci;
+        ci.PSODesc.Name = "wireframe PSO";
+        ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+        GraphicsPipelineDesc &gp = ci.GraphicsPipeline;
+        gp.NumRenderTargets = 1;
+        gp.RTVFormats[0] = sc.ColorBufferFormat; // same "back buffer only" shape as the tonemap PSO
+        gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_LINE_LIST;
+        gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+        gp.DepthStencilDesc.DepthEnable = False; // always-on-top debug overlay -- see DrawWireframe
+        gp.InputLayout.LayoutElements = layoutElems;
+        gp.InputLayout.NumElements = sizeof(layoutElems) / sizeof(layoutElems[0]);
+
+        ci.pVS = vs;
+        ci.pPS = ps;
+        ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
+
+        device->CreateGraphicsPipelineState(ci, &m_impl->wireframePSO);
+        if (!m_impl->wireframePSO) { return false; }
+        if (auto *v = m_impl->wireframePSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) {
+            v->Set(m_impl->wireframeConstants);
+        }
+        // wireframe.hlsl's Constants cbuffer is referenced by both VSMain and PSMain (g_Color
+        // is PS-only), so -- same as Constants in the toon/model PSOs above -- each stage
+        // compiles its own copy of the variable and needs its own binding.
+        if (auto *p = m_impl->wireframePSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "Constants")) {
+            p->Set(m_impl->wireframeConstants);
+        }
+        m_impl->wireframePSO->CreateShaderResourceBinding(&m_impl->wireframeSRB, true);
+        return m_impl->wireframeSRB != nullptr;
     }
 
     bool Renderer::CreatePostFX() {
@@ -1399,6 +1489,10 @@ namespace toon {
         m_impl->tonemapSRB.Release();
         m_impl->tonemapPSO.Release();
         m_impl->postConstants.Release();
+        m_impl->wireframeSRB.Release();
+        m_impl->wireframePSO.Release();
+        m_impl->wireframeConstants.Release();
+        m_impl->wireframeVB.Release();
         m_impl->hdrColor.Release();
         m_impl->normalBuffer.Release();
         m_impl->sceneDepth.Release();
@@ -1585,10 +1679,15 @@ namespace toon {
         m_impl->lightColor = float3(color.x, color.y, color.z) * intensity;
     }
 
-    // Object -> world (Diligent is row-major / row-vector: v * M). Rotation order X,Y,Z.
+    // Object -> world (Diligent is row-major / row-vector: v * M). `t.rotation` is a plain
+    // toon::Quat (core/math.h); converting to Diligent's QuaternionF here (not before) is
+    // what lets Transform stay Diligent-free while this, the one file allowed to touch
+    // Diligent, still builds on its (numerically fiddlier) quaternion-to-matrix math
+    // instead of reimplementing it. Must match scene.cpp's LocalFromTransform exactly —
+    // the scene graph and this single-object path compose the same way.
     static float4x4 WorldFromTransform(const Transform &t) {
-        return float4x4::Scale(t.scale.x, t.scale.y, t.scale.z) * float4x4::RotationX(t.rotationEuler.x) *
-               float4x4::RotationY(t.rotationEuler.y) * float4x4::RotationZ(t.rotationEuler.z) *
+        const QuaternionF q(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w);
+        return float4x4::Scale(t.scale.x, t.scale.y, t.scale.z) * q.ToMatrix() *
                float4x4::Translation(t.position.x, t.position.y, t.position.z);
     }
 
@@ -1612,6 +1711,42 @@ namespace toon {
             }
         }
         return out;
+    }
+
+    // Debug wireframe overlay (M2.1's collider visualization) -- see core/renderer.h's
+    // DrawWireframe comment for the call-timing contract (after EndScene, before BeginUI).
+    void Renderer::DrawWireframe(const Mat4 &world, const Vec3 *points, uint32_t count, const Color &color) {
+        if (!points || count == 0 || !m_impl->wireframePSO) { return; }
+        if (count > kMaxWireframeVertices) {
+            std::fprintf(stderr, "DrawWireframe: %u points exceeds the %u max, clamping\n", count,
+                         kMaxWireframeVertices);
+            count = kMaxWireframeVertices;
+        }
+
+        const float4x4 wvp = ToFloat4x4(world) * m_impl->viewProj;
+        {
+            MapHelper<WireframeConstants> cb(m_impl->context, m_impl->wireframeConstants, MAP_WRITE, MAP_FLAG_DISCARD);
+            cb->worldViewProj = wvp;
+            cb->color = float4(color.r, color.g, color.b, color.a);
+        }
+        {
+            MapHelper<float3> vb(m_impl->context, m_impl->wireframeVB, MAP_WRITE, MAP_FLAG_DISCARD);
+            float3 *dst = vb;
+            for (uint32_t i = 0; i < count; ++i) { dst[i] = float3(points[i].x, points[i].y, points[i].z); }
+        }
+
+        IBuffer *vbs[] = {m_impl->wireframeVB};
+        const Uint64 offsets[] = {0};
+        m_impl->context->SetVertexBuffers(0, 1, vbs, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                                          SET_VERTEX_BUFFERS_FLAG_RESET);
+
+        m_impl->context->SetPipelineState(m_impl->wireframePSO);
+        m_impl->context->CommitShaderResources(m_impl->wireframeSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+        DrawAttribs draw;
+        draw.NumVertices = count;
+        draw.Flags = DRAW_FLAG_VERIFY_ALL;
+        m_impl->context->Draw(draw);
     }
 
     // --- Cascaded shadow maps ----------------------------------------------------

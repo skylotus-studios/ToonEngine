@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-#include "core/math.h" // toon::Vec3 (plain, Diligent-free)
+#include "core/math.h" // toon::Vec3/Quat (plain, Diligent-free)
 
 // Forward-declared so this header pulls in neither GLFW nor any Diligent header.
 struct GLFWwindow;
@@ -96,12 +96,14 @@ namespace toon {
         float roughness = 0.9f;                    // SSR: low = reflective, high = matte
     };
 
-    // Per-object placement. Rotation is applied X, then Y, then Z. Scale may be
-    // non-uniform: DrawMesh derives an inverse-transpose normal matrix so shading,
-    // the G-buffer normals, and the outline width all stay correct under any scale.
+    // Per-object placement. `rotation` is a quaternion (identity = no rotation); use
+    // core/math.h's QuatFromEuler/QuatToEuler to edit it as Euler XYZ degrees (e.g. the
+    // Inspector) — that conversion applies X, then Y, then Z. Scale may be non-uniform:
+    // DrawMesh derives an inverse-transpose normal matrix so shading, the G-buffer
+    // normals, and the outline width all stay correct under any scale.
     struct Transform {
         Vec3 position = {0.0f, 0.0f, 0.0f};
-        Vec3 rotationEuler = {0.0f, 0.0f, 0.0f}; // radians
+        Quat rotation;
         Vec3 scale = {1.0f, 1.0f, 1.0f};
     };
 
@@ -275,6 +277,15 @@ namespace toon {
         void SetPostParams(const PostParams &params);
         void EndScene();
 
+        // --- Debug drawing (M2.1: collider wireframes) --------------------------
+        // Draw a world-space line list -- e.g. core/physics.h's ColliderWireframe output.
+        // `points` is `count` LOCAL-space positions, consecutive pairs forming one segment
+        // ([0]-[1], [2]-[3], ...); `world` places them. Renders directly onto the resolved
+        // back buffer, the same target the ImGui overlay draws onto next -- so call this
+        // AFTER EndScene() and BEFORE BeginUI(). No depth test: always on top of the scene,
+        // so a collider is never hidden inside the mesh it belongs to.
+        void DrawWireframe(const Mat4 &world, const Vec3 *points, uint32_t count, const Color &color);
+
         // --- Debug/editor UI (Dear ImGui) ---------------------------------------
         // Diligent's ImGui renderer backend (ImGuiImplDiligent) is confined to
         // renderer.cpp same as everything else — main.cpp only sees these four
@@ -295,6 +306,7 @@ namespace toon {
         bool CreatePostFX();                                          // PostFXContext + Bloom + SSAO effects
         bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + normal + depth + motion
         bool CreateShadowMap();                                       // ShadowMapManager + depth-only PSOs
+        bool CreateWireframePipeline();                               // debug line-list PSO (DrawWireframe)
 
         struct Impl; // defined in renderer.cpp — hides all Diligent types
         Impl *m_impl = nullptr;

@@ -10,6 +10,7 @@
 //============================================================================
 #include "core/renderer.h"    // Transform, Material, Mesh/ModelHandle, Mat4 (via math.h)
 #include "core/primitives.h"  // PrimitiveDesc — mesh-regeneration params for serialization
+#include "core/physics.h"     // ColliderShape/BodyType/BodyHandle — Entity's physics components (M2.1)
 #include "core/script.h"      // ScriptComponent — Entity's attached native scripts (M1.3)
 
 #include <optional>
@@ -24,6 +25,28 @@ namespace toon {
 struct LightComponent {
     Vec3  color     = {1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;
+};
+
+// A collision shape carried by an entity (M2.1) — the physics seam's ColliderShape/Vec3
+// vocabulary (core/physics.h). An entity with a collider but no RigidBodyComponent is an
+// implicit static collider (a wall/floor); paired with one, it becomes a dynamic/kinematic
+// mover — see RigidBodyComponent below.
+struct ColliderComponent {
+    ColliderShape shape   = ColliderShape::Box;
+    Vec3          extents = {0.5f, 0.5f, 0.5f}; // meaning depends on shape — see BodyDesc
+};
+
+// Physics behavior for an entity that also carries a ColliderComponent (M2.1). `handle` is
+// runtime-only state (like Entity::worldMatrix) — populated when the physics world is built
+// for a Play session (main.cpp) and never serialized; it copies as a plain id, which is
+// harmless since a copy is only ever a snapshot/backup (Play/Stop, DuplicateEntity) and the
+// real body is rebuilt the next time Play starts.
+struct RigidBodyComponent {
+    BodyType   type        = BodyType::Dynamic;
+    float      mass        = 1.0f; // ignored for Static/Kinematic — see BodyDesc
+    float      friction    = 0.5f;
+    float      restitution = 0.2f;
+    BodyHandle handle      = BodyHandle::Invalid;
 };
 
 // One node in the scene. It renders either a procedural primitive (`mesh` set) or a loaded
@@ -56,6 +79,11 @@ struct Entity {
     std::string   modelPath;
 
     std::optional<LightComponent> light;    // set -> this entity is a (directional) light
+
+    // Physics (M2.1): a collider alone is a static collider (see ColliderComponent above);
+    // paired with a RigidBodyComponent, the entity becomes a dynamic/kinematic mover.
+    std::optional<ColliderComponent>  collider;
+    std::optional<RigidBodyComponent> body;
 
     // Attached native scripts (core/script.h) — per-tick gameplay hooks (M1.3). A
     // std::unique_ptr member makes ScriptComponent, and therefore Entity, NOT implicitly
@@ -113,6 +141,13 @@ void SetEntityWorldMatrix(Scene& scene, int idx, const Mat4& world);
 // aiming) and whose position is `position`; scale is identity. Used to seed the scripted
 // default light. Call UpdateWorldTransforms afterward for it to take effect.
 Transform MakeLightTransform(const Vec3& position, const Vec3& dirToLight);
+
+// Compose a world Mat4 from a position + quaternion rotation + scale — lets a Diligent-free
+// caller (main.cpp) build a Mat4 without touching Diligent itself. The physics write-back
+// path (M2.1) is the one call site: Jolt hands back a dynamic body's world (position,
+// rotation) each tick, and the entity's EXISTING scale (physics doesn't simulate scale)
+// needs to be folded back in before handing the result to SetEntityWorldMatrix.
+Mat4 ComposeWorldMatrix(const Vec3& position, const Quat& rotation, const Vec3& scale);
 
 // Find the first entity carrying a LightComponent and report its world-space direction TO
 // the light (local +Z of its world matrix, see MakeLightTransform) plus color/intensity.

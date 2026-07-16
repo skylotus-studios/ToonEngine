@@ -58,6 +58,35 @@ set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/glfw)
 
+# --- Jolt Physics (submodule under external/) ---------------------------------
+# M2.1 roadmap item: rigid bodies + colliders + raycasts, behind core/physics.h's seam
+# (twin to core/renderer.h's Diligent seam -- see that header's banner). Jolt's own
+# CMakeLists.txt lives in Build/, not the repo root; add_subdirectory points there and
+# the link target it defines is named "Jolt". Its own top-level CMakeLists.txt only adds
+# HelloWorld/UnitTests/Samples/etc. when IT is the root of the CMake build, which it isn't
+# here, so add_subdirectory pulls in nothing but the Jolt library itself.
+#
+# ToonEngine only wants the core rigid-body/collision simulation, not this Jolt version's
+# newer GPU-compute-backed hair/cloth simulation (Physics/Hair, Compute/DX12|VK|MTL) --
+# same "disable what we don't use" rationale as the DILIGENT_NO_* block above.
+#
+# Jolt defaults to the STATIC MSVC runtime (/MTd in Debug) on MSVC-compatible compilers
+# (which clang-cl counts as); the rest of this build (clang-cl's own default, which is what
+# Diligent's libraries compile with) uses the DYNAMIC runtime (/MDd). Linking a /MTd static
+# lib into a /MDd exe fails outright (lld-link: "mismatch detected for 'RuntimeLibrary'") --
+# discovered by actually attempting the link, not guessed in advance. Force Jolt onto the
+# dynamic runtime so every library in the final exe agrees.
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+set(JPH_USE_DX12                 OFF CACHE BOOL "" FORCE)
+set(JPH_USE_VK                   OFF CACHE BOOL "" FORCE)
+set(JPH_USE_MTL                  OFF CACHE BOOL "" FORCE)
+set(JPH_USE_CPU_COMPUTE          OFF CACHE BOOL "" FORCE)
+set(ENABLE_INSTALL               OFF CACHE BOOL "" FORCE)
+# Jolt defaults this ON for Release/Distribution; ToonEngine's own build has no LTO, and a
+# mismatch here fails to link (Jolt's own CMakeLists.txt warns of exactly this scenario).
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/JoltPhysics/Build)
+
 # --- Application -------------------------------------------------------------
 # imgui_impl_glfw.cpp is Dear ImGui's GLFW platform backend. DiligentTools'
 # Imgui module only auto-compiles the Win32/Linux/macOS-native/SDL backends
@@ -69,6 +98,7 @@ add_executable(ToonEngine
     src/core/renderer.cpp
     src/core/primitives.cpp
     src/core/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
+    src/core/physics.cpp        # Jolt Physics backend behind the physics seam (M2.1)
     src/core/script.cpp         # native script registry + per-tick dispatch (M1.3)
     src/core/scripts/spin_script.cpp   # first concrete Script (replaces the old spin block)
     src/core/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
@@ -140,6 +170,9 @@ target_link_libraries(ToonEngine
                                             # propagate transitively — must be linked explicitly here.
         DiligentFX                         # post-processing effects (bloom, tone mapping, ...)
         glfw
+        Jolt                                # rigid-body physics + collision (M2.1) -- also brings
+                                            # Jolt's own PUBLIC include dir + compile definitions
+                                            # (instruction-set flags etc.) along transitively.
 )
 
 # Native title-bar theming (core/renderer.cpp's SetTitleBarTheme, via DWM) needs

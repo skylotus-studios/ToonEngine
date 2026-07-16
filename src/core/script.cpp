@@ -5,6 +5,7 @@
 
 #include "core/scene.h" // Entity, Scene — the dispatch loops below walk their real fields
 
+#include <algorithm>
 #include <cstdio>
 #include <unordered_map>
 
@@ -34,6 +35,14 @@ std::unique_ptr<Script> CreateScript(const std::string& name) {
         return nullptr;
     }
     return it->second();
+}
+
+std::vector<std::string> GetRegisteredScriptNames() {
+    std::vector<std::string> names;
+    names.reserve(Registry().size());
+    for (const auto& [name, factory] : Registry()) { names.push_back(name); }
+    std::sort(names.begin(), names.end()); // stable, predictable order for the UI picker
+    return names;
 }
 
 // --- Per-tick dispatch ---------------------------------------------------------
