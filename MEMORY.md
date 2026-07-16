@@ -133,10 +133,43 @@ generated `build.ninja` for content unique to the edit; if it's genuinely absent
 file's existing "explicit reconfigure > wipe" guidance below, now with a concrete incident
 behind it. See "Input system" below for the full incident.
 
+### Jolt Physics: runtime library mismatch (`MDd_DynamicDebug` vs `MTd_StaticDebug`)
+
+Adding Jolt as a submodule (`add_subdirectory(external/JoltPhysics/Build)`, link target
+`Jolt`) fails at link time with `lld-link: error: mismatch detected for 'RuntimeLibrary'`,
+because Jolt's own CMake defaults to the static MSVC CRT (`/MTd` in Debug) while
+DiligentFX and the rest of ToonEngine build against the dynamic CRT (`/MDd`). Fix:
+`set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)` before
+`add_subdirectory(external/JoltPhysics/Build)`, the same cache-variable-before-
+`add_subdirectory` pattern the `DILIGENT_NO_*` block already uses. Also set
+`INTERPROCEDURAL_OPTIMIZATION OFF` (ToonEngine isn't LTO; a mismatched LTO setting fails to
+link the same way) and confirm `CPP_RTTI_ENABLED`/`CPP_EXCEPTIONS_ENABLED` actually match
+the flags clang-cl already builds ToonEngine with before assuming a link failure is this
+specific mismatch.
+
+### Jolt Physics: `BroadPhaseLayerInterfaceImpl` — abstract class error
+
+One of the three filter classes Jolt's `PhysicsSystem::Init` boilerplate requires
+(alongside `ObjectVsBroadPhaseLayerFilter` and `ObjectLayerPairFilter`),
+`BroadPhaseLayerInterfaceImpl : public JPH::BroadPhaseLayerInterface`, fails to compile as
+`field type 'BroadPhaseLayerInterfaceImpl' is an abstract class` unless
+`GetBroadPhaseLayerName` is also overridden — but only when the build defines
+`JPH_EXTERNAL_PROFILE` or `JPH_PROFILE_ENABLED` (this one does, transitively), since Jolt
+declares that method `#if`-gated on those macros. Guard the override the same way:
+`#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)`.
+
+### Jolt Physics: `RVec3Arg` aliases `Vec3Arg` (single-precision builds)
+
+A `ToVec3` overload for both `JPH::Vec3Arg` and `JPH::RVec3Arg` fails with `redefinition of
+'ToVec3'`: Jolt's "real" (possibly double-precision) coordinate type `RVec3`/`RVec3Arg` is a
+plain alias for `Vec3`/`Vec3Arg` unless the build defines `JPH_DOUBLE_PRECISION` (this one
+doesn't), so the two overloads are the same function twice. One overload covers both call
+sites.
+
 ## Window + device bring-up (GLFW + Vulkan)
 
 `main.cpp` creates the GLFW window with `GLFW_NO_API` (Vulkan owns the surface,
-not GL), then drives `Renderer`. Inside the seam (`renderer.cpp`):
+not GL), then drives `Renderer`. Inside the abstraction layer (`renderer.cpp`):
 
 - **`MakeNativeWindow()`** fills Diligent's `NativeWindow` per platform — Win32
   `hWnd`; Linux `WindowId` + `pDisplay` (X11 wired, Wayland fields exist); macOS
@@ -380,7 +413,7 @@ outline stays a uniform rim; cube/torus visibly unchanged.
 The inverted-hull outline was always per-object *capable* — `Material::outlineColor` /
 `outlineWidth` flow through `DrawMesh` into `g_Outline` — but `main.cpp` overwrote both
 from one global `style` every frame, so every object shared one line. Made it genuinely
-per-object, **app-side only** (no seam/shader change):
+per-object, **app-side only** (no abstraction-layer/shader change):
 
 - Each `Object` owns its outline (sphere: thin dark-red rim; cube: bold near-black edge;
   torus: dark-bronze line) via its `Material{ baseColor, outlineColor, outlineWidth }`.
@@ -435,7 +468,7 @@ straight to the back buffer:
 
 The bright toon bands bleed a soft glow. Implemented with DiligentFX's real `Bloom`
 effect (compute-ish full-screen-triangle passes: prefilter → downsample → upsample),
-all in `core/renderer.cpp` behind the seam. Per-object controls live in
+all in `core/renderer.cpp` behind the abstraction layer. Per-object controls live in
 `PostParams` (enable, intensity, threshold, soft-knee, radius); the debug UI drives
 them live.
 
@@ -566,7 +599,8 @@ from the camera matrices separately, so the motion texture specifically needs th
   are now 3-RT.
 - Camera motion: `SetCamera` snapshots the old `viewProj` as `prevViewProj` before
   overwriting. Object motion: **`DrawMesh` gained a `prevTransform`** — the app owns
-  object history (the seam philosophy; the renderer has no stable object identity).
+  object history (consistent with the abstraction layer's philosophy; the renderer has no
+  stable object identity).
   `main.cpp` tracks `prevSpinAngle`; the static ground passes its transform twice.
 - `DrawMesh` combines them: `prevWVP = WorldFromTransform(prevT) · prevViewProj`.
 
@@ -659,7 +693,7 @@ hit confidence).
 Load + cel-shade real glTF/GLB models via **DiligentTools' `GLTF::Model`** (target
 `Diligent-AssetLoader`), not a hand-rolled loader — it owns the GPU vertex/index buffers +
 textures; we draw its primitives with our own toon cel-fill PSO (no DiligentFX / PBR
-renderer). Seam: opaque `ModelHandle` + `LoadModel(path)` / `DrawModel(handle, xform,
+renderer). Abstraction layer: opaque `ModelHandle` + `LoadModel(path)` / `DrawModel(handle, xform,
 prevXform, style)`, all in `renderer.cpp`. `main.cpp` loads `helmet.glb` (path baked via
 `TOON_MODELS_DIR`) and draws it spinning; the model shares the toon `ShaderConstants` CB +
 `CelShade`/motion helpers with the procedural fill via `model_fill.hlsl` +
@@ -722,10 +756,11 @@ renderable — a `MeshHandle` (primitive) OR a `ModelHandle` (glTF) — plus a `
 - **`scene.cpp` is a Diligent-using engine TU** (the 2nd after `renderer.cpp`) — it uses
   Diligent's `float4x4` for composition (no hand-rolled 4x4 math).
 - **`math.h` gained a plain, math-free `Mat4`** (16 floats, row-major = Diligent's layout)
-  as the seam vocabulary for a composed world transform; `scene.cpp` / `renderer.cpp`
-  convert to/from `float4x4` at the boundary (a straight element copy). `scene.h` +
-  `main.cpp` stay Diligent-free.
-- The seam grew **`Mat4` overloads** of `DrawMesh` / `DrawModel`; the existing `Transform`
+  as the abstraction layer's vocabulary for a composed world transform; `scene.cpp` /
+  `renderer.cpp` convert to/from `float4x4` at the boundary (a straight element copy).
+  `scene.h` + `main.cpp` stay Diligent-free.
+- The abstraction layer grew **`Mat4` overloads** of `DrawMesh` / `DrawModel`; the existing
+  `Transform`
   overloads now just build a world `Mat4` and delegate.
 
 **Composition** (row-vector, v' = v·M): `worldMatrix = local * parentWorld` — local FIRST,
@@ -745,7 +780,7 @@ world-preserving reparent (needs `float4x4.Inverse()` + a TRS decompose), and
 
 **Editor camera** — orbits a movable `pivot` at `distance`, yaw/pitch. Rather than port the
 old glm camera (right-handed `lookAt` / `perspective` — would mirror the view in our LH
-pipeline, and Diligent Core has no ready lookAt), the seam `Camera` gained a `pivot` and
+pipeline, and Diligent Core has no ready lookAt), the abstraction layer's `Camera` gained a `pivot` and
 `SetCamera` prepends `Translation(-pivot)` to the proven LH turntable view. Controls in
 `core/camera.{h,cpp}` (a Diligent-using TU, like scene.cpp): orbit (yaw/pitch), zoom
 (geometric on `distance`), pan/fly (move the `pivot` along the camera's world basis), focus
@@ -772,7 +807,7 @@ only verifiable interactively — any inverted axis is a one-line sign flip in `
 
 ## Editor UI (Phase B, item 5 — part 1)
 
-**Panels (`main.cpp`, ImGui — exempt from the seam).** Three docked windows around the
+**Panels (`main.cpp`, ImGui — exempt from the abstraction layer).** Three docked windows around the
 pass-through scene: a **Scene Hierarchy** (left), an **Inspector** (top-right), and the
 existing **Debug** panel (bottom-right), laid out once via `DockBuilder` (guarded by
 `dockLayoutBuilt` + `#ifdef IMGUI_HAS_DOCK`; splits are left 0.20 → right 0.34 → right-up
@@ -816,12 +851,12 @@ when Spin is off).
 (`assets/fonts/BaiJamjuree-Medium.ttf`) and there are **3 selectable themes** ported verbatim
 from `ToonEngineOld/src/ui/themes.cpp` — **Amber Yellow** (default), **Gruvbox Hard**, **Gray
 Stone** — chosen from a combo in the Debug panel.
-- **No seam change for the font.** The font hook I expected turned out unnecessary: the
+- **No abstraction-layer change for the font.** The font hook I expected turned out unnecessary: the
   Diligent ImGui renderer sets `ImGuiBackendFlags_RendererHasTextures` (imgui 1.92's dynamic
   atlas — `ImGuiDiligentRenderer.cpp` `UpdateTexture`/`DestroyTexture` over `io.Textures`), so
   a font added **after** `InitUI` (context exists) and **before** the first frame uploads its
   glyph texture automatically. So `main.cpp` calls `io.Fonts->AddFontFromFileTTF(...)` directly
-  (ImGui is seam-exempt). Baked path via `TOON_FONTS_DIR` (CMake), like shaders/models.
+  (ImGui is exempt from it). Baked path via `TOON_FONTS_DIR` (CMake), like shaders/models.
 - **DPI.** Font is rasterized at `18 * dpiScale` (crisp — not `FontGlobalScale`, which blurs),
   where `dpiScale = glfwGetWindowContentScale` (1.5 on the 150% dev monitor). `ApplyTheme`
   ends with `ImGui::GetStyle().ScaleAllSizes(dpiScale)` so widget metrics match — the old
@@ -872,9 +907,9 @@ camera matrices as `Mat4`.
 **Gizmo snap + hotkeys.** MEMORY.md previously deferred hotkeys here because "WASD is taken by
 the camera fly" — but that fly only runs *while right-mouse is held* (`main.cpp`'s camera
 block, gated on `Input::IsMouseDown(Mouse::Right)`), so **W/E/R** are free the rest of the
-time. Added Unity-style bindings, all in `main.cpp` (no seam/renderer/shader/input-layer
-change — `gizmoOp`/`gizmoMode` are already plain locals there, and ImGui/ImGuizmo are
-seam-exempt):
+time. Added Unity-style bindings, all in `main.cpp` (no abstraction-layer/renderer/shader/
+input-layer change — `gizmoOp`/`gizmoMode` are already plain locals there, and ImGui/ImGuizmo
+are exempt from it):
 
 - **W/E/R** switch move/rotate/scale, **X** toggles local/world — `ImGui::IsKeyPressed(...,
   false)` (edge-triggered, no-repeat; a hold must not re-toggle X every frame), gated on
@@ -1106,7 +1141,7 @@ the header; CMake doesn't need a `.cpp` per header, so there was nothing to port
 **Adaptations from the reference (ToonEngineOld had glm + vcpkg; this engine has neither):**
 - **`glm::dvec2` → `toon::Vec2`** in the device layer, with component-wise arithmetic written
   out by hand rather than adding operators to `math.h`'s otherwise-operator-free `Vec2` (a
-  one-off, not worth growing the seam's math vocabulary for).
+  one-off, not worth growing the abstraction layer's math vocabulary for).
 - **No event queue.** `input_event.h`'s `Events()`/`EachEvent()` stream (plus the char and
   drop callbacks that feed it) wasn't ported — it has no consumer yet (its first is the
   asset-browser roadmap item, for drag-drop + text input), and **`std::span` — the only
@@ -1241,11 +1276,11 @@ relaunch), and the event queue / file-drops.
 
 Ported `ToonEngineOld/src/ui/file_browser.*` + `thumbnail_cache.*` onto the current engine —
 the last editor-layer item from the carry-over survey. The old files were written against a
-**free-function** seam (`LoadTexture`/`DestroyTexture`/`GetTextureNativeID`/...); the current
-seam is a PIMPL `Renderer` class with no texture API at all, so the real work here was adding
-one, not just moving UI code.
+**free-function** abstraction layer (`LoadTexture`/`DestroyTexture`/`GetTextureNativeID`/...);
+the current abstraction layer is a data-encapsulated `Renderer` class with no texture API at
+all, so the real work here was adding one, not just moving UI code.
 
-**Seam addition** (`core/renderer.h`/`.cpp`): `LoadTexture`/`DestroyTexture`/
+**Abstraction-layer addition** (`core/renderer.h`/`.cpp`): `LoadTexture`/`DestroyTexture`/
 `GetTextureImGuiID`/`GetTextureSize`, mirroring the existing `meshes`/`models` handle-vector
 convention (`Impl::textures`, 1-based handles, 0 = Invalid). `LoadTexture` uses
 `CreateTextureFromFile` (already-linked `Diligent-TextureLoader`) with a **default**
@@ -1445,6 +1480,212 @@ actually got built, plus a new "Scripts" subsection under "The scene model" docu
 the `Entity`-copy-constructor consequence. README's Highlights gained a native-scripting
 bullet.
 
+## Physics + collision (roadmap M2.1)
+
+Planned via the `plan-roadmap` skill (`.claude/plans/lovely-twirling-dewdrop.md` at the
+time, not repo-tracked — see that plan for the full ELI5 trade-off writeup and the
+Q&A that locked in the design below), then implemented across six phases in the same
+overall session. This entry is the durable technical record.
+
+Research (per `plan-roadmap`'s own checks) found ToonEngineOld had zero physics to port
+from and Diligent has no physics of its own (expected — it's a renderer; its
+`AdvancedMath.hpp` ray/AABB helpers remain useful later for picking, not used yet). **Jolt
+Physics** (MIT, C++17, first-class clang-cl support) was the clear pick: it adds as a plain
+CMake submodule and explicitly recommends a fixed 1/60 s step, exactly the `kFixedDt` loop
+M1 already built.
+
+### Phase A: `Transform.rotation` becomes a `Quat`
+
+`Transform.rotationEuler` (a `Vec3`) was replaced with `Transform.rotation` (a `Quat`,
+`core/math.h`, Diligent-free) everywhere, ahead of any Jolt code, because physics write-back
+and render interpolation both need it: a physics step naturally produces a quaternion each
+tick, and decomposing that to Euler and back every frame is both lossy and unnecessary work,
+while interpolating rotation between two fixed-sim ticks wants **slerp**, not a per-axis
+lerp (which has a gimbal-adjacent "long way round" caveat the old code had to note and
+slerp removes outright). `scene.cpp`'s `LocalFromTransform` now builds rotation via
+`QuaternionF::ToMatrix()`; `DecomposeToTransform` extracts a quaternion straight from the
+world matrix via `QuaternionF::FromRotationMatrix` (robust — the old gimbal-lock special
+case is gone, not papered over). The inspector's Rotation field still edits Euler degrees,
+converting at the widget boundary only; a hidden "Euler hint" like Unity's (to stop 190°
+from redisplaying as −170°) is deferred polish, not a correctness gap.
+
+Composition order took a hand-derived check to get right: the existing convention (still
+used by `spin_script.cpp` and everywhere else) applies rotation as "X, then Y, then Z", i.e.
+`Rx * Ry * Rz` in the matrix form already in use. Verified against Diligent's actual
+`Mul`/`ToMatrix` convention with concrete 90°-rotation test cases (by hand, not assumed) that
+the matching quaternion composition is `Normalize(qz * qy * qx)`, **not** the more
+intuitive-looking `qx * qy * qz`, since quaternion multiplication order and matrix
+multiplication order invert relative to each other under Diligent's row-vector convention.
+`QuatFromEuler`
+encodes this order once, so every call site (scripts, the inspector, serialization) gets it
+free and consistently.
+
+Serialization writes `rotation x y z w` (4 floats). Load detects token count for back-compat:
+3 tokens → parse as the old Euler triple and convert to a quaternion; 4 → parse as a
+quaternion directly. Old `.scene` files still load, unchanged.
+
+### Phase B: the physics abstraction layer, twin to the renderer's
+
+`core/physics.h`/`core/physics.cpp` mirror `core/renderer.h`/`core/renderer.cpp` almost
+exactly, on purpose: an opaque `BodyHandle` (same `enum class : uint32_t { Invalid = 0 }`
+shape as `MeshHandle`/`TextureHandle`), a data-encapsulated `PhysicsWorld`, and a hard rule
+that every
+`JPH::` type and Jolt header stays inside `physics.cpp`. `physics.h` speaks only `toon::`
+types and plain enums, the same "Diligent-free" contract `renderer.h` keeps for Diligent.
+`PhysicsWorld::Init` does Jolt's one-time boilerplate: `RegisterDefaultAllocator`, a
+`Factory`, `RegisterTypes`, a `TempAllocatorImpl`, a `JobSystemThreadPool`, the three
+required filter classes (`BroadPhaseLayerInterface`/`ObjectVsBroadPhaseLayerFilter`/
+`ObjectLayerPairFilter` — see "Build gotchas" above for the abstract-class trap one of
+these hit), and `PhysicsSystem::Init` with a default gravity.
+
+Read-back (`GetBodyTransform`) uses Jolt's `GetPositionAndRotation`, deliberately **not**
+`GetCenterOfMassPosition` — the latter returns the body's center of mass, which only
+coincides with its origin for a shape whose mass is symmetric about that origin (true for
+every M2.1 shape today, but the distinction matters the moment an off-center collider or a
+compound shape shows up, so the correct call was used from the start rather than relying on
+today's shapes hiding the bug).
+
+### Phase C: `ColliderComponent` and `RigidBodyComponent` are independent, from the start
+
+Locked in during the plan's own Q&A, before any code: a `ColliderComponent` (shape +
+extents) and a `RigidBodyComponent` (mass/friction/restitution/type) are two separate
+`std::optional` fields on `Entity`, matching the grain `LightComponent`/`ScriptComponent`
+already established, not one merged "Physics" component. Collider alone means an implicit
+static collider (a wall/floor with no authored body); collider **and** body means a
+dynamic/kinematic mover — the same split Unity's `Collider`/`Rigidbody` and Godot's
+`CollisionShape`/`RigidBody` both use, for the same reason: a level's static geometry
+vastly outnumbers its movers, and forcing every collider to carry unused mass/friction
+fields would misrepresent that. `RigidBodyComponent::handle` is transient runtime state
+(never serialized), rebuilt every time Play starts — see Phase D.
+
+### Phase D: Play builds the world, Stop tears it down, physics steps in the fixed tick
+
+`BuildPhysicsWorld(physicsWorld, scene)` (`main.cpp`) is pure derived state: `Clear()`s the
+world, then for each entity with a `ColliderComponent`, synthesizes an implicit static
+`RigidBodyComponent` if none was authored, and calls `CreateBody` seeded from the entity's
+current world pose. It runs once whenever Play (or Step-from-Editing) begins, right
+alongside the existing `sceneBackup = scene` / `CreateScripts(scene)` — reusing the exact
+Play/Stop disposable-sandbox convention M1.3's scripts already rely on. Stop's `scene =
+sceneBackup` is preceded by `physicsWorld.Clear()`, so a physics session leaves no residue
+behind, the same guarantee Stop already gave scripts.
+
+Inside the fixed `while (accumulator >= kFixedDt)` loop, after `UpdateScripts`: every
+static/kinematic body's entity transform is pushed into Jolt (`SetBodyTransform`), then
+`physicsWorld.Step(kFixedDt)` runs, then every dynamic body's Jolt pose is read back
+(`GetBodyTransform`) through `ComposeWorldMatrix` and `SetEntityWorldMatrix` into
+`entity.transform` — landing exactly where a script's write would, so the existing render
+interpolation (`alpha`, now slerping the quaternion) smooths physics motion for free, with
+no physics-specific interpolation code needed.
+
+This assumes every collider-bearing entity is root-parented — a real, documented
+simplification, not an oversight: a nested collider is seeded once at Play-start but never
+correctly re-synced against a moving parent afterward, since Jolt bodies simulate in world
+space and `BuildPhysicsWorld` doesn't fold a parent chain in. Fine for M2.1's flat demo
+scene; a real hierarchy fold is future work if a nested collider is ever needed.
+
+Non-uniform scale has no exact representation for every shape: a `Box`'s three half-extents
+bake a non-uniform scale in exactly, one axis at a time (`ScaledColliderExtents`,
+`main.cpp`), but `Sphere`/`Capsule` only have 1-2 degrees of freedom, so a non-uniform scale
+there is approximated by the largest relevant axis, with a one-time `stderr` warning naming
+the entity — chosen over silently picking an axis, so a misconfigured entity is at least
+discoverable. The demo scene (`Ground`, `PhysicsCube1/2`, `PhysicsSphere1`) drops a few
+dynamic primitives above a static-collider ground plane so pressing Play makes them fall and
+land/stack, the same "visible proof" role the spin demo played for M1.3's scripts.
+
+### Phase E: the inspector — a correction on component UI, not just physics
+
+First attempt merged Collider + RigidBody into one nested "Physics" inspector section with
+enable/disable **checkboxes** (RigidBody's checkbox only appearing once Collider's was
+checked; unchecking Collider cascaded to clear RigidBody too). The user corrected this
+directly and specifically: the plan already called for **separate** components with real
+**Add/Remove buttons**, not a nested enable/disable toggle. In their own words: "I should be
+actually able to add or remove any component fully from the properties." They also asked why
+the implementation had silently diverged from what the plan itself said. The plan's own text
+did say "Add/Remove buttons for each component"; the substitution to checkboxes was an
+unrequested simplification, not a plan ambiguity.
+
+Rebuilt as four fully independent `SeparatorText` sections in the Properties panel (Light,
+Collider, Rigid Body, Scripts), each showing either its fields plus a **Remove** button, or
+just an **Add** button, with zero nesting or cascade between any of them (confirmed via
+`AskUserQuestion` that Scripts should get the same treatment; Material was explicitly left
+as a plain always-present block for now, in the user's own words "when UI comes into the
+picture we might, but leave it as is for now", since every entity already has one and
+there's no add/remove semantic for it yet). The underlying `scene.h` data model had been
+correctly separate since Phase C; only the UI had merged them, which is exactly why this was
+a presentation-layer fix, not a data-model change.
+
+### Phase F: collider debug wireframes, and two bugs the verification pass caught
+
+`ColliderWireframe(shape, extents)` (`core/physics.cpp`, pure math, no Jolt dependency)
+returns a flat line-segment list: a box's 12 edges, a sphere's 3 orthogonal great circles,
+a capsule's 2 rings + 4 struts + 4 hemisphere-cap arcs. `Renderer::DrawWireframe` draws it
+through a small dedicated PSO: `PRIMITIVE_TOPOLOGY_LINE_LIST`, depth test **off** (an
+always-on-top debug overlay, deliberately chosen over depth-tested lines specifically to
+avoid the G-buffer MRT-compatibility risk a depth-tested variant would add), drawn directly
+onto the already-bound back buffer between `EndScene()` and `BeginUI()`, the same "back
+buffer only" PSO shape as the tonemap pass, reused rather than reinvented.
+
+Two real bugs surfaced only once this was actually built and screenshotted, not during
+implementation:
+
+1. `DrawWireframe`'s first draft called `ToFloat4x4` (a file-scope `static` helper) before
+   that helper's own definition later in `renderer.cpp` — `use of undeclared identifier`.
+   Moved the function to sit after `ToFloat4x4`'s definition.
+2. A clean build still errored **every frame** at runtime once colliders were actually
+   shown: `No resource is bound to variable 'Constants' in shader 'wireframe PS'`.
+   `wireframe.hlsl` declares one `Constants` cbuffer referenced by both `VSMain` and
+   `PSMain`, but Diligent compiles each shader stage separately, so each stage gets its own
+   copy of that variable needing its own bind; `CreateWireframePipeline` only bound the
+   vertex-shader copy. The fix is the exact pattern already used, and already correct,
+   everywhere else in `renderer.cpp` a `Constants` cbuffer spans both stages: the toon and
+   model PSOs each bind `Constants` for `SHADER_TYPE_VERTEX` *and* `SHADER_TYPE_PIXEL`
+   separately, and the wireframe PSO had only copied half of that pattern.
+
+A third issue was caught by inspection before it ever ran: the first draft fed
+`entity.worldMatrix` (the renderer's own, possibly-scaled, possibly-nested placement) and
+raw unscaled `collider.extents` straight into `ColliderWireframe`, following the plan's own
+shorthand wording literally. That would silently disagree with what Jolt actually simulates
+for any non-uniformly-scaled Sphere/Capsule (see Phase D's `ScaledColliderExtents` above): a
+physics-debug overlay that doesn't match physics defeats its own purpose. Fixed by having
+the overlay call the exact same `ScaledColliderExtents` helper and build a scale-free
+position/rotation matrix, mirroring `BuildPhysicsWorld` exactly rather than the renderer's
+placement of the entity. The two happen to produce identical results for today's
+root-parented, unit-scale demo scene, but only one of them is correct in general.
+`ScaledColliderExtents` gained a `logWarnings` flag (default on), so the per-frame overlay
+path, unlike the once-per-Play-start `BuildPhysicsWorld` call, doesn't spam `stderr` 60+
+times a second on a misconfigured entity.
+
+Verified non-interactively (no synthetic input reaches this environment; see the `verify`
+skill): clean build, then screenshots with a temporarily-forced-on `showColliders` cross-
+validated against the same flag forced off. On: the Settings panel's Physics section and its
+"Show Colliders" checkbox render and toggle correctly; the Ground's box wireframe traces the
+plane edge; `PhysicsCube1`'s box wireframe snugly bounds the cube (a second scale from
+Ground's own box, both correct); `PhysicsSphere1`'s three-great-circle wireframe matches the
+sphere exactly. Off: no wireframes anywhere, no regressions elsewhere in the scene.
+`PhysicsCube2` fell outside the static camera framing available without live input, and no
+demo entity uses `Capsule`, so those two shapes weren't re-confirmed visually post-fix (Box
+and Sphere were, at two different scales each); `Capsule`'s geometry was checked
+analytically during implementation instead.
+
+Deferred, named so they aren't forgotten: mouse-pick via raycast and contact events → scripts
+(both moved to CLAUDE.md's roadmap as immediate follow-ups — the `Raycast` abstraction-layer
+method already shipped, just isn't wired to anything yet); mesh/convex-hull colliders (Box/Sphere/
+Capsule only today); Jolt's `CharacterVirtual` character controller; triggers/sensors;
+continuous collision detection; a physics-settings panel (gravity/substeps); the inspector
+"Euler hint" polish (Phase A); non-uniform-scale collider approximation beyond baking; Jolt
+`SaveState`/`RestoreState` for a fast binary rollback snapshot; the cross-platform FP
+determinism audit.
+
+Docs sync folded into this same `tidy-md` pass: pruned the M2.1 roadmap entry out of
+CLAUDE.md (folding its shipped capabilities into Current State instead), added its two named
+follow-ups (mouse-pick raycast, contact events → scripts) to the M2 roadmap list, added
+`core/physics.{h,cpp}` to CLAUDE.md's and `docs/architecture.md`'s source layouts, and
+rewrote `docs/architecture.md`'s "Where new systems plug in" physics paragraph from
+speculative future tense into a descriptive account of what actually got built (plus a new
+"The physics abstraction layer" section, `Transform`'s vocabulary entry, the `Entity` struct's two new
+fields, the frame loop's physics step, and the Play/Stop section, all updated to match).
+README's Highlights gained a physics bullet.
+
 ## Verifying a Vulkan build
 
 ### Link fails: `permission denied` writing `ToonEngine.exe`
@@ -1491,13 +1732,14 @@ present) — the render is fine; just re-run the capture.
 current tree: a real little **editor** (scene graph, inspector + gizmos, model loader,
 input, camera, serialization, shadows, grid, sprites) on the weaker renderer. The new
 engine has the strong Vulkan renderer but was a hardcoded demo — so the roadmap's next arc
-is porting that engine/editor layer *above the seam* onto Diligent.
+is porting that engine/editor layer *above the abstraction layer* onto Diligent.
 
-**Seam note:** the old seam is the same "opaque handles behind a backend-agnostic header"
-idea, but **low-level** (`BindShader`/`SetUniform`/immediate binds/framebuffers) — it does
-NOT map onto Diligent's PSO/SRB model, so the old `renderer.cpp` is reference-only. The
-value is everything above the seam; our seam grows instead (textured materials, a UV/bone
-vertex, a framebuffer path for shadows).
+**Abstraction-layer note:** the old engine's abstraction layer is the same "opaque handles
+behind a backend-agnostic header" idea, but **low-level** (`BindShader`/`SetUniform`/
+immediate binds/framebuffers) — it does NOT map onto Diligent's PSO/SRB model, so the old
+`renderer.cpp` is reference-only. The value is everything built above that old abstraction
+layer; our own abstraction layer grows instead (textured materials, a UV/bone vertex, a
+framebuffer path for shadows).
 
 **Carry-over map** (per system):
 - **assets** — fonts (BaiJamjuree, OpenSans), 4 test models, icon: **copied** into
@@ -1513,7 +1755,7 @@ vertex, a framebuffer path for shadows).
   loader as the reference if FBX / skeleton parsing is ever wanted.
 - **ui/overlay** — inspector + `RenderSettings` (bands, spec, rim, shadow ramp, outline
   incl. a screen-space-width flag, CSM, grid, sky, gizmo) + **ImGuizmo** transform gizmos.
-  ImGui logic ports (our seam already exposes ImGui); ImGuizmo must be vendored.
+  ImGui logic ports (our abstraction layer already exposes ImGui); ImGuizmo must be vendored.
 - **scene/camera** — orbit/pan/zoom/fly/focus editor camera (replaces our turntable).
 - **core/input/** — keyboard/mouse/gamepad + action maps + rebinding + an ImGui capture
   gate; GLFW-based, largely direct.
@@ -1525,7 +1767,7 @@ vertex, a framebuffer path for shadows).
 
 **Materials will need textures:** the old `Material` is `baseColor + texture + normalMap`,
 and loaded models (helmet.glb) carry albedo/normal maps — so Phase A adds texture handles
-to the seam + a textured cel fill, and the toon `Vertex` gains UVs (bone weights later).
+to the abstraction layer + a textured cel fill, and the toon `Vertex` gains UVs (bone weights later).
 
 ### Diligent overlap check (roadmap fold-in, 2026-07-11)
 
@@ -1543,7 +1785,7 @@ DiligentSamples is **not** a submodule here) plus Diligent's own docs/blog.
   uses GLFW for windowing + input, same as us. So `core/input.{h,cpp}` and
   `core/camera.{h,cpp}` staying hand-rolled isn't a guiding-principle violation — there's
   no in-scope Diligent equivalent to defer to, so the ToonEngineOld port is genuinely new
-  engine-layer code, same as the seam philosophy already treats scene.cpp/camera.cpp.
+  engine-layer code, same as the abstraction layer's philosophy already treats scene.cpp/camera.cpp.
 - **Shader hot-reload — Diligent already has this; don't hand-roll a file-watcher.** The
   interface is `Diligent::IRenderStateCache`, declared in
   `DiligentCore/Graphics/GraphicsTools/interface/RenderStateCache.h`. Create it with
@@ -1562,7 +1804,7 @@ DiligentSamples is **not** a submodule here) plus Diligent's own docs/blog.
   `GetElapsedTime[f]`), not a fixed-timestep/accumulator solution — swapping `main.cpp`'s
   `glfwGetTime()` for it would change nothing functionally. The accumulator + decoupled
   sim-rate pattern is pure game-loop architecture, orthogonal to the graphics API either way.
-- **Asset thumbnails — reuse the texture path already on the seam.** No new image
+- **Asset thumbnails — reuse the texture path already on the abstraction layer.** No new image
   library needed: `Diligent-TextureLoader`'s `CreateTextureFromFile` (already linked, used
   today for model textures) is the right entry point for generating/caching browser
   thumbnails, per `ToonEngineOld/src/ui/thumbnail_cache.{h,cpp}` — a real implemented file
@@ -1587,7 +1829,7 @@ folder can be deleted once those land without losing anything:
   `ToonEngineOld`'s `shadow.vert`/`shadow.frag` and the `ComputeCascades`/`RenderShadowPass`
   C++ in its `main.cpp` are no longer a required port source — kept only as a historical
   note on the log-linear split scheme and PCF approach they used (4 cascades × 2048² either
-  way). See "Renderer seam" / the rendering pipeline in `docs/architecture.md` for how the
+  way). See "The renderer abstraction layer" / the rendering pipeline in `docs/architecture.md` for how the
   shipped version actually works.
 - **Grid pass.** `grid.frag` reconstructs a world-space ray from the inverse view-proj,
   intersects it with the Y=0 plane, and draws two line scales (minor + major every 5th
@@ -1622,12 +1864,12 @@ folder can be deleted once those land without losing anything:
 
 ## Architecture decisions
 
-### Renderer seam: PIMPL, not a virtual `IRenderer`
+### Renderer abstraction layer: data encapsulation, not a virtual `IRenderer`
 
 `core/renderer.h` exposes opaque id-based handles (`enum class : uint32_t`,
-`0 = Invalid`) plus a PIMPL `Renderer` class — not an abstract interface with
+`0 = Invalid`) plus a data-encapsulated `Renderer` class — not an abstract interface with
 virtual methods. Reasoning: Diligent already provides runtime backend
-selection (Vk/D3D12/GL/Metal) *beneath* the seam, so a second layer of runtime
+selection (Vk/D3D12/GL/Metal) *beneath* the abstraction layer, so a second layer of runtime
 polymorphism in ToonEngine buys nothing. A backend swap or console port is a
 build-time concern — swap in a different `renderer_*.cpp` — with zero virtual
 overhead. `src/core/renderer.cpp` is the *only* translation unit allowed to
@@ -1646,14 +1888,14 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   branch history) to Diligent Engine + Vulkan on the `diligent` branch.
   Verified first light: window + Vulkan device + swap chain + clear loop,
   running on an NVIDIA RTX 3080.
-- **2026-07-08** — Added the renderer seam (`core/renderer.h/.cpp`); `main.cpp`
-  became Diligent-free. Added DiligentTools + Dear ImGui behind the seam;
+- **2026-07-08** — Added the renderer's abstraction layer (`core/renderer.h/.cpp`); `main.cpp`
+  became Diligent-free. Added DiligentTools + Dear ImGui behind it;
   fixed the C-language, ShowDemoWindow-link, and ImGui-ordering issues above;
   disabled D3D11/D3D12/OpenGL to cut build time.
 - **2026-07-08** — Toon pipeline first light: banded (cel) fill +
   inverted-hull outline on a spinning UV sphere, with live ImGui controls.
   Added `core/math.h` (Diligent-free vectors), `core/primitives.{h,cpp}`
-  (UV-sphere generator), and `assets/shaders/` (HLSL). Extended the seam with
+  (UV-sphere generator), and `assets/shaders/` (HLSL). Extended the abstraction layer with
   `CreateMesh` / `SetCamera` / `SetToonParams` / `DrawMesh`. Verified the render
   via `PrintWindow` capture on the RTX 3080 (see *Toon pipeline* above for the
   matrix/winding/outline conventions nailed down here).
@@ -1759,20 +2001,21 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
 - **2026-07-10** — **Roadmap redesign + ToonEngineOld carry-over.** With the renderer core
   done, pivoted the roadmap from "more rendering" to the **engine/editor layer** (phases:
   real assets → scene graph → editor UI → environment → animation/2D; instancing deferred),
-  porting `ToonEngineOld`'s systems onto the Vulkan seam. Surveyed the old engine (untracked
+  porting `ToonEngineOld`'s systems onto the Vulkan abstraction layer. Surveyed the old engine (untracked
   reference folder) and copied its portable assets (fonts, 4 test models, icon) into
   `assets/` — models via **Git LFS** (`.gitattributes` tracks `assets/models/**`). Model
   loading will use **DiligentTools' glTF loader** (glTF/GLB only; the old cgltf/ufbx loader
   is the FBX reference). Next up: Phase A — textured materials + load/cel-shade a real
   model. See "ToonEngineOld — carry-over reference" above. Also **codified the
   build-on-Diligent principle** in CLAUDE.md (use Diligent's own implementations — loaders,
-  FX, ImGui; the seam only tames boilerplate + keeps the app/public API backend-agnostic,
-  never 1:1 abstraction) and generalized the seam rule: Diligent lives in the engine's
+  FX, ImGui; the abstraction layer only tames boilerplate + keeps the app/public API
+  backend-agnostic, never 1:1 abstraction) and generalized the abstraction-layer rule:
+  Diligent lives in the engine's
   implementation TUs, not just `renderer.cpp` — only the app layer + public headers stay
   Diligent-free.
 - **2026-07-10** — **glTF model loading** (Phase A / "real assets"): load + cel-shade real
   models via DiligentTools' `GLTF::Model` (Diligent-first — no hand-rolled loader, no PBR
-  renderer). New seam `ModelHandle` / `LoadModel` / `DrawModel`; `model_fill.hlsl` reuses the
+  renderer). New abstraction-layer `ModelHandle` / `LoadModel` / `DrawModel`; `model_fill.hlsl` reuses the
   toon CB + `CelShade` helper; `helmet.glb` renders textured + cel-shaded in the HDR/post
   pipeline. Linked `Diligent-AssetLoader` + `Diligent-TextureLoader`; baked `TOON_MODELS_DIR`.
   Four loader gotchas cost cycles (VertBufferBindFlags = BIND_NONE default; textures are
@@ -1786,7 +2029,7 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
 - **2026-07-10** — **Scene graph** (Phase B): `core/scene.{h,cpp}` — an entity tree with
   hierarchy-composed world matrices; the render loop walks the scene instead of a hardcoded
   array. Design call: `scene.cpp` is a Diligent-using TU (composition via `float4x4`, no
-  reinvented 4x4 math) and `math.h` gained a plain `Mat4` (seam vocabulary) with new `Mat4`
+  reinvented 4x4 math) and `math.h` gained a plain `Mat4` (abstraction-layer vocabulary) with new `Mat4`
   `DrawMesh`/`DrawModel` overloads; the `Transform` overloads delegate. Motion vectors now
   come from the scene's double-buffered world matrices (no prev-angle bookkeeping). Demo: a
   satellite parented to the cube orbits it. Editor-triggered mutations (reparent / duplicate
@@ -1805,8 +2048,8 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   local/world (edge-triggered `ImGui::IsKeyPressed`, gated on not-typing / not-flying), and
   **snap** (checkbox or held Ctrl) feeds ImGuizmo's per-op `snap` param with editable
   translate/rotate/scale step sizes. Resolved the "WASD is taken by the camera fly" deferral
-  by noticing the fly only runs while right-mouse is held. `main.cpp`-only (no seam/renderer/
-  shader/input-layer change). See "Gizmo snap + hotkeys" above.
+  by noticing the fly only runs while right-mouse is held. `main.cpp`-only (no
+  abstraction-layer/renderer/shader/input-layer change). See "Gizmo snap + hotkeys" above.
 - **2026-07-11** — **Dogfooding bugfixes** found immediately after shipping the above (all
   pre-existing, from the original gizmo commit, not the snap/hotkey change itself). Also
   discovered and documented — the hard way — that this dev environment has **no live input
@@ -1886,7 +2129,7 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
     **Real fix, not another reset/mask**: added `g_PrevNormalMatrix` to the shared cbuffer
     (grew 320→384 B) — the inverse-transpose of the *previous* frame's world matrix,
     computed in `DrawMesh`/`DrawModel` from the `prevWorld`/`objPrevWorld` matrices those
-    functions already receive (no seam signature change needed — the data was already
+    functions already receive (no abstraction-layer signature change needed — the data was already
     threaded through, just not used for this). Both outline vertex shaders now redo the
     extrude for `PrevClip` using `g_PrevNormalMatrix` instead of reusing `inflated`, so a
     rotating shell's motion vector is now computed the same principled way as its position —
@@ -2123,9 +2366,10 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   round (no live input desktop here — see the `verify` skill).
 - **2026-07-13** — **Asset browser panel shipped (roadmap A.1 — the last engine/editor-layer
   carry-over item).** Full writeup under "Asset browser" above. Headline points: added a
-  texture API to the seam (`LoadTexture`/`DestroyTexture`/`GetTextureImGuiID`/
-  `GetTextureSize`) since the current PIMPL `Renderer` had none, unlike the free-function seam
-  the old `ui/file_browser`/`thumbnail_cache` reference was written against; caught two bugs
+  texture API to the abstraction layer (`LoadTexture`/`DestroyTexture`/`GetTextureImGuiID`/
+  `GetTextureSize`) since the current data-encapsulated `Renderer` had none, unlike the
+  free-function abstraction layer the old `ui/file_browser`/`thumbnail_cache` reference was
+  written against; caught two bugs
   the GL reference would have carried over silently (`IsSRGB` must be `false` or thumbnails
   render dark, and the reference's GL-bottom-origin UV flip must be dropped for Vulkan's
   top-origin decode) by comparing a captured thumbnail against its source file, not by
@@ -2149,7 +2393,7 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   M3 characters/fidelity — the ToonEngineOld ports; M4 scale/polish), also fixing a garbled
   line from a prior edit. Trimmed CLAUDE.md's "Current state" prose to stay under its
   200-line cap now that the deep version lives in the new `docs/architecture.md` — an
-  11-section onboarding doc (seam, source layout, frame loop, rendering pipeline, scene
+  11-section onboarding doc (abstraction layer, source layout, frame loop, rendering pipeline, scene
   model, editor layer, data flow/ownership, build/dependencies) built from a fresh full-repo
   architecture pass. Repointed README's "full architecture writeup" line at the new doc, and
   extended the `tidy-md` skill to actively maintain `architecture.md` (it was going to fall
@@ -2170,7 +2414,7 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   alternative, clamping straight to the ambient floor color regardless of band, is a one-line
   follow-up if the multiply-in look doesn't read well once tuned).
 
-  **Seam additions** (`renderer.h`): `BeginShadowPass()` (returns the cascade count to loop
+  **Abstraction-layer additions** (`renderer.h`): `BeginShadowPass()` (returns the cascade count to loop
   over, 0 when `PostParams::shadows` is off), `BeginShadowCascade(i)`, `DrawMeshShadow`/
   `DrawModelShadow` (position-only, no material — the shadow map carries no color or motion
   history of its own), `EndShadowPass()` (a no-op today; the one hook a future VSM/EVSM
@@ -2412,3 +2656,20 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   exactly, plus a temporarily-instrumented copy-ctor/save-load test). CLAUDE.md's roadmap
   pruning, its source-layout update, and `docs/architecture.md`'s corresponding update are
   deliberately left for a follow-up `tidy-md` pass, not done in this session.
+- **2026-07-16** — **Physics + collision shipped** (M2.1). A quaternion `Transform.rotation`
+  (replacing Euler, Phase A); a `core/physics.h`/`.cpp` abstraction layer twin to the
+  renderer's, wrapping **Jolt Physics** behind an opaque `BodyHandle` + data-encapsulated
+  `PhysicsWorld` (Phase B); independent
+  `ColliderComponent`/`RigidBodyComponent` entity fields, Box/Sphere/Capsule ×
+  Static/Dynamic/Kinematic (Phase C); Play-time world construction and fixed-tick
+  stepping/read-back, with a falling-primitives demo scene (Phase D); an Inspector "Physics"
+  UI, reworked mid-phase after a direct correction into fully independent Light/Collider/
+  Rigid Body/Scripts sections with real Add/Remove buttons, not the merged checkbox design
+  first attempted (Phase E); and a collider debug wireframe overlay, which caught two real
+  runtime bugs (an unbound pixel-shader constant, a forward-reference build error) plus one
+  overlay-vs-physics accuracy bug during verification, all fixed before shipping (Phase F).
+  See "Physics + collision (roadmap M2.1)" above for the full design, the Phase E correction
+  in the user's own words, and every bug's root cause; see "Build gotchas" above for the
+  three Jolt-specific CMake/compile gotchas hit along the way. Docs sync (this section, the
+  History entry, CLAUDE.md, `docs/architecture.md`, README.md) folded into the same `tidy-md`
+  pass rather than deferred, unlike M1.3's.

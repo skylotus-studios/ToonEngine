@@ -1,8 +1,9 @@
 # ToonEngine Architecture
 
-This document describes how ToonEngine's pieces fit together: the renderer seam, the frame
-loop, the rendering pipeline, the scene model, and how data flows between them. It's the deep
-reference for onboarding onto the codebase. For the project's guiding principles, conventions,
+This document describes how ToonEngine's pieces fit together: the renderer's abstraction
+layer, the frame loop, the rendering pipeline, the scene model, and how data flows between
+them. It's the deep reference for onboarding onto the codebase. For the project's guiding
+principles, conventions,
 and roadmap, see [CLAUDE.md](../CLAUDE.md); for the history and reasoning behind individual
 decisions (and a long list of hard-won build/API gotchas), see [MEMORY.md](../MEMORY.md).
 
@@ -10,12 +11,15 @@ The app today is an editor: it opens a window, builds a small demo scene, and re
 through a full toon rendering pipeline — cel-shaded fill with inverted-hull outlines, cascaded
 shadow maps, an HDR G-buffer, and a DiligentFX post-processing chain — with a docked Dear ImGui
 UI for inspecting and editing the scene. The defining architectural decision, covered first
-below, is the renderer seam: every Diligent type and header is quarantined inside one
-translation unit, so the rest of the engine — the scene graph, the editor camera, the input
-system, the serializer, the UI panels, and gameplay systems (native scripts today, physics and
-audio next) — never touches Diligent directly and stays backend-agnostic by construction.
+below, is the renderer's abstraction layer: every Diligent type and header is quarantined
+inside one translation unit, so the rest of the engine — the scene graph, the editor camera,
+the input system, the serializer, the UI panels, and gameplay systems (native scripts,
+physics, audio next) — never touches Diligent directly and stays backend-agnostic by
+construction. Physics (M2.1) added a second, twin abstraction layer the same way: every Jolt
+Physics type is quarantined inside `core/physics.cpp` (see "The physics abstraction layer"
+below).
 
-## The renderer seam
+## The renderer abstraction layer
 
 `core/renderer.h` is the one header the rest of the engine includes for GPU work. Its file
 banner states the contract directly: no Diligent type, and no Diligent header, escapes it. It
@@ -52,14 +56,18 @@ speaks in:
   plus editor-control tuning the renderer itself never reads (`lookSensitivity`,
   `panSensitivity`, `zoomSpeed`, `moveSpeed` — consumed only by `core/camera.h`). The renderer
   builds the actual view/projection matrices from these fields; keeping NDC and handedness
-  conventions on the Diligent side of the seam means the app never has to know them.
+  conventions on the Diligent side of the abstraction layer means the app never has to know
+  them.
 - **`Material`** — the per-object toon look passed to `DrawMesh`/`DrawModel`: `baseColor`,
   `outlineColor`, `outlineWidth`, `bands` (shading band count), `ambient` (shadow-side floor),
   `roughness` (gates screen-space reflections).
-- **`Transform`** — `position`, `rotationEuler` (radians, applied X then Y then Z), `scale`
-  (may be non-uniform — `DrawMesh` derives an inverse-transpose normal matrix so shading, the
-  normal G-buffer, and the outline width all stay correct under any scale).
-- **`PostParams`** — the full live post-processing control block the Debug panel edits:
+- **`Transform`** — `position`, `rotation` (a `Quat`, replacing the old Euler-angle field so
+  physics write-back and render interpolation need no lossy decompose/recompose each tick,
+  and interpolation can slerp instead of a per-axis lerp; the inspector still edits Euler
+  degrees, converted at the widget boundary), `scale` (may be non-uniform — `DrawMesh`
+  derives an inverse-transpose normal matrix so shading, the normal G-buffer, and the outline
+  width all stay correct under any scale).
+- **`PostParams`** — the full live post-processing control block the Settings panel edits:
   exposure/tone-map, Bloom, SSAO, depth of field, TAA, SSR, and a `shadows` toggle (default
   `true`), each with its own parameters. It also carries `suppressTemporalHistory`, an
   app-computed flag (not a UI toggle) set whenever a gizmo drag, an edited ImGui widget, or
@@ -68,8 +76,9 @@ speaks in:
 
 ### The `Renderer` class
 
-`Renderer` is a non-copyable PIMPL: every public method has a plain, Diligent-free signature,
-and `struct Impl` is only forward-declared in the header. Its real definition, and every
+`Renderer` is a non-copyable, data-encapsulated class: every public method has a plain,
+Diligent-free signature, and `struct Impl` is only forward-declared in the header. Its real
+definition, and every
 Diligent type it holds, lives in `renderer.cpp`.
 
 ```cpp
@@ -106,6 +115,8 @@ public:
     void SetPostParams(const PostParams&);
     void EndScene();
 
+    void DrawWireframe(const Mat4& world, const Vec3* points, uint32_t count, const Color&);
+
     bool InitUI(GLFWwindow* window);
     void ShutdownUI();
     void BeginUI();
@@ -130,15 +141,18 @@ toon draw path (`CreateMesh`, `SetCamera`, `SetLight`, `DrawMesh` — two overlo
 transforms); the cascaded-shadow pre-pass (`BeginShadowPass` through `EndShadowPass`); glTF
 models (`LoadModel`, `DrawModel` — mirroring `DrawMesh`'s two-overload shape); editor-only
 textures (`LoadTexture` etc., for the asset browser — not part of the toon draw path, since
-materials don't carry textures yet); post-processing (`SetPostParams`, `EndScene`); and the
-Dear ImGui glue (`InitUI` through `EndUI`). "The rendering pipeline" below walks through what
-each group actually does on the GPU.
+materials don't carry textures yet); post-processing (`SetPostParams`, `EndScene`); the
+collider debug overlay (`DrawWireframe`, M2.1 — see "The physics abstraction layer" below and
+"The rendering pipeline"'s "Collider debug wireframe"); and the Dear ImGui glue (`InitUI` through
+`EndUI`). "The rendering pipeline" below walks through what each group actually does on the
+GPU.
 
-### Why PIMPL, not a virtual `IRenderer`
+### Why data encapsulation, not a virtual `IRenderer`
 
 MEMORY.md's "Architecture decisions" section records the reasoning: Diligent already provides
-runtime backend selection (Vulkan/D3D12/GL/Metal) beneath the seam, so a second layer of
-runtime polymorphism in ToonEngine would buy nothing. A backend swap or console port is a
+runtime backend selection (Vulkan/D3D12/GL/Metal) beneath the abstraction layer, so a second
+layer of runtime polymorphism in ToonEngine would buy nothing. A backend swap or console port
+is a
 build-time concern — write another `renderer_*.cpp` and point the build at it — not a rewrite,
 and not a virtual-dispatch cost on the hot path.
 
@@ -149,6 +163,72 @@ Dear ImGui is a plain UI library, not a Diligent type, so engine and game code m
 `EndUI()`. Only ImGui's Diligent render backend (`ImGuiImplDiligent`) is confined to
 `renderer.cpp`.
 
+## The physics abstraction layer
+
+`core/physics.h` mirrors the renderer's abstraction layer almost exactly, for the same
+reason: every Jolt Physics type and header is quarantined inside `core/physics.cpp`, so the
+rest of the engine
+never depends on the physics library directly. `physics.h` includes only `core/math.h` and
+speaks purely in `toon::` types — no `JPH::` type escapes it.
+
+```cpp
+enum class BodyHandle : uint32_t { Invalid = 0 };
+enum class ColliderShape { Box, Sphere, Capsule };
+enum class BodyType { Static, Dynamic, Kinematic };
+
+struct BodyDesc {
+    ColliderShape shape;
+    Vec3 extents;   // half-extents (Box); {radius,0,0} (Sphere); {halfHeight,radius,0} (Capsule)
+    BodyType type;
+    float mass, friction, restitution;
+    Vec3 position;
+    Quat rotation;
+};
+
+struct RaycastHit { BodyHandle body; Vec3 point; Vec3 normal; float distance; };
+```
+
+`PhysicsWorld` is data-encapsulated, the same shape as `Renderer` and for the same reason
+(see "Why data encapsulation, not a virtual `IRenderer`" above — Jolt already *is* the one
+physics implementation this engine uses, so a second layer of runtime polymorphism over it
+would buy nothing):
+
+```cpp
+class PhysicsWorld {
+public:
+    bool Init();
+    void Shutdown();
+    void Clear();                                                // remove all bodies, keep the world alive
+    BodyHandle CreateBody(const BodyDesc&);
+    void DestroyBody(BodyHandle);
+    void SetBodyTransform(BodyHandle, const Vec3&, const Quat&);  // teleport / kinematic push
+    void GetBodyTransform(BodyHandle, Vec3&, Quat&) const;        // read back after Step
+    void Step(float dt);
+    void SetGravity(const Vec3&);
+    bool Raycast(const Vec3& origin, const Vec3& dir, RaycastHit&) const;  // shipped, not wired to selection yet
+
+private:
+    struct Impl;
+    Impl* m_impl = nullptr;
+};
+
+std::vector<Vec3> ColliderWireframe(ColliderShape, const Vec3& extents);  // pure math, no Jolt
+```
+
+`Init` does Jolt's required one-time setup: a default allocator, a `Factory`,
+`RegisterTypes`, a temp allocator, a job-system thread pool, and the three filter classes
+Jolt's own `PhysicsSystem::Init` requires (`BroadPhaseLayerInterface`,
+`ObjectVsBroadPhaseLayerFilter`, `ObjectLayerPairFilter`). See MEMORY.md's "Build gotchas"
+for the CMake and compile gotchas hit getting this to build at all. `GetBodyTransform` reads
+back through Jolt's `GetPositionAndRotation`, deliberately not `GetCenterOfMassPosition`
+(which returns the body's center of mass, not its origin, and the two only coincide for a
+shape whose mass is symmetric about that origin).
+
+`ColliderWireframe` is the one function here with no Jolt dependency at all: given a shape
+and its extents, it returns a flat list of line-segment endpoints (a box's 12 edges, a
+sphere's 3 orthogonal great circles, a capsule's 2 rings + 4 struts + 4 hemisphere-cap arcs)
+for the debug overlay described in "The rendering pipeline" below.
+
 ## Source layout
 
 ```
@@ -156,13 +236,14 @@ src/
   main.cpp                     Entry point: window + game loop; builds the scene, drives Renderer. No Diligent includes.
   icon.rc.in                   CMake-configured Win32 resource script; embeds GLFW_ICON for the taskbar/Alt-Tab icon.
   core/
-    renderer.h                 The seam: opaque handles + scene types (Vertex/Camera/Material/Transform/PostParams) + PIMPL Renderer.
-    renderer.cpp                Diligent (Vulkan) backend behind the seam: PSOs, MRT targets, cascaded shadow maps, DiligentFX post chain, ImGui glue.
-    math.h                      Dependency-free Vec2/Vec3/Vec4 + a data-only row-major Mat4 — the seam's public-API vocabulary.
+    renderer.h                 The abstraction layer: opaque handles + scene types (Vertex/Camera/Material/Transform/PostParams) + data-encapsulated Renderer.
+    renderer.cpp                Diligent (Vulkan) backend behind the abstraction layer: PSOs, MRT targets, cascaded shadow maps, DiligentFX post chain, ImGui glue.
+    math.h                      Dependency-free Vec2/Vec3/Vec4 + a data-only row-major Mat4 — the abstraction layer's public-API vocabulary.
     scene.{h,cpp}                Entity-tree scene graph: hierarchy, world-transform composition, editor mutations.
     script.{h,cpp}               Native gameplay scripts: per-entity Update hooks + name->factory registry (M1.3).
     scripts/
       spin_script.{h,cpp}         First concrete Script: replaces main.cpp's old hardcoded spin block.
+    physics.{h,cpp}              The physics abstraction layer: opaque BodyHandle + data-encapsulated PhysicsWorld (Jolt Physics), ColliderWireframe (M2.1).
     camera.{h,cpp}               Editor camera: orbit/pan/zoom/fly/focus, derived from the same Diligent matrices SetCamera uses.
     primitives.{h,cpp}          Procedural CPU mesh generators (sphere/cube/torus/plane) + PrimitiveDesc provenance for serialization.
     serializer.{h,cpp}          Scene save/load — entity/camera state to a text .scene file.
@@ -205,12 +286,14 @@ paths; today they're dev-convenience absolute paths into the source tree.
 | `shadow_depth.hlsl` | Depth-only pass for procedural meshes into a shadow cascade. |
 | `model_shadow_depth.hlsl` | Depth-only pass for glTF models into a shadow cascade. |
 | `tonemap.hlsl` | Full-screen HDR resolve: AO/SSR composite, exposure, ACES tone map, optional sRGB encode. No vertex buffer — the triangle is generated from `SV_VertexID`. |
+| `wireframe.hlsl` | Collider debug overlay (M2.1): flat-color line-list draw for `DrawWireframe`, no lighting/shadow/G-buffer output. |
 
 ## The frame loop
 
 `main.cpp` includes `core/renderer.h`, the engine headers, plain `<GLFW/glfw3.h>`
 (`GLFW_INCLUDE_NONE` is set engine-wide), and `imgui.h`/`imgui_internal.h`/`ImGuizmo.h` — no
-Diligent header, matching the seam's contract. ImGui and ImGuizmo are seam-exempt (see above).
+Diligent header, matching the abstraction layer's contract. ImGui and ImGuizmo are exempt
+from it (see above).
 
 ### Startup
 
@@ -219,10 +302,14 @@ Roughly: create the GLFW window with the `GLFW_NO_API` hint (Vulkan owns the sur
 the app's own callbacks instead of overwriting them); register default editor input bindings
 and load/create `assets/input.json`; `InitUI` (enables ImGui docking, loads the Bai Jamjuree
 font, applies one of three built-in themes); wire the framebuffer-resize callback to
-`Renderer::Resize`; build the demo scene graph (ground, sphere, cube, satellite orbiting the
-cube, torus, a loaded glTF helmet, a light entity — the sphere/cube/torus/helmet each get a
-`SpinScript` attached, see "The scene model" -> "Scripts" below); construct the editor
-`Camera`, the shared `Material style`, `PostParams post`, and the `FileBrowser`.
+`Renderer::Resize`; `physicsWorld.Init()` (Jolt's `Factory`/`RegisterTypes` are process-global
+one-time setup, see "The physics abstraction layer" above); build the demo scene graph (ground with a
+static box collider, sphere, cube, satellite orbiting the cube, torus, a loaded glTF helmet, a
+light entity, and a few dynamic Box/Sphere colliders dropped above the ground — the
+sphere/cube/torus/helmet each get a `SpinScript` attached, see "The scene model" -> "Scripts"
+below; the dynamic primitives get a `ColliderComponent` + `RigidBodyComponent` instead, see
+"The scene model" -> "Physics components" below); construct the editor `Camera`, the shared
+`Material style`, `PostParams post`, and the `FileBrowser`.
 
 ### Per frame
 
@@ -241,6 +328,11 @@ if (mode == Playing || stepRequested):
     while (accumulator >= kFixedDt):
         SnapshotSimState(scene)          // prevSimTransform = transform, for every transformed entity
         if (runScripts) UpdateScripts(scene, kFixedDt)   // every entity's attached scripts' OnUpdate (core/script.h)
+        // Physics (M2.1, "The physics abstraction layer" above): static/kinematic bodies follow their
+        // entity transform; Step advances the simulation; dynamic bodies are read back.
+        for entity with a static/kinematic RigidBodyComponent: physicsWorld.SetBodyTransform(handle, transform)
+        physicsWorld.Step(kFixedDt)
+        for entity with a dynamic RigidBodyComponent: transform = physicsWorld.GetBodyTransform(handle)
         accumulator -= kFixedDt
 
 // Outside Playing, alpha is pinned to 1.0: the accumulator isn't draining, so any leftover
@@ -287,13 +379,15 @@ ImGuizmo::BeginFrame()
   dockspace,
   Playback panel (Play/Pause toggle, Step, Stop, a Mode status label -- see "The editor
     layer" -> "Play / Pause / Step" below),
-  Scene Hierarchy panel (select / add-child / duplicate / delete / drag-drop reparent
+  Objects panel (select / add-child / duplicate / delete / drag-drop reparent
     -- records structural ops mid-iteration, applies them AFTER the loop, since a
     mutation reorders the entity vector and invalidates in-flight indices),
-  Inspector panel (name / transform / material or light / ImGuizmo Manipulate),
-  Debug panel (theme, scene save/load, band count, style, every PostParams toggle),
+  Properties panel (name / transform / material, always present; light, collider, rigid
+    body, and scripts each independently added/removed / ImGuizmo Manipulate),
+  Settings panel (band count, style, camera tuning, Show Colliders, every PostParams
+    toggle -- theme is a View-menu command now, not a Settings-panel control),
   assetBrowser.Render(renderer) -> a double-clicked .scene routes through the same
-    load path as the Debug panel's Load button
+    load path as the File menu's "Open Scene..." command
 renderer.EndUI()                 // ImGui renders onto the still-bound back buffer
 
 renderer.EndFrame()               // Present
@@ -449,6 +543,18 @@ color = toneMap ? ACESFilm(hdr) : saturate(hdr)
 `EndScene` leaves the back buffer bound afterward so the ImGui overlay draws directly on top,
 and copies the current depth into `prevSceneDepth` for next frame's reprojection history.
 
+### Collider debug wireframe (M2.1)
+
+`DrawWireframe` (see "The physics abstraction layer" above for `ColliderWireframe`, the
+geometry it draws) uses its own small PSO: `PRIMITIVE_TOPOLOGY_LINE_LIST`, depth test
+**off**, back-buffer-only render target — the same "back buffer only" shape as the tonemap
+PSO above, reused rather than reinvented. Depth test is off deliberately: an always-on-top overlay avoids adding a
+depth-tested variant's G-buffer MRT-compatibility risk, and a debug aid benefiting from never
+being occluded is a reasonable trade. `main.cpp`'s "Show Colliders" toggle (Settings panel)
+calls it once per collider-bearing entity, directly after `EndScene()` and before `BeginUI()`
+— it draws straight onto the already-bound back buffer from the tone-map resolve above, so no
+extra render-target binding is needed in `DrawWireframe` itself.
+
 ### ImGui glue
 
 `InitUI` constructs `ImGuiImplDiligent` (which creates the ImGui context) **before**
@@ -478,6 +584,8 @@ struct Entity {
     std::string   modelPath;    // provenance for serialization: reload a glTF model on load
     std::optional<LightComponent> light;                // set -> this entity is a directional light
     std::vector<ScriptComponent> scripts;               // attached native scripts, see "Scripts" below
+    std::optional<ColliderComponent> collider;          // set -> this entity has a collision shape
+    std::optional<RigidBodyComponent> body;             // set -> physics owns this entity's transform each tick
 };
 
 struct Scene {
@@ -565,10 +673,32 @@ caller's side.
 A script serializes as one `.scene` line, `script <Name> <field...>`, resolved through the
 registry on load — the same shape `primitive <kind> <field...>` already uses.
 
+### Physics components (M2.1)
+
+`ColliderComponent` (shape + extents) and `RigidBodyComponent` (mass/friction/restitution/
+type + a transient, never-serialized `BodyHandle`) are independent `std::optional` fields,
+matching the grain `LightComponent`/`ScriptComponent` already established — not one merged
+component. A collider alone is an implicit static collider (a wall/floor with no authored
+body); collider **and** body is a dynamic/kinematic mover, the same split Unity's
+`Collider`/`Rigidbody` and Godot's `CollisionShape`/`RigidBody` both use. See "The physics
+abstraction layer" above for `BodyHandle`/`BodyDesc`/`PhysicsWorld` themselves.
+
+`BuildPhysicsWorld(physicsWorld, scene)` (`main.cpp`) is pure derived state, rebuilt from
+scratch every time Play (or Step-from-Editing) begins: `Clear()`s the world, then for each
+entity with a `ColliderComponent`, synthesizes an implicit static `RigidBodyComponent` if
+none was authored, and calls `CreateBody` seeded from the entity's current world pose. This
+assumes every collider-bearing entity is root-parented — a collider on a nested entity is
+seeded once at Play-start but never re-synced against a moving parent afterward, since Jolt
+bodies simulate in world space and this step doesn't fold a parent chain in. Non-uniform
+scale has no exact representation for every shape: `Box`'s three half-extents bake a
+non-uniform scale in exactly, one axis at a time, but `Sphere`/`Capsule` (1-2 degrees of
+freedom) approximate it with the largest relevant axis and log a one-time warning naming the
+entity.
+
 ## The editor layer
 
-Everything in this section is Diligent-free; it only ever reaches the GPU across the seam,
-through a `Renderer&`.
+Everything in this section is Diligent-free; it only ever reaches the GPU across the
+abstraction layer, through a `Renderer&`.
 
 ### Editor camera
 
@@ -594,7 +724,7 @@ procedural mesh on load instead of needing a source file.
 entity's mesh is rebuilt via `renderer.CreateMesh(MakePrimitiveMesh(desc))`; a model entity's is
 reloaded via `renderer.LoadModel(modelPath)`; a script reconstructs via `CreateScript(name)`
 (see "The scene model" -> "Scripts" above) — the serializer's only contact with the GPU is the
-mesh/model path, always across the seam. Loading resets `scene.selected` to `-1`.
+mesh/model path, always across the abstraction layer. Loading resets `scene.selected` to `-1`.
 
 ### The input system
 
@@ -642,14 +772,16 @@ Pressing Play snapshots `scene` into a `sceneBackup` (a `Scene` copy: a `vector<
 an `int`; mesh/model copy as plain handles, never touching the `Renderer` — see "The scene
 model" -> "Scripts" above for why this copy is an explicit `Entity` constructor rather than a
 free memberwise one now that entities can carry scripts) and switches to Playing, also firing
-each script's `OnCreate` once (`CreateScripts`). Pressing Stop always restores `scene =
-sceneBackup` and switches back to Editing, discarding whatever happened during Play, the same
-disposable-sandbox convention Unity, Godot, and Unreal all use. This was deliberately built as
-the safety net the entity behavior system (M1.3) now relies on, and physics (M2) will too:
-testing gameplay should never risk permanently scrambling a hand-placed scene. Step credits the
-accumulator with exactly one `kFixedDt` (starting a Play session first, landing in Paused, if
-pressed from Editing) so the existing fixed-step `while` loop drains exactly one tick, with no
-separate single-step code path.
+each script's `OnCreate` once (`CreateScripts`) and building the physics world from the
+scene's collider-bearing entities (`BuildPhysicsWorld`, see "The scene model" -> "Physics
+components" above). Pressing Stop always restores `scene = sceneBackup`, clears the physics
+world (`PhysicsWorld::Clear`), and switches back to Editing, discarding whatever happened
+during Play, the same disposable-sandbox convention Unity, Godot, and Unreal all use. This
+was deliberately built as the safety net the entity behavior system (M1.3), and physics
+(M2.1) after it, both rely on: testing gameplay should never risk permanently scrambling a
+hand-placed scene. Step credits the accumulator with exactly one `kFixedDt` (starting a Play
+session first, landing in Paused, if pressed from Editing) so the existing fixed-step `while`
+loop drains exactly one tick, with no separate single-step code path.
 
 A Stop-restore or a Step both cause a one-frame pose jump rather than smooth motion (a spun
 transform snapping back on Stop; a whole tick advancing at once with no interpolation smoothing
@@ -722,8 +854,16 @@ in the same order every frame:
 ## Build and dependencies
 
 Dependencies are git submodules under `external/`, not vcpkg (see `.gitmodules`):
-`DiligentCore`, `DiligentTools`, `DiligentFX`, `glfw`, `ImGuizmo`, and ToonEngine's own
-`imgui` (pinned to upstream's `docking` branch — see below).
+`DiligentCore`, `DiligentTools`, `DiligentFX`, `glfw`, `ImGuizmo`, `JoltPhysics`, and
+ToonEngine's own `imgui` (pinned to upstream's `docking` branch — see below).
+
+Jolt's own `CMakeLists.txt` lives under `Build/`, so it's added as
+`add_subdirectory(external/JoltPhysics/Build)`, linking the `Jolt` target — with
+`USE_STATIC_MSVC_RUNTIME_LIBRARY OFF` and `INTERPROCEDURAL_OPTIMIZATION OFF` set as `CACHE
+BOOL ... FORCE` beforehand, the same cache-variable-before-`add_subdirectory` pattern the
+`DILIGENT_NO_*` block below uses (Jolt otherwise defaults to a runtime library and an LTO
+setting that both mismatch the rest of the build; see MEMORY.md's "Build gotchas" for the
+exact link errors this produces).
 
 `CMakeLists.txt` disables the Diligent backends and modules ToonEngine doesn't use, as `CACHE
 BOOL ... FORCE` **before** `add_subdirectory(external/DiligentCore)` (these are cache variables,
@@ -763,7 +903,7 @@ include path (`BasicStructures.fxh` does a bare `#include "ShaderDefinitions.fxh
 ## Where new systems plug in
 
 The cascaded shadow maps described above are the most recent example of the pattern any new
-rendering feature follows: declare the seam surface in `renderer.h` (new methods, new
+rendering feature follows: declare it in the abstraction layer, `renderer.h` (new methods, new
 `PostParams` fields), implement it in `renderer.cpp` (new PSOs, new offscreen targets if
 needed, wired into `Init`'s setup sequence), and add whatever new HLSL it needs under
 `assets/shaders/`. The same shape applies to the roadmap's remaining M3 items: grid + sky
@@ -771,26 +911,34 @@ gradient is a new full-screen shader pass (like the tone-map resolve); 2D/sprite
 vertex format and a blended draw path; skeletal animation needs a bone/skinning vertex format
 and per-frame joint-matrix upload, alongside a new animation entity component in `core/scene.h`.
 
-Gameplay systems (the roadmap's M1, now shipped, and M2) are a different shape: they're
-Diligent-free by default, since nothing about a fixed-timestep loop, an entity-behavior/update
-layer, physics, or audio needs to touch the renderer directly. The first of M1, the
-fixed-timestep sim loop (see "The frame loop" above), shipped as a restructuring of
-`main.cpp`'s existing loop plus two new `core/scene.h` members (`prevSimTransform`,
-`SnapshotSimState`), not a new `core/` module: a scoped choice for that item, not a pattern
-the next one had to follow. The second, the entity behavior system (M1.3, see "The scene
-model" -> "Scripts" above), landed close to what this section used to predict: an
-`Update`-style hook (`Script::OnUpdate`) called inside the fixed-step loop, before
+Gameplay systems (the roadmap's M1 and M2.1, now shipped, and M2's remaining audio item) are
+a different shape: they're Diligent-free by default, since nothing about a fixed-timestep
+loop, an entity-behavior/update layer, physics, or audio needs to touch the renderer
+directly. The first of M1, the fixed-timestep sim loop (see "The frame loop" above), shipped
+as a restructuring of `main.cpp`'s existing loop plus two new `core/scene.h` members
+(`prevSimTransform`, `SnapshotSimState`), not a new `core/` module: a scoped choice for that
+item, not a pattern the next one had to follow. The second, the entity behavior system (M1.3,
+see "The scene model" -> "Scripts" above), landed close to what this section used to predict:
+an `Update`-style hook (`Script::OnUpdate`) called inside the fixed-step loop, before
 `UpdateWorldTransforms`, right where the demo's spin used to advance inline, inheriting the
 `EditorMode` gate for free. It did *not* stay a two-member addition, though. An open, growing
 subsystem, and the landing spot for a future Lua bridge, got its own module (`core/script.h`
-plus `core/scripts/`) rather than folding into `scene.cpp`. Physics (M2) is expected to
-follow the fixed-loop half of that pattern: its own body/collider handles (a small seam,
-the same opaque-handle pattern `renderer.h` uses), stepping inside the same fixed-step loop
-(physics engines assume a fixed tick), writing results back into entity transforms each
-tick. It remains the one candidate left for extracting a shared `core/sim_clock`-style
-module out of `main.cpp`'s fixed-timestep mechanics, if it turns out to need one; M1.3
-didn't, since the accumulator/`kFixedDt` loop itself didn't change shape, only what runs
-inside it did. Evaluate that extraction when physics is actually being built, not before.
+plus `core/scripts/`) rather than folding into `scene.cpp`.
+
+The third, physics + collision (M2.1, see "The physics abstraction layer" and "The scene
+model" -> "Physics components" above), also got its own module and landed close to this
+section's own
+prediction, with one refinement the prediction didn't anticipate: rather than physics owning
+one merged component, `ColliderComponent` and `RigidBodyComponent` are independent optional
+fields, matching Unity/Godot's own Collider/Rigidbody split. The fixed-loop half of the
+prediction held exactly: physics steps inside the same `kFixedDt` loop scripts already use,
+writing dynamic bodies' results back into `entity.transform` each tick, the same landing spot
+a script's write already used. The predicted `core/sim_clock` extraction never became
+necessary — the accumulator/`kFixedDt` loop still didn't change shape, only gained one more
+thing to run inside it, the same outcome M1.3 had. Audio (M2's other item) is expected to need
+no fixed-loop involvement at all, unlike physics and scripts: sound playback has no
+per-tick simulation state to step, just fire-and-forget or streaming voices triggered by
+scripts/gameplay events.
 
 See MEMORY.md's "ToonEngineOld carry-over" section (and its "Port gotchas for the un-shipped
 systems" subsection) for the concrete algorithms and gotchas behind the still-open M3 items.
@@ -800,6 +948,6 @@ systems" subsection) for the concrete algorithms and gotchas behind the still-op
 - [CLAUDE.md](../CLAUDE.md) — guiding principles, conventions, build instructions, roadmap.
 - [MEMORY.md](../MEMORY.md) — the detailed history and reasoning behind every decision here,
   plus a long list of build and API gotchas.
-- [docs/cpp-style-guide.md](cpp-style-guide.md) — C++ house style and seam rules.
+- [docs/cpp-style-guide.md](cpp-style-guide.md) — C++ house style and abstraction-layer rules.
 - [docs/md-style-guide.md](md-style-guide.md) — the prose style this document follows.
 - [docs/clion-setup-windows.md](clion-setup-windows.md) — toolchain and IDE setup.

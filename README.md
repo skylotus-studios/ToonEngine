@@ -8,7 +8,7 @@
 A from-scratch, cross-platform stylized rendering engine built on Vulkan via [Diligent
 Engine](https://github.com/DiligentGraphics/DiligentEngine), with a full in-editor scene
 authoring workflow: an entity hierarchy, an inspector, transform gizmos, and a live-tunable
-HDR post-processing stack, all built on the seam described below.
+HDR post-processing stack, all built on the abstraction layer described below.
 
 *A [Skylotus Studios](LICENSE.md) project.*
 
@@ -37,6 +37,9 @@ panels](docs/screenshots/editor-overview.png)
 - Native gameplay scripting: per-entity `Update` hooks through a script-component slot
   (Unity/Hazel-style), reconstructed from a name registry so scripts round-trip through
   scene save/load and the Play/Pause/Step sandbox alike.
+- Physics and collision via Jolt Physics: independent Collider and Rigid Body entity
+  components (Box/Sphere/Capsule; Static/Dynamic/Kinematic), built fresh from the scene on
+  Play and stepped on the same fixed tick, with a collider debug wireframe overlay.
 - Scene serialization: save/load the full hierarchy, transforms, materials, and lighting to
   a human-readable text file. Procedural geometry round-trips from its generator parameters
   (radius, segment counts), not baked mesh data, so a saved scene has no binary blobs.
@@ -48,9 +51,9 @@ panels](docs/screenshots/editor-overview.png)
   inverted-hull outline technique as the procedural geometry.
 - Editor camera: orbit, pan, zoom, and WASD/QE fly, with input capture suppressed correctly
   while interacting with the UI or dragging a gizmo.
-- Built for portability: a seam keeps every Diligent/Vulkan type out of the application
-  layer (see Architecture below), so a backend swap or a new platform port means writing
-  another implementation file instead of rewriting the engine.
+- Built for portability: an abstraction layer keeps every Diligent/Vulkan type out of the
+  application code (see Architecture below), so a backend swap or a new platform port means
+  writing another implementation file instead of rewriting the engine.
 
 The SSAO/TAA pipeline had a temporal-reprojection ghosting bug that took six rounds of
 investigation to root-cause: the post-processing context had no real previous-frame depth
@@ -66,6 +69,7 @@ workaround. Full write-up in [MEMORY.md](MEMORY.md).
 | Graphics API | Vulkan, via [Diligent Engine](https://github.com/DiligentGraphics/DiligentEngine) (Core + Tools + FX) |
 | Shaders | HLSL, cross-compiled to SPIR-V at runtime |
 | Windowing | GLFW |
+| Physics | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) |
 | Editor UI | Dear ImGui (docking branch) + ImGuizmo |
 | Build | CMake + Ninja + clang-cl (LLVM) |
 | Assets | glTF / GLB, fetched via Git LFS |
@@ -74,11 +78,11 @@ workaround. Full write-up in [MEMORY.md](MEMORY.md).
 
 The engine is built on Diligent, not around a reimplementation of it: asset loading, the
 ImGui render backend, post-processing, and shader cross-compilation are all Diligent's own.
-What ToonEngine adds is a thin seam: `core/renderer.h` exposes opaque resource handles and a
-PIMPL `Renderer`, keeping every Diligent header and type behind `core/renderer.cpp`. The
-application layer (`main.cpp`) never includes a Diligent header; it calls `Init` /
-`BeginFrame` / `DrawMesh` / `EndScene` / `EndFrame`. A backend swap or a console port means
-writing another `renderer_*.cpp`, not a rewrite.
+What ToonEngine adds is a thin abstraction layer: `core/renderer.h` exposes opaque resource
+handles and a data-encapsulated `Renderer`, keeping every Diligent header and type behind
+`core/renderer.cpp`. The application layer (`main.cpp`) never includes a Diligent header; it
+calls `Init` / `BeginFrame` / `DrawMesh` / `EndScene` / `EndFrame`. A backend swap or a
+console port means writing another `renderer_*.cpp`, not a rewrite.
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture writeup,
 [CLAUDE.md](CLAUDE.md) for guiding principles and conventions, and [MEMORY.md](MEMORY.md) for

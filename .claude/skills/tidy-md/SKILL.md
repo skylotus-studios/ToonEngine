@@ -1,6 +1,6 @@
 ---
 name: tidy-md
-description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/**) accurate and current. Prunes CLAUDE.md's roadmap into MEMORY.md as items ship (hard 200-line cap), keeps README.md a portfolio-quality feature showcase, and keeps docs/architecture.md in sync with the actual seam/pipeline/system boundaries. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships.
+description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/**) accurate and current. Prunes CLAUDE.md's roadmap into MEMORY.md as items ship (hard 200-line cap), keeps README.md a portfolio-quality feature showcase, and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships.
 ---
 
 # tidy-md — keep ToonEngine's markdown docs accurate, current, and right-sized
@@ -91,7 +91,7 @@ update one, check the other.
 
 Unlike the rest of `docs/**` (below), `architecture.md` is a first-class maintained target,
 closer to `CLAUDE.md`/`README.md` than to a narrow setup guide. It's the deep
-how-it-fits-together reference: the renderer seam, source layout, the frame loop, the
+how-it-fits-together reference: the renderer's abstraction layer, source layout, the frame loop, the
 rendering pipeline, the scene model, data flow and ownership, and build/dependencies. The
 canonical split across the docs, so nothing duplicates:
 
@@ -102,7 +102,7 @@ canonical split across the docs, so nothing duplicates:
 - `MEMORY.md` — history, reasoning, and gotchas behind individual decisions.
 
 Update `architecture.md` in the same pass whenever the thing it describes actually changes:
-the renderer seam's public API, the source layout, the frame-loop sequence, the rendering
+the renderer abstraction layer's public API, the source layout, the frame-loop sequence, the rendering
 pipeline (a new PostFX stage, a new pass), the scene model, or a roadmap item shipping that
 changes what's true today (a new pipeline stage, a new engine-layer system). That's a
 different trigger than the rest of `docs/**` below — a broken path/command isn't the signal

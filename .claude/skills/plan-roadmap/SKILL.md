@@ -47,7 +47,7 @@ one at a time. The local checks (a, b) are fast enough to run directly if you wo
 the web checks (c, d) benefit from a `fork` (or a fresh general-purpose agent) so the raw
 search and fetch output does not fill this session's context.
 
-**a. Prior art in ToonEngineOld** (`C:/dev/ToonEngine/ToonEngineOld` — untracked,
+**a. Prior info in ToonEngineOld** (`C:/dev/ToonEngine/ToonEngineOld` — untracked,
 gitignored, the old OpenGL 4.1 engine kept only as a porting reference; see its own
 `CLAUDE.md` for its layout). Check MEMORY.md's "ToonEngineOld — carry-over reference"
 section first: it already maintains a system-by-system map and a "Port gotchas for the
@@ -79,8 +79,8 @@ gave a clear, sufficient answer for a narrowly rendering-scoped item.
 **d. Engine-architecture best practices online.** Search how other engines and communities
 solve this exact problem, naming real systems (Unity `MonoBehaviour`, Unreal
 `Actor`/`ActorComponent`, Godot `Node`, `EnTT`/`flecs` for data-oriented ECS) rather than
-generic advice. Filter for what actually applies given this codebase's constraints: C++17,
-no ECS today, the PIMPL renderer seam, the fixed-timestep sim tick already shipped.
+generic advice, especially for solo indie developers. Filter for what actually applies given this codebase's constraints: C++17,
+no ECS today, the data-encapsulated renderer abstraction layer, the fixed-timestep sim tick already shipped.
 
 ## Explain before asking
 
@@ -128,7 +128,7 @@ candidate API shapes.
 ## Write the plan and exit
 
 Write the plan file: the chosen design, the concrete steps (files touched or added, new
-types, where they sit relative to the renderer seam), and what is explicitly out of scope
+types, where they sit relative to the renderer's abstraction layer), and what is explicitly out of scope
 for this item. Call `ExitPlanMode`. Don't start implementing inside this skill — that is the
 user's next ask, a separate task.
 

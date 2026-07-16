@@ -111,7 +111,7 @@ Comments are where we spend the newcomer's goodwill. Rules:
   conventions, init/teardown ordering, "this looks wrong but is deliberate," and any
   workaround for an external quirk. These are exactly what bites a newcomer. Prefer
   one clear sentence over a paragraph.
-- **Point across the seam**: when a value has to match something elsewhere (a shader
+- **Point across the abstraction layer**: when a value has to match something elsewhere (a shader
   cbuffer, a winding order, a format), say so and name the other side.
 - **No dead code, no commented-out code, no stale TODOs.** Delete it — git remembers.
   If a comment describes behavior that changed, fix the comment in the same edit.
@@ -123,11 +123,11 @@ Comments are where we spend the newcomer's goodwill. Rules:
 
 - **Types** `PascalCase` (`Renderer`, `MeshData`, `PostParams`).
 - **Functions/methods** `PascalCase` (`CreateMesh`, `RunBloom`) — matches Diligent so
-  the two don't clash visually at the seam.
+  the two don't clash visually across the abstraction layer.
 - **Locals / parameters / struct data members** `camelCase` (`vertexCount`,
   `lightDir`). Plain data structs (`Vertex`, `Transform`) use bare `camelCase`
   fields.
-- **Private class members** of the PIMPL etc. are accessed through `m_impl->…`; the
+- **Private class members** under data encapsulation are accessed through `m_impl->…`; the
   owning pointer is `m_impl`. Prefer keeping mutable state inside `Impl`.
 - **Constants** `kCamelCase` (`kHDRFormat`, `kPi`), `static constexpr`.
 - **Namespaces** short and lowercase (`toon`). Anonymous namespaces for file-local
@@ -140,11 +140,11 @@ Comments are where we spend the newcomer's goodwill. Rules:
 These are correctness/architecture, not taste — don't "clean" them away:
 
 - **C++17**, clang everywhere. No compiler-specific extensions.
-- **The renderer seam is load-bearing.** `core/renderer.h` exposes only opaque
+- **The renderer's abstraction layer is load-bearing.** `core/renderer.h` exposes only opaque
   handles + plain types; **all** Diligent headers and `Diligent::` types stay in
   `core/renderer.cpp`. Dear ImGui is the one exemption (see CLAUDE.md). Never include
-  a Diligent header outside the seam to "simplify" something.
-- **Keep the public header Diligent-free**: forward-declare, use PIMPL, and put new
+  a Diligent header outside the abstraction layer to "simplify" something.
+- **Keep the public header Diligent-free**: forward-declare, use data encapsulation, and put new
   backend state inside `Renderer::Impl`.
 - Diligent objects are COM-refcounted — hold them in `RefCntAutoPtr<>`; release in
   reverse dependency order, resources before the device.
@@ -164,8 +164,8 @@ When tidying a file (or running the `tidy-cpp` skill), walk this list:
 4. No dead/commented-out code, no leftover debug prints, no unused includes or
    locals.
 5. Manual alignment only within related blocks; blank lines separate paragraphs.
-6. Naming matches §5; new state lives in the right place (PIMPL, not globals).
-7. Seam intact — no Diligent leakage past `renderer.cpp`; header still compiles
+6. Naming matches §5; new state lives in the right place (data encapsulation, not globals).
+7. Abstraction layer intact — no Diligent leakage past `renderer.cpp`; header still compiles
    Diligent-free.
 8. It still **builds and runs** (`cmake --build --preset windows-debug`, launch it) —
    a clean file that doesn't run is not clean.
