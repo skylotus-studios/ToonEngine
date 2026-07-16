@@ -1093,16 +1093,16 @@ int main() {
             ImGui::DockBuilderRemoveNode(dockspaceId);
             ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->Size);
-            // A Playback strip across the very top (M1.2) -- two rows tall (transport +
-            // gizmo settings), hence 0.10 rather than a single row's ~0.06; Objects on the far
-            // left; Properties (top) + Settings (bottom) stacked on the right; Contents along
-            // the bottom of what's left; the 3D scene shows through the remaining pass-through
-            // center. The top split runs FIRST so every other split operates on the region
-            // already below it.
+            // Objects on the far left; Properties (top) + Settings (bottom) stacked on the
+            // right; a thin Playback strip (M1.2) -- one row tall, just the transport buttons;
+            // the gizmo Local/Snap controls live in Settings, not here -- sits above the
+            // remaining center, so it reads as a sliver between Objects and Properties/Settings
+            // rather than a bar spanning the whole width. Left/Right split FIRST so Playback's
+            // Up split then only carves the narrower center strip left over.
             ImGuiID centerId = dockspaceId;
-            const ImGuiID playbackId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Up, 0.10f, nullptr, &centerId);
             const ImGuiID leftId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, 0.20f, nullptr, &centerId);
             ImGuiID rightId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.34f, nullptr, &centerId);
+            const ImGuiID playbackId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Up, 0.0415f, nullptr, &centerId);
             const ImGuiID rightTopId = ImGui::DockBuilderSplitNode(rightId, ImGuiDir_Up, 0.55f, nullptr, &rightId);
             const ImGuiID bottomId = ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.28f, nullptr, &centerId);
             ImGui::DockBuilderDockWindow("Playback", playbackId);
@@ -1118,9 +1118,7 @@ int main() {
         }
 #endif
 
-        // --- Playback: Play / Pause / Step / Stop for the fixed-timestep sim (M1.2), plus the
-        // gizmo's Local/Snap/step-size controls (moved here from Properties -- they're global
-        // editing settings, not per-object, so they don't need a selection to be usable). Docked
+        // --- Playback: Play / Pause / Step / Stop for the fixed-timestep sim (M1.2). Docked
         // as the top strip set up above, with its dock node's tab bar suppressed (NoTabBar) so
         // it reads as a fixed toolbar, not a document with a title. Editing (default): nothing
         // simulates. Playing: today's M1.1 accumulator runs. Paused: frozen mid-play, scene
@@ -1140,12 +1138,12 @@ int main() {
             // Row 1: Play/Pause, Step, Stop -- same fixed width (sized off "Pause", the longest
             // label) so the group centers cleanly and reads as one toolbar instead of 3 buttons
             // each hugging their own label.
-            const float btnW = ImGui::CalcTextSize(ICON_FA_FORWARD_STEP).x + ImGui::GetStyle().FramePadding.x * 2.0f + 8.0f;
+            const float btnW = ImGui::CalcTextSize(ICON_FA_FORWARD_STEP).x + ImGui::GetStyle().FramePadding.x * 4.0f + 8.0f;
             const float rowWidth = btnW * 3.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - rowWidth) * 0.5f);
 
             const bool isPlaying = (mode == EditorMode::Playing);
-            if (ImGui::Button(isPlaying ? ICON_FA_PAUSE : ICON_FA_PLAY, ImVec2(btnW, 0.0f))) {
+            if (ImGui::Button(isPlaying ? ICON_FA_PAUSE : ICON_FA_PLAY, ImVec2(btnW, btnW))) {
                 if (mode == EditorMode::Editing) {
                     sceneBackup = scene; // snapshot: Stop restores exactly this
                     mode = EditorMode::Playing;
@@ -1160,7 +1158,7 @@ int main() {
             }
             ImGui::SameLine();
             ImGui::BeginDisabled(isPlaying); // stepping while already continuously ticking isn't meaningful
-            if (ImGui::Button(ICON_FA_FORWARD_STEP, ImVec2(btnW, 0.0f))) {
+            if (ImGui::Button(ICON_FA_FORWARD_STEP, ImVec2(btnW, btnW))) {
                 if (mode == EditorMode::Editing) {
                     sceneBackup = scene;
                     mode = EditorMode::Paused; // step lands paused, not playing
@@ -1174,7 +1172,7 @@ int main() {
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::BeginDisabled(mode == EditorMode::Editing); // nothing to stop yet
-            if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, 0.0f))) {
+            if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, btnW))) {
                 physicsWorld.Clear(); // release this session's bodies before the scene reverts
                 scene = sceneBackup; // discard everything Play did -- see the panel comment above
                 mode = EditorMode::Editing;
@@ -1182,23 +1180,6 @@ int main() {
                 suppressNextFrameHistory = true;
             }
             ImGui::EndDisabled();
-
-            // Row 2: gizmo editing settings (moved from Properties) -- Local space toggle, snap
-            // toggle, and the active op's step size, squeezed to ~4 characters since this is a
-            // quick-glance toolbar value, not a precision input.
-            bool localSpace = (gizmoMode == ImGuizmo::LOCAL);
-            if (ImGui::Checkbox("Local", &localSpace)) { gizmoMode = localSpace ? ImGuizmo::LOCAL : ImGuizmo::WORLD; }
-            ImGui::SameLine();
-            ImGui::Checkbox("Snap", &gizmoSnap);
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(ImGui::CalcTextSize("0000").x + ImGui::GetStyle().FramePadding.x * 2.0f);
-            if (gizmoOp == ImGuizmo::ROTATE) {
-                ImGui::DragFloat("Angle", &snapRotateDeg, 1.0f, 1.0f, 90.0f, "%.0f");
-            } else if (gizmoOp == ImGuizmo::SCALE) {
-                ImGui::DragFloat("Scale", &snapScale, 0.05f, 0.001f, 10.0f, "%.2f");
-            } else {
-                ImGui::DragFloat("Move", &snapTranslate, 0.1f, 0.001f, 10.0f, "%.2f");
-            }
         }
         if (playbackOpen) { ImGui::End(); }
 
@@ -1510,6 +1491,23 @@ int main() {
         if (debugOpen && ImGui::Begin("Settings", &showDebug)) {
             ImGui::Text("%.1f FPS (%.3f ms/frame)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
 
+            // Gizmo editing settings (moved from Properties) -- Local space toggle, snap
+            // toggle, and the active op's step size, squeezed to ~4 characters since this is a
+            // quick-glance toolbar value, not a precision input.
+            ImGui::SeparatorText("Snapping");
+            bool localSpace = (gizmoMode == ImGuizmo::LOCAL);
+            if (ImGui::Checkbox("Local", &localSpace)) { gizmoMode = localSpace ? ImGuizmo::LOCAL : ImGuizmo::WORLD; }
+            ImGui::SameLine();
+            ImGui::Checkbox("Snap", &gizmoSnap);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(ImGui::CalcTextSize("0000").x + ImGui::GetStyle().FramePadding.x * 2.0f);
+            if (gizmoOp == ImGuizmo::ROTATE) {
+                ImGui::DragFloat("Angle", &snapRotateDeg, 1.0f, 1.0f, 90.0f, "%.0f");
+            } else if (gizmoOp == ImGuizmo::SCALE) {
+                ImGui::DragFloat("Scale", &snapScale, 0.05f, 0.001f, 10.0f, "%.2f");
+            } else {
+                ImGui::DragFloat("Move", &snapTranslate, 0.1f, 0.001f, 10.0f, "%.2f");
+            }
             // Theme lives in the View menu now, and Save/Load in the File menu + Contents
             // (double-click a .scene) -- both dropped here as redundant with those.
             ImGui::SeparatorText("Shader");
@@ -1531,7 +1529,7 @@ int main() {
             ImGui::SeparatorText("Physics");
             ImGui::Checkbox("Show Colliders", &showColliders);
 
-            ImGui::SeparatorText("Post (HDR)");
+            ImGui::SeparatorText("Post Processing (HDR)");
             ImGui::Checkbox("Tone map (ACES)", &post.toneMap);
             ImGui::SliderFloat("Exposure", &post.exposure, 0.1f, 4.0f);
 
