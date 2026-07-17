@@ -78,11 +78,12 @@ workaround. Full write-up in [MEMORY.md](MEMORY.md).
 
 The engine is built on Diligent, not around a reimplementation of it: asset loading, the
 ImGui render backend, post-processing, and shader cross-compilation are all Diligent's own.
-What ToonEngine adds is a thin abstraction layer: `core/renderer.h` exposes opaque resource
-handles and a data-encapsulated `Renderer`, keeping every Diligent header and type behind
-`core/renderer.cpp`. The application layer (`main.cpp`) never includes a Diligent header; it
-calls `Init` / `BeginFrame` / `DrawMesh` / `EndScene` / `EndFrame`. A backend swap or a
-console port means writing another `renderer_*.cpp`, not a rewrite.
+What ToonEngine adds is a thin abstraction layer: `core/rendering/renderer.h` exposes opaque
+resource handles and a data-encapsulated `Renderer`, keeping every Diligent header and type
+behind `core/rendering/renderer.cpp`. The application layer (`main.cpp`, `src/app/`,
+`ui/panels/`) never includes a Diligent header; it calls `Init` / `BeginFrame` / `DrawMesh` /
+`EndScene` / `EndFrame`. A backend swap or a console port means writing another
+`renderer_*.cpp`, not a rewrite.
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture writeup,
 [CLAUDE.md](CLAUDE.md) for guiding principles and conventions, and [MEMORY.md](MEMORY.md) for

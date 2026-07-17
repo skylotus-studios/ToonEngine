@@ -16,15 +16,15 @@ inside one translation unit, so the rest of the engine — the scene graph, the 
 the input system, the serializer, the UI panels, and gameplay systems (native scripts,
 physics, audio next) — never touches Diligent directly and stays backend-agnostic by
 construction. Physics (M2.1) added a second, twin abstraction layer the same way: every Jolt
-Physics type is quarantined inside `core/physics.cpp` (see "The physics abstraction layer"
+Physics type is quarantined inside `core/physics/physics.cpp` (see "The physics abstraction layer"
 below).
 
 ## The renderer abstraction layer
 
-`core/renderer.h` is the one header the rest of the engine includes for GPU work. Its file
+`core/rendering/renderer.h` is the one header the rest of the engine includes for GPU work. Its file
 banner states the contract directly: no Diligent type, and no Diligent header, escapes it. It
 includes only `<cstdint>` and `core/math.h`, and forward-declares `struct GLFWwindow`, so
-including it pulls in neither GLFW nor Diligent. `core/renderer.cpp` is the only translation
+including it pulls in neither GLFW nor Diligent. `core/rendering/renderer.cpp` is the only translation
 unit allowed to include a Diligent header or name a `Diligent::` type.
 
 ### Vocabulary: opaque handles and plain scene types
@@ -54,7 +54,7 @@ speaks in:
   splitting apart. The two are identical on a smooth mesh.
 - **`Camera`** — an orbit camera (`pivot`, `distance`, `yaw`, `pitch`, `fovY`, `nearZ`, `farZ`)
   plus editor-control tuning the renderer itself never reads (`lookSensitivity`,
-  `panSensitivity`, `zoomSpeed`, `moveSpeed` — consumed only by `core/camera.h`). The renderer
+  `panSensitivity`, `zoomSpeed`, `moveSpeed` — consumed only by `core/camera/camera.h`). The renderer
   builds the actual view/projection matrices from these fields; keeping NDC and handedness
   conventions on the Diligent side of the abstraction layer means the app never has to know
   them.
@@ -159,14 +159,15 @@ and not a virtual-dispatch cost on the hot path.
 ### Dear ImGui is exempt
 
 Dear ImGui is a plain UI library, not a Diligent type, so engine and game code may `#include
-"imgui.h"` and call `ImGui::` directly — `main.cpp` does, extensively, between `BeginUI()` and
-`EndUI()`. Only ImGui's Diligent render backend (`ImGuiImplDiligent`) is confined to
-`renderer.cpp`.
+"imgui.h"` and call `ImGui::` directly — every `ui/panels/*.cpp` file does, extensively,
+between `Renderer::BeginUI()` and `EndUI()` (both called from `main.cpp`'s loop). Only
+ImGui's Diligent render backend (`ImGuiImplDiligent`) is confined to
+`core/rendering/renderer.cpp`.
 
 ## The physics abstraction layer
 
-`core/physics.h` mirrors the renderer's abstraction layer almost exactly, for the same
-reason: every Jolt Physics type and header is quarantined inside `core/physics.cpp`, so the
+`core/physics/physics.h` mirrors the renderer's abstraction layer almost exactly, for the same
+reason: every Jolt Physics type and header is quarantined inside `core/physics/physics.cpp`, so the
 rest of the engine
 never depends on the physics library directly. `physics.h` includes only `core/math.h` and
 speaks purely in `toon::` types — no `JPH::` type escapes it.
@@ -233,20 +234,48 @@ for the debug overlay described in "The rendering pipeline" below.
 
 ```
 src/
-  main.cpp                     Entry point: window + game loop; builds the scene, drives Renderer. No Diligent includes.
+  main.cpp                     Entry point: creates the window, builds an EditorState, then drives
+                                InitEditor/TickEditor/RenderFrame + every ui/panels/ Draw* call from
+                                the loop. ~90 lines -- no Diligent includes, and (Dear ImGui aside)
+                                no direct ImGui:: calls either; those live in ui/panels/.
   icon.rc.in                   CMake-configured Win32 resource script; embeds GLFW_ICON for the taskbar/Alt-Tab icon.
+  app/                         Editor state + the non-UI glue that used to be main()'s body. A plain
+                                EditorState struct (core/scene/scene.h's Scene precedent) + free functions
+                                operating on it — not a class, since nothing here hides a third-party
+                                dependency the way Renderer/PhysicsWorld's data encapsulation does (see
+                                CLAUDE.md's guiding principle and MEMORY.md's Muratori/plain-data note).
+    editor_state.h              EditorState: every field main()'s locals used to be (Renderer, PhysicsWorld,
+                                 Scene + sceneBackup, Camera, gizmo/theme/panel-visibility state, the
+                                 fixed-step clock, Play/Pause/Step state) + the EditorMode enum.
+    editor_init.{h,cpp}         InitEditor: Renderer/PhysicsWorld/input init, font + starting theme, the
+                                 framebuffer-resize callback, and the demo scene (procedural primitives +
+                                 the loaded glTF helmet + the falling physics bodies).
+    editor_tick.{h,cpp}         TickEditor: input poll, the fixed-timestep sim loop (scripts + physics),
+                                 UpdateWorldTransforms, and editor-camera navigation.
+    editor_render.{h,cpp}       RenderFrame: the shadow-cascade pre-pass, the main draw loop, EndScene,
+                                 and the collider-wireframe debug overlay.
+    physics_glue.{h,cpp}        ScaledColliderExtents + BuildPhysicsWorld, shared by editor_tick.cpp's
+                                 Play/Step rebuild (via ui/panels/playback_panel.cpp) and the collider overlay.
+    scene_ops.{h,cpp}           LoadSceneInto/SaveSceneFrom/NewScene, called from both the File menu
+                                 (ui/panels/menu_bar.cpp) and a double-clicked .scene in the asset browser.
   core/
-    renderer.h                 The abstraction layer: opaque handles + scene types (Vertex/Camera/Material/Transform/PostParams) + data-encapsulated Renderer.
-    renderer.cpp                Diligent (Vulkan) backend behind the abstraction layer: PSOs, MRT targets, cascaded shadow maps, DiligentFX post chain, ImGui glue.
-    math.h                      Dependency-free Vec2/Vec3/Vec4 + a data-only row-major Mat4 — the abstraction layer's public-API vocabulary.
-    scene.{h,cpp}                Entity-tree scene graph: hierarchy, world-transform composition, editor mutations.
-    script.{h,cpp}               Native gameplay scripts: per-entity Update hooks + name->factory registry (M1.3).
-    scripts/
-      spin_script.{h,cpp}         First concrete Script: replaces main.cpp's old hardcoded spin block.
-    physics.{h,cpp}              The physics abstraction layer: opaque BodyHandle + data-encapsulated PhysicsWorld (Jolt Physics), ColliderWireframe (M2.1).
-    camera.{h,cpp}               Editor camera: orbit/pan/zoom/fly/focus, derived from the same Diligent matrices SetCamera uses.
-    primitives.{h,cpp}          Procedural CPU mesh generators (sphere/cube/torus/plane) + PrimitiveDesc provenance for serialization.
-    serializer.{h,cpp}          Scene save/load — entity/camera state to a text .scene file.
+    math.h                      Dependency-free Vec2/Vec3/Vec4 + a data-only row-major Mat4 — the
+                                 abstraction layer's public-API vocabulary; shared by every subsystem
+                                 below, so it stays directly under core/ rather than in one of them.
+    rendering/
+      renderer.h                 The abstraction layer: opaque handles + scene types (Vertex/Camera/Material/Transform/PostParams) + data-encapsulated Renderer.
+      renderer.cpp                Diligent (Vulkan) backend behind the abstraction layer: PSOs, MRT targets, cascaded shadow maps, DiligentFX post chain, ImGui glue.
+      primitives.{h,cpp}          Procedural CPU mesh generators (sphere/cube/torus/plane) + PrimitiveDesc provenance for serialization.
+    scene/
+      scene.{h,cpp}                Entity-tree scene graph: hierarchy, world-transform composition, editor mutations.
+      script.{h,cpp}               Native gameplay scripts: per-entity Update hooks + name->factory registry (M1.3).
+      scripts/
+        spin_script.{h,cpp}         First concrete Script: replaces main.cpp's old hardcoded spin block.
+      serializer.{h,cpp}          Scene save/load — entity/camera state to a text .scene file.
+    physics/
+      physics.{h,cpp}              The physics abstraction layer: opaque BodyHandle + data-encapsulated PhysicsWorld (Jolt Physics), ColliderWireframe (M2.1).
+    camera/
+      camera.{h,cpp}               Editor camera: orbit/pan/zoom/fly/focus, derived from the same Diligent matrices SetCamera uses.
     input/
       keycodes.h                 Key/MouseButton/GamepadButton/GamepadAxis/MouseAxis enums (Key mirrors GLFW codes).
       input_device.h             Raw per-device state (Keyboard/Mouse/Gamepad) with current/previous snapshots for edge detection.
@@ -254,8 +283,18 @@ src/
       action_map.{h,cpp}         Named rebindable actions/axes (FNV-1a hashed), a push/pop context stack.
       binding_io.{h,cpp}         JSON load/save of an InputContext's bindings (assets/input.json).
   ui/
-    file_browser.{h,cpp}        "Asset Browser" panel: breadcrumb nav, sortable file table, preview pane.
     thumbnail_cache.{h,cpp}      Path -> TextureHandle cache for the browser's inline icons/preview (remembers failures too).
+    panels/                      Every ImGui editor panel, each a free function taking EditorState& (the
+                                 same plain-struct-plus-free-functions shape as app/, for the same reason).
+      file_browser.{h,cpp}        "Asset Browser" panel: breadcrumb nav, sortable file table, preview pane.
+      themes.{h,cpp}               The Theme enum + AmberYellow/GruvboxHard/GrayStone + ApplyTheme.
+      menu_bar.{h,cpp}             File/Edit/Tools/View/Help + the Open/Save-As/About modals.
+      dockspace.{h,cpp}            The full-window dockspace + one-time default panel layout.
+      playback_panel.{h,cpp}       Play/Pause/Step/Stop for the fixed-timestep sim.
+      objects_panel.{h,cpp}        The "Objects" hierarchy: select/add/duplicate/delete/drag-drop reparent.
+      properties_panel.{h,cpp}     The "Properties" inspector: transform/material/light/collider/rigid body/scripts.
+      gizmo_overlay.{h,cpp}        W/E/R/X gizmo hotkeys + the ImGuizmo Manipulate call.
+      settings_panel.{h,cpp}       Snapping, shading, camera, physics, and every PostParams toggle.
 ```
 
 CMake bakes several absolute path macros into the binary (`target_compile_definitions` in
@@ -290,30 +329,43 @@ paths; today they're dev-convenience absolute paths into the source tree.
 
 ## The frame loop
 
-`main.cpp` includes `core/renderer.h`, the engine headers, plain `<GLFW/glfw3.h>`
-(`GLFW_INCLUDE_NONE` is set engine-wide), and `imgui.h`/`imgui_internal.h`/`ImGuizmo.h` — no
-Diligent header, matching the abstraction layer's contract. ImGui and ImGuizmo are exempt
-from it (see above).
+`main.cpp` itself is now ~90 lines of glue: it creates the GLFW window, builds an
+`app::EditorState`, calls `InitEditor` once, then drives the per-frame sequence below by
+calling into `app/editor_tick.{h,cpp}`, `app/editor_render.{h,cpp}`, and every
+`ui/panels/*.{h,cpp}` `DrawXPanel(state)` function — none of the actual init/tick/render/UI
+logic lives in `main.cpp` itself anymore, only the calls that sequence it. `main.cpp` still
+includes no Diligent header (matching the abstraction layer's contract), and no longer
+includes `imgui.h`/`ImGuizmo.h` directly either — those come in through `app/editor_state.h`,
+which every `app/` and `ui/panels/` file includes, and none of them touch Diligent. This
+`EditorState` struct + free-functions shape (not a class) mirrors `core/scene/scene.h`'s own
+`Scene`, for the same reason: nothing here hides a third-party dependency the way
+`Renderer`/`PhysicsWorld`'s data encapsulation does, so wrapping it in private members would
+buy nothing but ceremony (see CLAUDE.md's guiding principle and MEMORY.md's Muratori/plain-data
+note).
 
 ### Startup
 
-Roughly: create the GLFW window with the `GLFW_NO_API` hint (Vulkan owns the surface, not GL);
-`Renderer::Init`; `Input::Init` **before** `Renderer::InitUI` (so ImGui's GLFW backend chains
-the app's own callbacks instead of overwriting them); register default editor input bindings
-and load/create `assets/input.json`; `InitUI` (enables ImGui docking, loads the Bai Jamjuree
-font, applies one of three built-in themes); wire the framebuffer-resize callback to
-`Renderer::Resize`; `physicsWorld.Init()` (Jolt's `Factory`/`RegisterTypes` are process-global
-one-time setup, see "The physics abstraction layer" above); build the demo scene graph (ground with a
-static box collider, sphere, cube, satellite orbiting the cube, torus, a loaded glTF helmet, a
-light entity, and a few dynamic Box/Sphere colliders dropped above the ground — the
-sphere/cube/torus/helmet each get a `SpinScript` attached, see "The scene model" -> "Scripts"
-below; the dynamic primitives get a `ColliderComponent` + `RigidBodyComponent` instead, see
-"The scene model" -> "Physics components" below); construct the editor `Camera`, the shared
-`Material style`, `PostParams post`, and the `FileBrowser`.
+The GLFW window itself is created by `main.cpp` (with the `GLFW_NO_API` hint, since Vulkan
+owns the surface, not GL) *before* `InitEditor` is called, since `EditorState` doesn't exist
+yet to hold it. From there, `app/editor_init.cpp`'s `InitEditor` does, roughly: `Renderer::Init`; `Input::Init` **before** `Renderer::InitUI`
+(so ImGui's GLFW backend chains the app's own callbacks instead of overwriting them);
+register default editor input bindings and load/create `assets/input.json`; `InitUI` (enables
+ImGui docking, loads the Bai Jamjuree font, applies one of three built-in themes); wire the
+framebuffer-resize callback to `Renderer::Resize`; `state.physicsWorld.Init()` (Jolt's
+`Factory`/`RegisterTypes` are process-global one-time setup, see "The physics abstraction
+layer" above); build the demo scene graph (ground with a static box collider, sphere, cube,
+satellite orbiting the cube, torus, a loaded glTF helmet, a light entity, and a few dynamic
+Box/Sphere colliders dropped above the ground — the sphere/cube/torus/helmet each get a
+`SpinScript` attached, see "The scene model" -> "Scripts" below; the dynamic primitives get a
+`ColliderComponent` + `RigidBodyComponent` instead, see "The scene model" -> "Physics
+components" below); construct the editor `Camera`, the shared `Material style`, `PostParams
+post`, and the `FileBrowser` — all as fields on the `EditorState` `main.cpp` passes in by
+reference.
 
 ### Per frame
 
 ```
+// app/editor_tick.cpp -- TickEditor(state)
 Input::BeginFrame()              // snapshot prev state, clear deltas -- BEFORE glfwPollEvents
 glfwPollEvents()                 // callbacks accumulate into the freshly-cleared frame
 frameTime = now - lastTime, clamped to <= 0.25s   // spiral-of-death guard (e.g. a window drag stalls glfwPollEvents)
@@ -327,7 +379,7 @@ if (stepRequested)   accumulator += kFixedDt
 if (mode == Playing || stepRequested):
     while (accumulator >= kFixedDt):
         SnapshotSimState(scene)          // prevSimTransform = transform, for every transformed entity
-        if (runScripts) UpdateScripts(scene, kFixedDt)   // every entity's attached scripts' OnUpdate (core/script.h)
+        if (runScripts) UpdateScripts(scene, kFixedDt)   // every entity's attached scripts' OnUpdate (core/scene/script.h)
         // Physics (M2.1, "The physics abstraction layer" above): static/kinematic bodies follow their
         // entity transform; Step advances the simulation; dynamic bodies are read back.
         for entity with a static/kinematic RigidBodyComponent: physicsWorld.SetBodyTransform(handle, transform)
@@ -354,8 +406,9 @@ renderer.SetPostParams(post)     // BEFORE SetCamera: SetCamera reads post.taa f
 renderer.SetCamera(camera)
 renderer.SetLight(lightDir, lightColor, lightIntensity)   // from GetActiveLight(scene), or a fixed fallback
 
+// app/editor_render.cpp -- RenderFrame(state)
 // Cascaded-shadow pre-pass: its own depth-only targets, so it must run before BeginFrame
-// binds the main G-buffer. BeginShadowPass returns 0 (loop below is a no-op) if the Debug
+// binds the main G-buffer. BeginShadowPass returns 0 (loop below is a no-op) if the Settings
 // panel's Shadows toggle is off.
 shadowCascades = renderer.BeginShadowPass()
 for cascade in 0..shadowCascades:
@@ -371,30 +424,38 @@ for entity in scene.entities:    // skip non-renderable (root / light) entities
     // or renderer.DrawModel(...) for a glTF entity
 
 renderer.EndScene()              // PostFX chain + exposure + tone map -> back buffer
+// + the collider-wireframe overlay, if state.showColliders is set (see "The rendering
+// pipeline" -> "Collider debug wireframe" above)
 
+// main.cpp's loop, calling into ui/panels/*.cpp — ImGui is abstraction-layer-exempt, see above
 renderer.BeginUI()               // ImGui::NewFrame
-ImGuizmo::BeginFrame()
-  gizmo hotkeys (W/E/R/X),
-  a main menu bar (File/Edit/Tools/View/Help),
-  dockspace,
-  Playback panel (Play/Pause toggle, Step, Stop, a Mode status label -- see "The editor
-    layer" -> "Play / Pause / Step" below),
-  Objects panel (select / add-child / duplicate / delete / drag-drop reparent
-    -- records structural ops mid-iteration, applies them AFTER the loop, since a
-    mutation reorders the entity vector and invalidates in-flight indices),
-  Properties panel (name / transform / material, always present; light, collider, rigid
-    body, and scripts each independently added/removed / ImGuizmo Manipulate),
-  Settings panel (band count, style, camera tuning, Show Colliders, every PostParams
-    toggle -- theme is a View-menu command now, not a Settings-panel control),
-  assetBrowser.Render(renderer) -> a double-clicked .scene routes through the same
-    load path as the File menu's "Open Scene..." command
+GizmoHotkeys(state)              // ImGuizmo::BeginFrame() + the W/E/R/X hotkeys (gizmo_overlay.cpp)
+DrawMenuBar(state)                // File/Edit/Tools/View/Help + their modals (menu_bar.cpp)
+SetupDockspace(state)             // the dockspace + one-time default layout (dockspace.cpp)
+DrawPlaybackPanel(state)          // Play/Pause toggle, Step, Stop (playback_panel.cpp) -- see
+                                   // "The editor layer" -> "Play / Pause / Step" below
+DrawObjectsPanel(state)           // select / add-child / duplicate / delete / drag-drop reparent
+                                   // (objects_panel.cpp) -- records structural ops mid-iteration,
+                                   // applies them AFTER the loop, since a mutation reorders the
+                                   // entity vector and invalidates in-flight indices
+DrawPropertiesPanel(state)        // name / transform / material, always present; light, collider,
+                                   // rigid body, and scripts each independently added/removed
+                                   // (properties_panel.cpp)
+DrawGizmoOverlay(state)           // the ImGuizmo Manipulate call (gizmo_overlay.cpp)
+DrawSettingsPanel(state)          // band count, style, camera tuning, Show Colliders, every
+                                   // PostParams toggle (settings_panel.cpp) -- theme is a
+                                   // View-menu command, not a Settings-panel control
+state.assetBrowser.Render(state.renderer) -> a double-clicked .scene routes through
+    app/scene_ops.h's LoadSceneInto, the same path the File menu's "Open Scene..." command
+    (menu_bar.cpp) uses
 renderer.EndUI()                 // ImGui renders onto the still-bound back buffer
 
 renderer.EndFrame()               // Present
 ```
 
-Teardown runs the mirror image: `Input::Shutdown()`, `assetBrowser.Shutdown(renderer)` (frees
-thumbnail textures before the device goes away), `renderer.Shutdown()`, destroy the window,
+Teardown, back in `main.cpp` after the loop exits: `Input::Shutdown()`,
+`state.assetBrowser.Shutdown(state.renderer)` (frees thumbnail textures before the device
+goes away), `state.physicsWorld.Shutdown()`, `state.renderer.Shutdown()`, destroy the window,
 `glfwTerminate()`.
 
 Four ordering rules are load-bearing and easy to get wrong if this code moves: `Input::BeginFrame`
@@ -550,8 +611,10 @@ geometry it draws) uses its own small PSO: `PRIMITIVE_TOPOLOGY_LINE_LIST`, depth
 **off**, back-buffer-only render target — the same "back buffer only" shape as the tonemap
 PSO above, reused rather than reinvented. Depth test is off deliberately: an always-on-top overlay avoids adding a
 depth-tested variant's G-buffer MRT-compatibility risk, and a debug aid benefiting from never
-being occluded is a reasonable trade. `main.cpp`'s "Show Colliders" toggle (Settings panel)
-calls it once per collider-bearing entity, directly after `EndScene()` and before `BeginUI()`
+being occluded is a reasonable trade. `ui/panels/settings_panel.cpp`'s "Show Colliders"
+toggle (`EditorState::showColliders`) gates a loop in `app/editor_render.cpp`'s
+`RenderFrame` that calls it once per collider-bearing entity, directly after `EndScene()`
+and before `Renderer::BeginUI()`
 — it draws straight onto the already-bound back buffer from the tone-map resolve above, so no
 extra render-target binding is needed in `DrawWireframe` itself.
 
@@ -566,7 +629,7 @@ depth attachment bound.
 
 ## The scene model
 
-`core/scene.h` is a flat entity tree: parents always precede their children in the vector, and
+`core/scene/scene.h` is a flat entity tree: parents always precede their children in the vector, and
 index 0 is the implicit root, so a single forward pass composes every world transform.
 
 ```cpp
@@ -617,7 +680,7 @@ to a local TRS, writing `transform`, the authoritative pose the next fixed step'
 
 The editor mutation API (`AddChildEntity`, `DeleteEntity`, `DuplicateEntity`, `ReparentEntity`,
 `MoveEntityAsSibling`) all preserve the parents-before-children invariant and fix up `selected`,
-and all mutate the entity vector — so `main.cpp`'s hierarchy panel records requested operations
+and all mutate the entity vector — so `ui/panels/objects_panel.cpp`'s hierarchy panel records requested operations
 while iterating and applies them only after the loop ends. `ReparentEntity` is world-preserving
 (the entity doesn't visually jump) and refuses cycles via `IsAncestorOrSelf`. `DestroyScene`
 just clears the vector: entities hold only handles, never GPU resources, so there's nothing
@@ -625,7 +688,7 @@ GPU-side to release here (see "Ownership" below).
 
 ### Scripts
 
-`core/script.h` (M1.3) is where per-entity gameplay logic lives — a native-script layer in
+`core/scene/script.h` (M1.3) is where per-entity gameplay logic lives — a native-script layer in
 Cherno/Hazel's `NativeScriptComponent` shape, backed by `Entity::scripts` rather than an
 `entt` registry (ECS stays a deliberate later option, not built; see MEMORY.md's "Entity
 behavior system" section for the full survey and reasoning). `Script` is a virtual base:
@@ -652,13 +715,13 @@ form a name -> factory registry so a name loaded from a `.scene` file, or an in-
 (next paragraph), can reconstruct the right subclass. `CreateScripts(scene)` fires each
 script's `OnCreate` once, in entity order, when a Play session begins; `UpdateScripts(scene,
 dt)` dispatches every entity's `OnUpdate` each fixed tick (see "The frame loop" above).
-`core/scripts/spin_script.{h,cpp}`'s `SpinScript` is the first concrete example, replacing
+`core/scene/scripts/spin_script.{h,cpp}`'s `SpinScript` is the first concrete example, replacing
 what used to be a hardcoded block in `main.cpp`.
 
 The load-bearing consequence: `Entity`/`Scene` lost their implicit copy operations. A
 `std::unique_ptr` inside `ScriptComponent` deletes `Entity`'s implicit copy constructor and
 assignment (and therefore `Scene`'s) the moment `scripts` isn't empty. `Entity` now declares
-an explicit copy constructor/assignment (`core/scene.cpp`) that copies every other field
+an explicit copy constructor/assignment (`core/scene/scene.cpp`) that copies every other field
 normally and deep-clones `scripts` by calling `CreateScript(name)`, then round-trips that one
 script's own `Save`/`Load` through an in-memory string stream. It never touches the
 `Renderer`, so mesh/model handles copy as plain IDs with no GPU re-upload. Move stays
@@ -683,7 +746,8 @@ body); collider **and** body is a dynamic/kinematic mover, the same split Unity'
 `Collider`/`Rigidbody` and Godot's `CollisionShape`/`RigidBody` both use. See "The physics
 abstraction layer" above for `BodyHandle`/`BodyDesc`/`PhysicsWorld` themselves.
 
-`BuildPhysicsWorld(physicsWorld, scene)` (`main.cpp`) is pure derived state, rebuilt from
+`BuildPhysicsWorld(physicsWorld, scene)` (`app/physics_glue.cpp`, called from
+`ui/panels/playback_panel.cpp` on Play/Step) is pure derived state, rebuilt from
 scratch every time Play (or Step-from-Editing) begins: `Clear()`s the world, then for each
 entity with a `ColliderComponent`, synthesizes an implicit static `RigidBodyComponent` if
 none was authored, and calls `CreateBody` seeded from the entity's current world pose. This
@@ -702,7 +766,7 @@ abstraction layer, through a `Renderer&`.
 
 ### Editor camera
 
-`core/camera.h` exposes free functions (`CameraOrbit`, `CameraPan`, `CameraZoom`, `CameraFly`,
+`core/camera/camera.h` exposes free functions (`CameraOrbit`, `CameraPan`, `CameraZoom`, `CameraFly`,
 `CameraFocus`) that mutate a `toon::Camera` in place. `camera.cpp` derives the camera's
 world-space basis from `RotationX(-pitch) * RotationY(-yaw)` — the same Diligent matrices
 `Renderer::SetCamera` builds its view matrix from — so the controls agree exactly with what the
@@ -710,7 +774,7 @@ renderer actually does with yaw/pitch, rather than a hand-guessed set of axis si
 
 ### Procedural primitives
 
-`core/primitives.h` generates `MeshData` (a plain vertex + index array) for a sphere, cube,
+`core/rendering/primitives.h` generates `MeshData` (a plain vertex + index array) for a sphere, cube,
 torus, or ground plane, all wound counter-clockwise as seen from outside — matching the fill
 pass's back-face culling and the outline pass's front-face culling. Each primitive also carries
 a `PrimitiveDesc` (kind + generation parameters), which is what lets the serializer regenerate a
@@ -718,7 +782,7 @@ procedural mesh on load instead of needing a source file.
 
 ### Serialization
 
-`core/serializer.h`'s `SaveScene`/`LoadScene` read and write a human-readable, line-based
+`core/scene/serializer.h`'s `SaveScene`/`LoadScene` read and write a human-readable, line-based
 `.scene` text file. `LoadScene` parses into a side buffer and only swaps it into the caller's
 `Scene`/`Camera` on full success, so a malformed file leaves the caller untouched. A procedural
 entity's mesh is rebuilt via `renderer.CreateMesh(MakePrimitiveMesh(desc))`; a model entity's is
@@ -753,20 +817,24 @@ Layered, GLFW-based, and Diligent-free:
 
 ### Asset browser
 
-`ui/file_browser.h`'s `FileBrowser` draws the "Asset Browser" panel: a breadcrumb bar, a
+`ui/panels/file_browser.h`'s `FileBrowser` draws the "Asset Browser" panel: a breadcrumb bar, a
 sortable file table, and an image preview pane, rooted at `assets/` (`TOON_ASSETS_DIR`). It's
 passive beyond navigation — the one active behavior is returning the path of a file the user
-double-clicked this frame; it has no notion of what a `.scene` file means, so `main.cpp` decides
-that. `ui/thumbnail_cache.h`'s `ThumbnailCache` decodes an image to a texture once per path via
+double-clicked this frame; it has no notion of what a `.scene` file means, so `main.cpp`'s
+loop decides that, routing an activated `.scene` path through `app/scene_ops.h`'s
+`LoadSceneInto` — the same function the File menu's "Open Scene..." command
+(`ui/panels/menu_bar.cpp`) calls. `ui/thumbnail_cache.h`'s `ThumbnailCache` decodes an image to a texture once per path via
 `Renderer::LoadTexture`, and remembers failures too, so a bad file is only ever attempted once.
 
 ### Play / Pause / Step
 
-`EditorMode` (`main.cpp`, anonymous namespace, alongside `Theme`) is `Editing`, `Playing`, or
-`Paused`, driving the fixed-timestep gating described in "The frame loop" above. A "Playback"
-panel (Play/Pause toggle, Step, Stop, a `Mode: EDITING/PLAYING/PAUSED` status label) docks as a
-thin strip at the top of the main dockspace, one more `DockBuilderSplitNode` alongside the
-existing panel splits, not a new positioning mechanism.
+`EditorMode` (`app/editor_state.h`) is `Editing`, `Playing`, or `Paused`, driving the
+fixed-timestep gating described in "The frame loop" above. A "Playback" panel
+(`ui/panels/playback_panel.cpp`: a Play/Pause toggle, Step, Stop — no separate text status
+readout, since the Play/Pause button's own icon plus Step/Stop's enabled state already tell
+the whole story) docks as a thin strip at the top of the main dockspace
+(`ui/panels/dockspace.cpp`), one more `DockBuilderSplitNode` alongside the existing panel
+splits, not a new positioning mechanism.
 
 Pressing Play snapshots `scene` into a `sceneBackup` (a `Scene` copy: a `vector<Entity>` plus
 an `int`; mesh/model copy as plain handles, never touching the `Renderer` — see "The scene
@@ -798,13 +866,14 @@ motion-history chain" below).
 | Meshes | `Renderer::Impl::meshes` (`vector<GpuMesh>`) | 1-based (`MeshHandle N` → `meshes[N-1]`); freed at `Shutdown` |
 | glTF models | `Renderer::Impl::models` (`vector<unique_ptr<GLTF::Model>>`) | 1-based; each `GLTF::Model` owns its own GPU buffers + textures |
 | Editor textures | `Renderer::Impl::textures` (`vector<RefCntAutoPtr<ITexture>>`) | 1-based; `DestroyTexture` nulls the slot (no compaction, handles stay stable) |
-| Entities | `Scene::entities`, owned by the app (`main.cpp`) | Entities hold only handles + a `Material` + cached matrices, never GPU resources |
+| Entities | `Scene::entities`, owned by the app (`EditorState::scene`) | Entities hold only handles + a `Material` + cached matrices, never GPU resources |
 
 Because entities never hold GPU resources directly, `DestroyScene` is just `entities.clear()` —
 the actual meshes/models/textures belong to the `Renderer` and are released at its own
 `Shutdown`.
 
-Materials are per-entity (`Entity::material`), but each frame `main.cpp` overlays the shared
+Materials are per-entity (`Entity::material`), but each frame `app/editor_render.cpp`'s
+`RenderFrame` overlays the shared
 `style` (`bands`, `ambient`) and `outlineWidth * outlineScale` onto a **per-draw copy**, so
 scene-wide look controls and per-object color/outline coexist without the entity's own stored
 material being overwritten. The single directional light is separate scene state, sourced from
@@ -842,7 +911,7 @@ in the same order every frame:
    extrusion direction itself is rotation-dependent and reusing it would under-report motion
    during rotation. The pixel shader writes `Motion = ComputeMotion(CurrClip, PrevClip) =
    currNDC - prevNDC` into the RG16F motion target.
-6. `main.cpp` sets `PostParams::suppressTemporalHistory` whenever a gizmo is active, an ImGui
+6. `app/editor_tick.cpp`'s `TickEditor` sets `PostParams::suppressTemporalHistory` whenever a gizmo is active, an ImGui
    item is being edited, the Run Scripts toggle is on, or a Stop-restore/Step just happened
    (see "The editor layer" -> "Play / Pause / Step" above -- both are a one-frame pose jump,
    not smooth motion). `RunPostFX` then forces
@@ -894,7 +963,7 @@ Linked Diligent libraries and what each is for:
 | `DiligentFX` | `PostFXContext`, Bloom, SSAO, DoF, TAA, SSR, and `ShadowMapManager` |
 | `glfw` | Windowing + raw input |
 
-`core/renderer.cpp` also includes two of DiligentFX's C++-side shader-structure headers
+`core/rendering/renderer.cpp` also includes two of DiligentFX's C++-side shader-structure headers
 (`BasicStructures.fxh` → `CameraAttribs`, `BloomStructures.fxh` → `BloomAttribs`) directly,
 inside `namespace Diligent::HLSL`, to build the host-side structs `PostFXContext`/`Bloom`
 expect — this is why `CMakeLists.txt` adds `external/DiligentFX/Shaders/Common/public` to the
@@ -909,21 +978,21 @@ needed, wired into `Init`'s setup sequence), and add whatever new HLSL it needs 
 `assets/shaders/`. The same shape applies to the roadmap's remaining M3 items: grid + sky
 gradient is a new full-screen shader pass (like the tone-map resolve); 2D/sprites need a new
 vertex format and a blended draw path; skeletal animation needs a bone/skinning vertex format
-and per-frame joint-matrix upload, alongside a new animation entity component in `core/scene.h`.
+and per-frame joint-matrix upload, alongside a new animation entity component in `core/scene/scene.h`.
 
 Gameplay systems (the roadmap's M1 and M2.1, now shipped, and M2's remaining audio item) are
 a different shape: they're Diligent-free by default, since nothing about a fixed-timestep
 loop, an entity-behavior/update layer, physics, or audio needs to touch the renderer
 directly. The first of M1, the fixed-timestep sim loop (see "The frame loop" above), shipped
-as a restructuring of `main.cpp`'s existing loop plus two new `core/scene.h` members
+as a restructuring of `main.cpp`'s existing loop plus two new `core/scene/scene.h` members
 (`prevSimTransform`, `SnapshotSimState`), not a new `core/` module: a scoped choice for that
 item, not a pattern the next one had to follow. The second, the entity behavior system (M1.3,
 see "The scene model" -> "Scripts" above), landed close to what this section used to predict:
 an `Update`-style hook (`Script::OnUpdate`) called inside the fixed-step loop, before
 `UpdateWorldTransforms`, right where the demo's spin used to advance inline, inheriting the
 `EditorMode` gate for free. It did *not* stay a two-member addition, though. An open, growing
-subsystem, and the landing spot for a future Lua bridge, got its own module (`core/script.h`
-plus `core/scripts/`) rather than folding into `scene.cpp`.
+subsystem, and the landing spot for a future Lua bridge, got its own module (`core/scene/script.h`
+plus `core/scene/scripts/`) rather than folding into `scene.cpp`.
 
 The third, physics + collision (M2.1, see "The physics abstraction layer" and "The scene
 model" -> "Physics components" above), also got its own module and landed close to this

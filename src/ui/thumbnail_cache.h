@@ -7,7 +7,7 @@
 //  from ToonEngineOld/src/ui/thumbnail_cache.*, adapted to the current PIMPL Renderer
 //  seam (the old one called free functions: LoadTexture/DestroyTexture/GetTextureNativeID).
 //============================================================================
-#include "core/renderer.h" // Renderer, TextureHandle
+#include "core/rendering/renderer.h" // Renderer, TextureHandle
 
 #include <string>
 #include <unordered_map>
@@ -17,7 +17,7 @@ namespace toon {
 
     // Caches decoded image textures by file path, for the asset browser's inline icons and
     // preview pane. Doesn't own a Renderer — every call takes one, so lifetime stays with the
-    // caller (the same pattern core/serializer.h's LoadScene uses).
+    // caller (the same pattern core/scene/serializer.h's LoadScene uses).
     struct ThumbnailCache {
         // Returns the cached handle for `path`, decoding it via renderer.LoadTexture on first
         // request. Remembers failures too, so a bad file is only ever attempted once.

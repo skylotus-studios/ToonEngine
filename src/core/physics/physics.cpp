@@ -9,7 +9,7 @@
 //  than most published tutorials (it ships hair/vehicle/soft-body modules ToonEngine
 //  doesn't use — see CMakeLists.txt's JPH_USE_* trimming).
 //============================================================================
-#include "core/physics.h"
+#include "core/physics/physics.h"
 
 // Jolt headers must not be included before Jolt.h (its own house rule).
 #include <Jolt/Jolt.h>

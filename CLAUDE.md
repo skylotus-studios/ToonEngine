@@ -89,26 +89,23 @@ Presets build into `build/<preset>/` with the engine DLLs copied next to the exe
 
 ```
 src/
-  main.cpp                Entry point: GLFW window + game loop; builds the scene, drives Renderer (no Diligent headers)
+  main.cpp                Entry point: window + editor loop glue (calls into app/ + ui/panels/); no Diligent headers
+  app/                    Editor state (plain EditorState struct) + init/tick/render/physics-glue/scene-ops free functions
   core/
-    renderer.h            The abstraction layer: opaque handles + scene types (Vertex/Camera/Material/Transform/PostParams) + data-encapsulated Renderer
-    renderer.cpp          Diligent (Vulkan) backend behind the abstraction layer: toon PSOs/shaders/mesh buffers + DiligentFX post chain + ImGui-Diligent glue
-    math.h                Minimal Diligent-free vector/matrix types for the abstraction layer's public API
-    primitives.{h,cpp}    Procedural CPU mesh generators (sphere/cube/torus/plane) -> toon::MeshData
-    scene.{h,cpp}         Entity-tree scene graph: hierarchy, world-transform composition, editor mutations
-    script.{h,cpp}        Native gameplay scripts: per-entity Update hooks + name->factory registry
-    scripts/spin_script.{h,cpp}  First concrete Script (replaces the old hardcoded spin)
-    physics.{h,cpp}       Physics abstraction layer: opaque BodyHandle + data-encapsulated PhysicsWorld (Jolt Physics), collider wireframe geometry
-    camera.{h,cpp}        Editor camera controls: orbit/pan/zoom/fly/focus
+    math.h                 Minimal Diligent-free vector/matrix types for the abstraction layer's public API
+    rendering/             The abstraction layer + its Diligent (Vulkan) backend, plus procedural mesh generators
+    scene/                 Entity-tree scene graph, native scripts (+ scripts/), .scene serialization
+    physics/               Physics abstraction layer: opaque BodyHandle + data-encapsulated PhysicsWorld (Jolt)
+    camera/                Editor camera controls: orbit/pan/zoom/fly/focus
     input/                 GLFW device/gamepad polling, action maps + rebinding (assets/input.json)
-    serializer.{h,cpp}    Scene save/load — entity/camera state to a text .scene file
   ui/
-    file_browser.{h,cpp}  "Asset Browser" panel: breadcrumb nav, sortable file table, preview pane
     thumbnail_cache.{h,cpp}  Path -> texture cache for the browser's inline icons/preview
+    panels/                 Every ImGui editor panel (menu bar, dockspace, Playback, Objects, Properties,
+                             gizmo overlay, Settings, themes, Asset Browser) as DrawXPanel(EditorState&)
 assets/shaders/           HLSL: toon_common.hlsli + toon_fill/toon_outline + model_fill/model_outline + tonemap.hlsl + wireframe.hlsl
 assets/models/            glTF/GLB/FBX test models (helmet/fox/dragon) — Git LFS
 assets/fonts/             UI fonts (BaiJamjuree, OpenSans) for the editor overlay
-assets/scenes/            Saved .scene text files (core/serializer.h); created on first Save
+assets/scenes/            Saved .scene text files (core/scene/serializer.h); created on first Save
 external/                 Git submodules (see .gitmodules): DiligentCore/Tools/FX, glfw, ImGuizmo, imgui, JoltPhysics
 CMakeLists.txt            add_subdirectory the submodules; disables unused Diligent backends
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
@@ -125,20 +122,20 @@ docs/md-style-guide.md       Prose/writing style (no puffery, no em-dash spam, n
 
 ## The renderer abstraction layer (load-bearing rule)
 
-**Diligent stays out of the app/game layer, not out of the engine.** `core/renderer.h`
+**Diligent stays out of the app/game layer, not out of the engine.** `core/rendering/renderer.h`
 exposes only opaque handles (`TextureHandle`/`BufferHandle`/`ShaderHandle`/`PipelineHandle`)
 and a data-encapsulated `Renderer`; Diligent headers and `Diligent::` types live in the engine's
-**implementation** TUs (`core/renderer.cpp` today; Diligent-backed systems such as the
+**implementation** TUs (`core/rendering/renderer.cpp` today; Diligent-backed systems such as the
 asset loader as the engine grows — per the guiding principle, built directly on Diligent's
-modules). The invariant is that the **app/game layer (`main.cpp`) and the public headers
-stay Diligent-free and backend-agnostic** — not that a single file owns all Diligent.
-`main.cpp` just calls `Renderer::Init / BeginFrame / DrawMesh / EndScene / EndFrame /
-Resize / InitUI / BeginUI / EndUI`. A backend swap or console port then swaps those
-implementation TUs, not a rewrite.
+modules). The invariant is that the **app/game layer (`main.cpp`, `src/app/`, `ui/panels/`)
+and the public headers stay Diligent-free and backend-agnostic** — not that a single file
+owns all Diligent. The app layer just calls `Renderer::Init / BeginFrame / DrawMesh /
+EndScene / EndFrame / Resize / InitUI / BeginUI / EndUI`. A backend swap or console port
+then swaps those implementation TUs, not a rewrite.
 
 **Dear ImGui is exempt** — it's a plain UI library; engine/game code may `#include
-"imgui.h"` and call `ImGui::` directly (as `main.cpp` does). Only its Diligent render
-backend stays in `core/renderer.cpp`.
+"imgui.h"` and call `ImGui::` directly (as `ui/panels/*.cpp` does). Only its Diligent render
+backend stays in `core/rendering/renderer.cpp`.
 
 **Toon draw (`DrawMesh`)** runs two passes over one mesh sharing a dynamic constant
 buffer: the **outline** pass (inverted hull — extrude along the normal, cull front)

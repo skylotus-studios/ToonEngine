@@ -95,19 +95,33 @@ add_subdirectory(external/JoltPhysics/Build)
 # (external/imgui, docking branch), not DiligentTools' vendored one.
 add_executable(ToonEngine
     src/main.cpp
-    src/core/renderer.cpp
-    src/core/primitives.cpp
-    src/core/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
-    src/core/physics.cpp        # Jolt Physics backend behind the physics seam (M2.1)
-    src/core/script.cpp         # native script registry + per-tick dispatch (M1.3)
-    src/core/scripts/spin_script.cpp   # first concrete Script (replaces the old spin block)
-    src/core/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
+    src/core/rendering/renderer.cpp
+    src/core/rendering/primitives.cpp
+    src/core/scene/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
+    src/core/physics/physics.cpp        # Jolt Physics backend behind the physics seam (M2.1)
+    src/core/scene/script.cpp         # native script registry + per-tick dispatch (M1.3)
+    src/core/scene/scripts/spin_script.cpp   # first concrete Script (replaces the old spin block)
+    src/core/camera/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
     src/core/input/input_system.cpp   # GLFW device polling + capture gate + callback wiring
     src/core/input/action_map.cpp     # named actions/axes, context stack, default bindings
     src/core/input/binding_io.cpp     # JSON save/load for bindings (assets/input.json)
-    src/core/serializer.cpp     # scene save/load (.scene text files)
+    src/core/scene/serializer.cpp     # scene save/load (.scene text files)
+    src/app/editor_state.h       # (header-only EditorState struct -- listed for IDE visibility)
+    src/app/editor_init.cpp      # one-time editor setup + the demo scene
+    src/app/editor_tick.cpp      # per-frame input, fixed-timestep sim, camera nav
+    src/app/editor_render.cpp    # shadow pass, main draw, collider debug overlay
+    src/app/physics_glue.cpp     # collider-extent scaling + physics-world (re)construction
+    src/app/scene_ops.cpp        # scene load/save/new (File menu + asset-browser double-click)
     src/ui/thumbnail_cache.cpp  # path -> texture cache (asset browser icons/preview)
-    src/ui/file_browser.cpp     # "Asset Browser" editor panel
+    src/ui/panels/file_browser.cpp     # "Asset Browser" editor panel
+    src/ui/panels/themes.cpp    # editor color themes (Amber Yellow / Gruvbox Hard / Gray Stone)
+    src/ui/panels/menu_bar.cpp      # File / Edit / Tools / View / Help + their modals
+    src/ui/panels/dockspace.cpp     # full-window dockspace + one-time default panel layout
+    src/ui/panels/playback_panel.cpp    # Play / Pause / Step / Stop
+    src/ui/panels/objects_panel.cpp     # "Objects" hierarchy panel
+    src/ui/panels/properties_panel.cpp  # "Properties" inspector
+    src/ui/panels/gizmo_overlay.cpp     # gizmo hotkeys + the ImGuizmo transform overlay
+    src/ui/panels/settings_panel.cpp    # "Settings" panel (shading/camera/physics/post-fx)
     ${DILIGENT_DEAR_IMGUI_PATH}/backends/imgui_impl_glfw.cpp
     external/ImGuizmo/src/ImGuizmo.cpp   # editor transform gizmos (compiled against Diligent's imgui)
 )

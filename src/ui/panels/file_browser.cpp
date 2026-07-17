@@ -1,9 +1,9 @@
 //============================================================================
-//  ui/file_browser.cpp — see file_browser.h.
+//  ui/panels/file_browser.cpp — see file_browser.h.
 //============================================================================
-#include "ui/file_browser.h"
+#include "ui/panels/file_browser.h"
 
-#include "imgui.h" // ImGui is seam-exempt (see CLAUDE.md) — UI code may call it directly
+#include "imgui.h"             // ImGui is seam-exempt (see CLAUDE.md) — UI code may call it directly
 #include "IconsFontAwesome6.h" // ICON_FA_* glyphs, merged into the UI font in main.cpp
 
 #include <algorithm>
@@ -61,67 +61,71 @@ namespace toon {
             std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
             return buf;
         }
-    } // namespace
 
-    // --- Scanning -----------------------------------------------------------------
+        // --- Scanning -----------------------------------------------------------------
 
-    void FileBrowser::Init(const char *rootDir) {
-        root = rootDir;
-        currentDir = root;
-        needsRefresh = true;
-    }
-
-    void FileBrowser::Refresh() {
-        entries.clear();
-        selectedIdx = -1;
-
-        std::error_code ec;
-        for (const auto &it : fs::directory_iterator(currentDir, ec)) {
-            // No .gitignore filter here (unlike the ToonEngineOld reference) — rooted at assets/,
-            // there's nothing under it that needs hiding besides stray dotfiles.
-            const std::string name = it.path().filename().string();
-            if (!name.empty() && name[0] == '.') { continue; }
-
-            Entry e;
-            e.name = name;
-            e.fullPath = it.path();
-            e.isDirectory = it.is_directory(ec);
-            e.extension = it.path().extension().string();
-            std::transform(e.extension.begin(), e.extension.end(), e.extension.begin(), ::tolower);
-            e.lastWrite = fs::last_write_time(it.path(), ec);
-            if (!e.isDirectory) { e.size = fs::file_size(it.path(), ec); }
-            entries.push_back(std::move(e));
+        void Sort(FileBrowser &browser) {
+            std::sort(
+                browser.entries.begin(), browser.entries.end(),
+                [&browser](const FileBrowserEntry &a, const FileBrowserEntry &b) {
+                    if (a.isDirectory != b.isDirectory) {
+                        return a.isDirectory > b.isDirectory; // folders first
+                    }
+                    switch (browser.sortColumn) {
+                        case 1: // Modified
+                            return browser.sortAscending ? (a.lastWrite < b.lastWrite) : (a.lastWrite > b.lastWrite);
+                        case 2: // Size
+                            return browser.sortAscending ? (a.size < b.size) : (a.size > b.size);
+                        case 3: // Type
+                            return browser.sortAscending ? (a.extension < b.extension) : (a.extension > b.extension);
+                        default: // Name
+                            return browser.sortAscending ? (a.name < b.name) : (a.name > b.name);
+                    }
+                });
         }
 
-        needsRefresh = false;
-        Sort();
-    }
+        void Refresh(FileBrowser &browser) {
+            browser.entries.clear();
+            browser.selectedIdx = -1;
 
-    void FileBrowser::Sort() {
-        std::sort(entries.begin(), entries.end(), [this](const Entry &a, const Entry &b) {
-            if (a.isDirectory != b.isDirectory) { return a.isDirectory > b.isDirectory; } // folders first
-            switch (sortColumn) {
-                case 1: // Modified
-                    return sortAscending ? (a.lastWrite < b.lastWrite) : (a.lastWrite > b.lastWrite);
-                case 2: // Size
-                    return sortAscending ? (a.size < b.size) : (a.size > b.size);
-                case 3: // Type
-                    return sortAscending ? (a.extension < b.extension) : (a.extension > b.extension);
-                default: // Name
-                    return sortAscending ? (a.name < b.name) : (a.name > b.name);
+            std::error_code ec;
+            for (const auto &it : fs::directory_iterator(browser.currentDir, ec)) {
+                // No .gitignore filter here (unlike the ToonEngineOld reference) — rooted at assets/,
+                // there's nothing under it that needs hiding besides stray dotfiles.
+                const std::string name = it.path().filename().string();
+                if (!name.empty() && name[0] == '.') { continue; }
+
+                FileBrowserEntry e;
+                e.name = name;
+                e.fullPath = it.path();
+                e.isDirectory = it.is_directory(ec);
+                e.extension = it.path().extension().string();
+                std::transform(e.extension.begin(), e.extension.end(), e.extension.begin(), ::tolower);
+                e.lastWrite = fs::last_write_time(it.path(), ec);
+                if (!e.isDirectory) { e.size = fs::file_size(it.path(), ec); }
+                browser.entries.push_back(std::move(e));
             }
-        });
-    }
 
-    void FileBrowser::NavigateTo(const fs::path &dir) {
-        currentDir = dir;
-        needsRefresh = true;
+            browser.needsRefresh = false;
+            Sort(browser);
+        }
+
+        void NavigateTo(FileBrowser &browser, const fs::path &dir) {
+            browser.currentDir = dir;
+            browser.needsRefresh = true;
+        }
+    } // namespace
+
+    void InitFileBrowser(FileBrowser &browser, const char *rootDir) {
+        browser.root = rootDir;
+        browser.currentDir = browser.root;
+        browser.needsRefresh = true;
     }
 
     // --- Draw -----------------------------------------------------------------
 
-    std::string FileBrowser::Render(Renderer &renderer) {
-        if (needsRefresh) { Refresh(); }
+    std::string RenderFileBrowser(FileBrowser &browser, Renderer &renderer) {
+        if (browser.needsRefresh) { Refresh(browser); }
 
         std::string activated; // a file (never a directory) double-clicked this frame
 
@@ -131,21 +135,21 @@ namespace toon {
 
         // Breadcrumb bar: "«" jumps to root, then one button per path segment below it.
         {
-            const auto rel = fs::relative(currentDir, root);
+            const auto rel = fs::relative(browser.currentDir, browser.root);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 4.0f));
-            if (ImGui::Button(ICON_FA_HOUSE "##nav_root")) { NavigateTo(root); }
+            if (ImGui::Button(ICON_FA_HOUSE "##nav_root")) { NavigateTo(browser, browser.root); }
             ImGui::PopStyleVar();
             ImGui::SameLine();
 
-            fs::path accum = root;
-            ImGui::Text("%s", root.filename().string().c_str());
+            fs::path accum = browser.root;
+            ImGui::Text("%s", browser.root.filename().string().c_str());
             for (const auto &seg : rel) {
                 if (seg == ".") { continue; }
                 accum /= seg;
                 ImGui::SameLine();
                 ImGui::Text("/");
                 ImGui::SameLine();
-                if (ImGui::SmallButton(seg.string().c_str())) { NavigateTo(accum); }
+                if (ImGui::SmallButton(seg.string().c_str())) { NavigateTo(browser, accum); }
             }
         }
         ImGui::Separator();
@@ -180,15 +184,15 @@ namespace toon {
 
             if (ImGuiTableSortSpecs *specs = ImGui::TableGetSortSpecs()) {
                 if (specs->SpecsDirty && specs->SpecsCount > 0) {
-                    sortColumn = static_cast<int>(specs->Specs[0].ColumnUserID);
-                    sortAscending = (specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending);
-                    Sort();
+                    browser.sortColumn = static_cast<int>(specs->Specs[0].ColumnUserID);
+                    browser.sortAscending = (specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending);
+                    Sort(browser);
                     specs->SpecsDirty = false;
                 }
             }
 
-            for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
-                const Entry &e = entries[i];
+            for (int i = 0; i < static_cast<int>(browser.entries.size()); ++i) {
+                const FileBrowserEntry &e = browser.entries[i];
                 ImGui::PushID(i);
                 ImGui::TableNextRow();
 
@@ -206,7 +210,7 @@ namespace toon {
                 if (e.isDirectory) {
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), ICON_FA_FOLDER);
                 } else if (ThumbnailCache::IsImageFile(e.extension)) {
-                    if (const TextureHandle th = thumbnails.Get(renderer, e.fullPath.string());
+                    if (const TextureHandle th = browser.thumbnails.Get(renderer, e.fullPath.string());
                         th != TextureHandle::Invalid) {
                         ImGui::SetCursorPosY(cursor.y + padY);
                         // Default UVs (0,0)-(1,1): Diligent/Vulkan decodes images top-origin, unlike
@@ -224,13 +228,13 @@ namespace toon {
                 ImGui::SameLine();
                 ImGui::SetCursorPosY(cursor.y);
 
-                const bool selected = (selectedIdx == i);
+                const bool selected = (browser.selectedIdx == i);
                 if (ImGui::Selectable(e.name.c_str(), selected,
                                       ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
-                    selectedIdx = i;
+                    browser.selectedIdx = i;
                     if (ImGui::IsMouseDoubleClicked(0)) {
                         if (e.isDirectory) {
-                            NavigateTo(e.fullPath);
+                            NavigateTo(browser, e.fullPath);
                         } else {
                             activated = e.fullPath.string();
                         }
@@ -269,13 +273,13 @@ namespace toon {
         ImGui::TableNextColumn();
         ImGui::BeginChild("##previewchild", ImVec2(0, 0));
 
-        if (selectedIdx >= 0 && selectedIdx < static_cast<int>(entries.size())) {
-            const Entry &sel = entries[selectedIdx];
+        if (browser.selectedIdx >= 0 && browser.selectedIdx < static_cast<int>(browser.entries.size())) {
+            const FileBrowserEntry &sel = browser.entries[browser.selectedIdx];
             ImGui::Text("%s", sel.name.c_str());
             ImGui::Separator();
 
             if (!sel.isDirectory && ThumbnailCache::IsImageFile(sel.extension)) {
-                if (const TextureHandle th = thumbnails.Get(renderer, sel.fullPath.string());
+                if (const TextureHandle th = browser.thumbnails.Get(renderer, sel.fullPath.string());
                     th != TextureHandle::Invalid) {
                     uint32_t texW = 0, texH = 0;
                     renderer.GetTextureSize(th, texW, texH);
@@ -304,6 +308,6 @@ namespace toon {
         return activated;
     }
 
-    void FileBrowser::Shutdown(Renderer &renderer) { thumbnails.Clear(renderer); }
+    void ShutdownFileBrowser(FileBrowser &browser, Renderer &renderer) { browser.thumbnails.Clear(renderer); }
 
 } // namespace toon

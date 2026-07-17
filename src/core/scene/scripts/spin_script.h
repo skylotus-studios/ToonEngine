@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  core/scripts/spin_script.h — the first concrete Script: spins an entity's local
+//  core/scene/scripts/spin_script.h — the first concrete Script: spins an entity's local
 //  rotation around a fixed axis at a constant rate.
 //
 //  Ports main.cpp's old hardcoded spin block (the "Spinner" side-list) onto the
@@ -9,20 +9,20 @@
 //  with no side-list bookkeeping.
 //============================================================================
 #include "core/math.h"
-#include "core/script.h"
+#include "core/scene/script.h"
 
 namespace toon {
 
-inline constexpr const char* kSpinScriptName = "Spin";
+    inline constexpr const char *kSpinScriptName = "Spin";
 
-class SpinScript : public Script {
-public:
-    Vec3  axis  = {0.0f, 1.0f, 0.0f};
-    float speed = 0.6f; // radians/sec
+    class SpinScript : public Script {
+    public:
+        Vec3 axis = {0.0f, 1.0f, 0.0f};
+        float speed = 0.6f; // radians/sec
 
-    void OnUpdate(Entity& self, Scene& scene, float dt) override;
-    void Save(std::ostream& out) const override;
-    void Load(std::istream& in) override;
-};
+        void OnUpdate(Entity &self, Scene &scene, float dt) override;
+        void Save(std::ostream &out) const override;
+        void Load(std::istream &in) override;
+    };
 
 } // namespace toon

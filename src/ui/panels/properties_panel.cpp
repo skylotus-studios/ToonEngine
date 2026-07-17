@@ -1,0 +1,191 @@
+//============================================================================
+//  ui/panels/properties_panel.cpp — see properties_panel.h.
+//============================================================================
+#include "ui/panels/properties_panel.h"
+
+#include "app/editor_state.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <string>
+#include <vector>
+
+namespace toon {
+
+    void DrawPropertiesPanel(EditorState &state) {
+        Scene &scene = state.scene;
+
+        // inspectorOpen captures the pre-Begin value: see objects_panel.cpp's hierarchyOpen
+        // comment for why.
+        const bool inspectorOpen = state.showInspector;
+        if (inspectorOpen && ImGui::Begin("Properties", &state.showInspector)) {
+            if (scene.selected < 0 || scene.selected >= static_cast<int>(scene.entities.size())) {
+                ImGui::TextDisabled("Select an entity in the hierarchy.");
+            } else {
+                Entity &e = scene.entities[scene.selected];
+                const bool isRoot = (e.parent == -1);
+
+                char nameBuf[128];
+                std::snprintf(nameBuf, sizeof(nameBuf), "%s", e.name.c_str());
+                if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) { e.name = nameBuf; }
+
+                // Transform — rotation shown in DEGREES for editing, stored as a quaternion
+                // (core/rendering/renderer.h's Transform::rotation); QuatToEuler/QuatFromEuler
+                // (core/math.h) convert at this widget boundary only. Euler is re-derived
+                // from the live quaternion every frame rather than cached, so a value can
+                // display renormalized (e.g. 190 shown as -170) and, near gimbal lock, the
+                // other two axes can jump when one is edited — the same trade-off Unity's
+                // inspector accepts without its extra hidden-Euler-cache bookkeeping.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Transform");
+                    Transform &t = *e.transform;
+                    constexpr float kRad2Deg = 57.29578f, kDeg2Rad = 0.01745329f;
+                    ImGui::DragFloat3("Position", &t.position.x, 0.01f);
+                    const Vec3 eulerRad = QuatToEuler(t.rotation);
+                    float deg[3] = {eulerRad.x * kRad2Deg, eulerRad.y * kRad2Deg, eulerRad.z * kRad2Deg};
+                    if (ImGui::DragFloat3("Rotation", deg, 0.5f)) {
+                        t.rotation = QuatFromEuler({deg[0] * kDeg2Rad, deg[1] * kDeg2Rad, deg[2] * kDeg2Rad});
+                    }
+                    ImGui::DragFloat3("Scale", &t.scale.x, 0.01f, 0.001f, 100.0f);
+                } else if (isRoot) {
+                    ImGui::TextDisabled("(scene root — a pure anchor, no transform)");
+                }
+
+                // Material — only for renderables (a mesh or a model).
+                if (e.mesh != MeshHandle::Invalid || e.model != ModelHandle::Invalid) {
+                    ImGui::SeparatorText("Material");
+                    ImGui::ColorEdit3("Base color", &e.material.baseColor.x);
+                    ImGui::ColorEdit3("Outline color", &e.material.outlineColor.x);
+                    ImGui::DragFloat("Outline width", &e.material.outlineWidth, 0.001f, 0.0f, 0.5f, "%.3f");
+                    ImGui::SliderFloat("Roughness", &e.material.roughness, 0.0f, 1.0f);
+                }
+
+                // Light — a true optional component (core/scene/scene.h): Add/Remove it
+                // directly, rather than assuming it's attached in code. Direction isn't a
+                // field here: it comes from the entity's rotation (aim it with the gizmo,
+                // like Material's transform above).
+                if (e.light) {
+                    ImGui::SeparatorText("Light");
+                    if (ImGui::Button("Remove Light")) {
+                        e.light.reset();
+                    } else {
+                        ImGui::ColorEdit3("Color", &e.light->color.x);
+                        ImGui::DragFloat("Intensity", &e.light->intensity, 0.01f, 0.0f, 10.0f, "%.2f");
+                        ImGui::TextDisabled("Aim: rotate this entity (gizmo R).");
+                    }
+                } else {
+                    ImGui::SeparatorText("Light");
+                    if (ImGui::Button("Add Light")) { e.light = LightComponent{}; }
+                }
+
+                // Collider and Rigid Body (M2.1) — two fully independent optional
+                // components (core/scene/scene.h), each Add/Remove-able on its own; neither
+                // gates the other's visibility here, even though a RigidBody only does
+                // anything once the entity also has a Collider (app/physics_glue.cpp's
+                // BuildPhysicsWorld silently skips a body with no collider). Both need a
+                // transform to be placed at, same gate as the Transform section above.
+                // Edits here only take effect on the NEXT Play session -- the physics world
+                // is (re)built once when Play starts, not continuously re-read from these
+                // fields while it's running.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Collider");
+                    if (e.collider) {
+                        if (ImGui::Button("Remove Collider")) {
+                            e.collider.reset();
+                        } else {
+                            const char *kShapeNames[] = {"Box", "Sphere", "Capsule"};
+                            int shapeIdx = static_cast<int>(e.collider->shape);
+                            if (ImGui::Combo("Shape", &shapeIdx, kShapeNames, IM_ARRAYSIZE(kShapeNames))) {
+                                e.collider->shape = static_cast<ColliderShape>(shapeIdx);
+                            }
+                            switch (e.collider->shape) {
+                                case ColliderShape::Box:
+                                    ImGui::DragFloat3("Half-extents", &e.collider->extents.x, 0.01f, 0.001f, 100.0f);
+                                    break;
+                                case ColliderShape::Sphere:
+                                    ImGui::DragFloat("Radius", &e.collider->extents.x, 0.01f, 0.001f, 100.0f);
+                                    break;
+                                case ColliderShape::Capsule:
+                                    ImGui::DragFloat("Half-height", &e.collider->extents.x, 0.01f, 0.001f, 100.0f);
+                                    ImGui::DragFloat("Radius", &e.collider->extents.y, 0.01f, 0.001f, 100.0f);
+                                    break;
+                            }
+                        }
+                    } else {
+                        if (ImGui::Button("Add Collider")) { e.collider = ColliderComponent{}; }
+                    }
+
+                    ImGui::SeparatorText("Rigid Body");
+                    if (e.body) {
+                        if (ImGui::Button("Remove Rigid Body")) {
+                            e.body.reset();
+                        } else {
+                            const char *kTypeNames[] = {"Static", "Dynamic", "Kinematic"};
+                            int typeIdx = static_cast<int>(e.body->type);
+                            if (ImGui::Combo("Type", &typeIdx, kTypeNames, IM_ARRAYSIZE(kTypeNames))) {
+                                e.body->type = static_cast<BodyType>(typeIdx);
+                            }
+                            ImGui::BeginDisabled(e.body->type != BodyType::Dynamic); // ignored otherwise
+                            ImGui::DragFloat("Mass", &e.body->mass, 0.01f, 0.001f, 1000.0f);
+                            ImGui::EndDisabled();
+                            ImGui::DragFloat("Friction", &e.body->friction, 0.01f, 0.0f, 2.0f);
+                            ImGui::DragFloat("Restitution", &e.body->restitution, 0.01f, 0.0f, 1.0f);
+                        }
+                    } else {
+                        if (ImGui::Button("Add Rigid Body")) { e.body = RigidBodyComponent{}; }
+                    }
+                }
+
+                // Scripts (core/scene/script.h) — a vector, not a single optional component:
+                // an entity can carry several independent scripts at once (e.g. a Health
+                // script alongside a PlayerMovement script), so each attached script gets its
+                // own Remove button, and "Add Script" picks a registered type by name (the
+                // same registry CreateScript/serialization use) rather than a single
+                // attach/detach toggle. Editing a script's OWN fields (e.g. SpinScript's
+                // axis/speed) is deliberately not exposed here — that needs Script to grow
+                // its own ImGui-drawing hook (beyond Save/Load), a separate, larger feature
+                // this pass doesn't include.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Scripts");
+
+                    int pendingRemove = -1;
+                    for (int si = 0; si < static_cast<int>(e.scripts.size()); ++si) {
+                        ImGui::PushID(si);
+                        ImGui::TextUnformatted(e.scripts[si].name.c_str());
+                        ImGui::SameLine();
+                        if (ImGui::Button("Remove")) { pendingRemove = si; }
+                        ImGui::PopID();
+                    }
+                    if (pendingRemove >= 0) { e.scripts.erase(e.scripts.begin() + pendingRemove); }
+
+                    const std::vector<std::string> availableScripts = GetRegisteredScriptNames();
+                    if (availableScripts.empty()) {
+                        ImGui::TextDisabled("(no script types registered)");
+                    } else {
+                        static int addScriptTypeIdx = 0;
+                        addScriptTypeIdx = std::min(addScriptTypeIdx, static_cast<int>(availableScripts.size()) - 1);
+                        if (ImGui::BeginCombo("##AddScriptType", availableScripts[addScriptTypeIdx].c_str())) {
+                            for (int ti = 0; ti < static_cast<int>(availableScripts.size()); ++ti) {
+                                const bool isSelected = (ti == addScriptTypeIdx);
+                                if (ImGui::Selectable(availableScripts[ti].c_str(), isSelected)) {
+                                    addScriptTypeIdx = ti;
+                                }
+                                if (isSelected) { ImGui::SetItemDefaultFocus(); }
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Add Script")) {
+                            const std::string &typeName = availableScripts[addScriptTypeIdx];
+                            if (auto instance = CreateScript(typeName)) {
+                                e.scripts.push_back({typeName, std::move(instance)});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (inspectorOpen) { ImGui::End(); }
+    }
+
+} // namespace toon

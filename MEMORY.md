@@ -1882,6 +1882,20 @@ RenderDoc/PIX." Given the compile-time cost (see above) and that nothing
 currently uses them, they're disabled by default. Re-enable a specific one
 only when there's a concrete reason (e.g. actually reaching for RenderDoc).
 
+### Data-oriented discipline: plain structs + free functions, switch over virtual dispatch
+
+Extends the reasoning above from the renderer/physics seams specifically to a general
+default, citing Casey Muratori's "clean code, horrible performance" critique: new
+state/logic defaults to a plain struct + free functions, not a class with private
+members, unless the class quarantines a genuine external dependency (as above) or cuts
+real repeated boilerplate. Same logic extends to dispatch: prefer switch/table over
+virtual for a small, fixed, compile-time-known case set, especially
+per-frame/per-object/per-vertex — reserve virtual for a genuine open-ended extension
+point (`Script`, since gameplay behaviors are added outside the engine). Written up in
+full, with in-repo examples (`ColliderShape`'s switches, `Script`'s justified virtuals),
+in docs/cpp-style-guide.md §7; enforced by the `tidy-cpp` skill's architecture-audit
+pass.
+
 ## History
 
 - **2026-07-06** — Pivoted from a from-scratch OpenGL 4.1 engine (see `main`
@@ -2673,3 +2687,18 @@ only when there's a concrete reason (e.g. actually reaching for RenderDoc).
   three Jolt-specific CMake/compile gotchas hit along the way. Docs sync (this section, the
   History entry, CLAUDE.md, `docs/architecture.md`, README.md) folded into the same `tidy-md`
   pass rather than deferred, unlike M1.3's.
+- **2026-07-16** — **`src/` reorganized**: `core/`'s 16 flat files split into subsystem
+  folders (`core/rendering/`, `core/scene/`, `core/physics/`, `core/camera/`; `core/math.h`
+  and `core/input/` stayed put), and `main.cpp`'s ~1600-line `main()` (which had accumulated
+  the whole editor's init/tick/render/UI-panel logic) extracted into `src/app/` (an
+  `EditorState` struct plus `editor_init/tick/render.{h,cpp}`, `physics_glue.{h,cpp}`, and
+  `scene_ops.{h,cpp}` free functions) and `src/ui/panels/` (one file per ImGui panel, each a
+  free function taking `EditorState&`). `main.cpp` is now ~90 lines of pure init/loop glue,
+  with no Diligent header and no direct `ImGui::` calls. `EditorState` is a plain struct, not
+  a class, for the same reason `Scene` is (see "Architecture decisions" -> "Data-oriented
+  discipline" above): nothing here hides a third-party dependency, so a class would have
+  bought nothing but ceremony. Verified via a clean rebuild and a live-window screenshot
+  (every panel plus the demo scene still rendering correctly). CLAUDE.md's Source layout and
+  `docs/architecture.md` were updated to match in the same pass. Comment content in the
+  moved/new files was carried over largely as-is; a separate later pass is intended to
+  rewrite comments so they explain the code without leaning on this session's own history.

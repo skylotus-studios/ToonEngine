@@ -154,7 +154,58 @@ These are correctness/architecture, not taste — don't "clean" them away:
 
 ---
 
-## 7. Cleanup checklist
+## 7. Data-oriented design discipline
+
+Grounded in Casey Muratori's "clean code, horrible performance" critique: most bad code
+comes from glue and infrastructure, not bad algorithms, and reflexive "clean code" rules
+(polymorphism over switch, hide every internal behind a getter, one tiny function per
+step) optimize for unmeasurable ideals instead of anything checkable. Default to
+organizing code around the operation and the concrete data it touches, not around a type
+hierarchy — that's what makes a shared pattern (a lookup table, a merged switch) visible
+in the first place.
+
+- **Plain data + free functions is the default.** A new state/logic grouping is a
+  `struct` with public fields plus free functions taking a reference to it (`Scene` /
+  `core/scene/scene.cpp` is the house shape) — not a class with private members and
+  methods.
+- **A class earns its encapsulation two ways only**: it quarantines a genuine external
+  dependency behind an opaque handle or a data-encapsulated type (`Renderer` hides
+  Diligent, `PhysicsWorld` hides Jolt — see the repo MEMORY.md's "Architecture
+  decisions"), or it removes real, repeated boilerplate. Never "because a class reads
+  cleaner." Every class under `src/` should be able to name one of those two reasons in
+  its lead comment; if it can't, it's a plain-struct-and-free-functions candidate.
+- **Prefer switch/table dispatch over virtual dispatch for a small, fixed,
+  compile-time-known set of cases**, especially in per-frame/per-object/per-vertex code,
+  where an indirect call and the lost inlining cost real time. `core/physics/physics.cpp`'s
+  `CreateBody` and `ColliderWireframe` both switch on `ColliderShape` rather than giving
+  each shape its own `Collider` subclass; that's the house pattern for a closed enum.
+  Reach for virtual dispatch only for a genuinely open-ended extension point: `Script`
+  (`core/scene/script.h`) is the one in this codebase, because new gameplay behaviors are
+  added by whoever's scripting the game, not the engine, and `OnUpdate` runs once per
+  entity per frame, not inside a hot inner loop.
+- **The same enum switched on in more than one place isn't automatically duplication.**
+  `ColliderShape` is switched on in five places (Jolt shape construction, debug wireframe
+  geometry, the inspector, serialization) because each does a different job with the same
+  key type. Forcing those into one lookup table would couple physics, rendering, UI, and
+  serialization for no gain. Only merge switches performing the identical operation twice
+  — that's the duplication worth compressing into a table.
+- **A getter/setter wrapping a plain field, with no invariant to enforce and nothing
+  external to hide, is a §5 violation, not a style nit** — a plain data struct exposes
+  bare fields.
+- **Don't fragment a function into single-purpose pieces on reflex.** Splitting an
+  operation into many tiny named steps can hide that two of them do the same thing to the
+  same shape of data, which is the exact pattern a lookup table or a merged switch would
+  otherwise expose. Size a function around one coherent operation; extract a helper
+  because it's reused or because leaving it inline would obscure that operation's shape,
+  not on a line-count reflex.
+
+This is a set of checkable signals for *this* codebase, not a rule against classes or
+virtual functions on principle. `PhysicsWorld`, `Renderer`, and `Script` all stay exactly
+as they are — each already names its justification.
+
+---
+
+## 8. Cleanup checklist
 
 When tidying a file (or running the `tidy-cpp` skill), walk this list:
 
@@ -165,9 +216,12 @@ When tidying a file (or running the `tidy-cpp` skill), walk this list:
    locals.
 5. Manual alignment only within related blocks; blank lines separate paragraphs.
 6. Naming matches §5; new state lives in the right place (data encapsulation, not globals).
-7. Abstraction layer intact — no Diligent leakage past `renderer.cpp`; header still compiles
+7. Data-oriented discipline (§7): every class names its justification; a small, fixed,
+   compile-time-known dispatch prefers switch/table over virtual; no getter/setter
+   wrapping a bare field with nothing to hide.
+8. Abstraction layer intact — no Diligent leakage past `renderer.cpp`; header still compiles
    Diligent-free.
-8. It still **builds and runs** (`cmake --build --preset windows-debug`, launch it) —
+9. It still **builds and runs** (`cmake --build --preset windows-debug`, launch it) —
    a clean file that doesn't run is not clean.
 
 Keep changes reviewable: tidy in focused passes, don't reorder a whole file and

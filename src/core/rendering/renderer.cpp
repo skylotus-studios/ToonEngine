@@ -4,7 +4,7 @@
 //  Everything Diligent-specific is contained in this translation unit. The
 //  public header (renderer.h) exposes only opaque handles and plain types.
 //============================================================================
-#include "core/renderer.h"
+#include "core/rendering/renderer.h"
 
 // GLFW with native access — extracting the OS window handle is a backend
 // concern, so it lives behind the seam here. main.cpp includes only plain GLFW.
