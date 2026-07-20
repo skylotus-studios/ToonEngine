@@ -104,7 +104,7 @@ cmake --build --preset windows-debug
 ```
 
 The IDE is **CLion**. See [docs/clion-setup-windows.md](docs/clion-setup-windows.md) for
-one-time toolchain and preset setup (Linux and macOS setup docs also exist).
+one-time toolchain and preset setup.
 
 ## Roadmap
 
