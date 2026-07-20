@@ -32,9 +32,8 @@ Thumbs.db
 # Local-only Claude Code permission state -- machine-specific, never shared.
 .claude/settings.local.json
 
-# This is the public branch: the AI-assisted dev workflow used on `develop` (memory,
-# skills, style guides, formatting config) is intentionally not published here. If any
-# of these ever reappear in a working tree, don't let them get committed to main.
+# AI-assisted dev workflow: memory, skills, and house-style config. Kept locally on
+# every branch (never deleted) but never pushed to GitHub on any branch.
 /CLAUDE.md
 /MEMORY.md
 /ARCHIVE.md
