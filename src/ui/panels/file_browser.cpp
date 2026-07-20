@@ -209,8 +209,8 @@ namespace toon {
 
                 if (e.isDirectory) {
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), ICON_FA_FOLDER);
-                } else if (ThumbnailCache::IsImageFile(e.extension)) {
-                    if (const TextureHandle th = browser.thumbnails.Get(renderer, e.fullPath.string());
+                } else if (IsImageFile(e.extension)) {
+                    if (const TextureHandle th = GetThumbnail(browser.thumbnails, renderer, e.fullPath.string());
                         th != TextureHandle::Invalid) {
                         ImGui::SetCursorPosY(cursor.y + padY);
                         // Default UVs (0,0)-(1,1): Diligent/Vulkan decodes images top-origin, unlike
@@ -278,8 +278,8 @@ namespace toon {
             ImGui::Text("%s", sel.name.c_str());
             ImGui::Separator();
 
-            if (!sel.isDirectory && ThumbnailCache::IsImageFile(sel.extension)) {
-                if (const TextureHandle th = browser.thumbnails.Get(renderer, sel.fullPath.string());
+            if (!sel.isDirectory && IsImageFile(sel.extension)) {
+                if (const TextureHandle th = GetThumbnail(browser.thumbnails, renderer, sel.fullPath.string());
                     th != TextureHandle::Invalid) {
                     uint32_t texW = 0, texH = 0;
                     renderer.GetTextureSize(th, texW, texH);
@@ -308,6 +308,6 @@ namespace toon {
         return activated;
     }
 
-    void ShutdownFileBrowser(FileBrowser &browser, Renderer &renderer) { browser.thumbnails.Clear(renderer); }
+    void ShutdownFileBrowser(FileBrowser &browser, Renderer &renderer) { ClearThumbnails(browser.thumbnails, renderer); }
 
 } // namespace toon

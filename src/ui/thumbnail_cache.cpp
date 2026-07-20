@@ -11,7 +11,7 @@ namespace toon {
         const char *kImageExtensions[] = {".png", ".jpg", ".jpeg", ".bmp", ".tga"};
     }
 
-    bool ThumbnailCache::IsImageFile(const std::string &ext) {
+    bool IsImageFile(const std::string &ext) {
         std::string lower = ext;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         for (const char *e : kImageExtensions) {
@@ -20,25 +20,25 @@ namespace toon {
         return false;
     }
 
-    TextureHandle ThumbnailCache::Get(Renderer &renderer, const std::string &path) {
-        if (const auto it = cache.find(path); it != cache.end()) { return it->second; }
-        if (failed.count(path) > 0) { return TextureHandle::Invalid; }
+    TextureHandle GetThumbnail(ThumbnailCache &thumbnails, Renderer &renderer, const std::string &path) {
+        if (const auto it = thumbnails.cache.find(path); it != thumbnails.cache.end()) { return it->second; }
+        if (thumbnails.failed.count(path) > 0) { return TextureHandle::Invalid; }
 
         const TextureHandle handle = renderer.LoadTexture(path.c_str());
         if (handle != TextureHandle::Invalid) {
-            cache[path] = handle;
+            thumbnails.cache[path] = handle;
         } else {
-            failed.insert(path);
+            thumbnails.failed.insert(path);
         }
         return handle;
     }
 
-    void ThumbnailCache::Clear(Renderer &renderer) {
-        for (const auto &[path, handle] : cache) {
+    void ClearThumbnails(ThumbnailCache &thumbnails, Renderer &renderer) {
+        for (const auto &[path, handle] : thumbnails.cache) {
             renderer.DestroyTexture(handle);
         }
-        cache.clear();
-        failed.clear();
+        thumbnails.cache.clear();
+        thumbnails.failed.clear();
     }
 
 } // namespace toon
