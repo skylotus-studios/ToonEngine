@@ -3,7 +3,7 @@
 //============================================================================
 #include "ui/panels/file_browser.h"
 
-#include "imgui.h"             // ImGui is seam-exempt (see CLAUDE.md) — UI code may call it directly
+#include "imgui.h"             // ImGui is seam-exempt — UI code may call it directly
 #include "IconsFontAwesome6.h" // ICON_FA_* glyphs, merged into the UI font in main.cpp
 
 #include <algorithm>
@@ -18,7 +18,7 @@ namespace toon {
     namespace {
         // Extensions the current engine's loader pipeline recognizes as a 3D asset (DiligentTools'
         // glTF loader handles .gltf/.glb; .fbx is listed for the icon tag only — the engine has no
-        // FBX loader, see CLAUDE.md's roadmap history — so it still shows up, just not as "load-able").
+        // FBX loader — so it still shows up, just not as "load-able").
         const char *kModelExtensions[] = {".gltf", ".glb", ".fbx"};
 
         bool IsModelFile(const std::string &ext) {

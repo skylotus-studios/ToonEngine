@@ -7,8 +7,7 @@ The build uses **Ninja + clang-cl**, which target the MSVC ABI and therefore nee
 the **Visual Studio Developer environment** on `PATH`: the Windows SDK's `mt.exe` /
 `rc.exe` and the MSVC CRT/import libs. CLion's **Visual Studio toolchain** sets that
 environment up automatically for every configure/build/run, so (unlike a plain shell, which
-needs it imported manually; see MEMORY.md → *Build gotchas*) you never have to think about
-it here.
+needs it imported manually) you never have to think about it here.
 
 ## Prerequisites
 
@@ -73,22 +72,15 @@ CLion auto-generates a run configuration for the `ToonEngine` executable target.
 - **Run** (`Shift+F10`) opens the window; **Debug** (`Shift+F9`) stops on breakpoints
   via the bundled LLDB reading clang-cl's PDBs.
 
-## 5. Code Style
-
-CLion auto-detects the repo-root `.clang-format`. If it doesn't prompt on open,
-enable **Settings → Editor → Code Style → Enable ClangFormat**. *Reformat Code*
-(`Ctrl+Alt+L`) then follows the house style.
-
 ## Troubleshooting
 
 - **`CMAKE_MT-NOTFOUND` at configure**: the VS Developer environment isn't active.
-  Confirm the CMake profile uses the *Visual Studio* toolchain (step 2). See
-  [MEMORY.md](../MEMORY.md) → *Build gotchas*.
+  Confirm the CMake profile uses the *Visual Studio* toolchain (step 2).
 - **`clang-cl` not found**: add LLVM's `bin` to `PATH`, or set the full path in the
   toolchain's compiler fields.
 - **Changed a toolchain/preset and configure is stuck**: *Tools → CMake → Reset
   Cache and Reload Project*. Avoid deleting all of `build/` unless necessary; a full
-  wipe rebuilds Diligent from scratch (minutes). See MEMORY.md.
+  wipe rebuilds Diligent from scratch (minutes).
 
 > `.idea/` (CLion's per-user project state) is git-ignored, and toolchains are a
 > global CLion setting rather than project state, so each machine does step 2 once.

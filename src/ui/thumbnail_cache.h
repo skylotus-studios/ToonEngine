@@ -10,7 +10,7 @@
 //  Plain data + free functions (core/scene/scene.h's Scene shape), not a class: doesn't own
 //  or hide the Renderer it's passed (every call takes one, so lifetime stays with the
 //  caller, same pattern as core/scene/serializer.h's LoadScene) and buys nothing over a
-//  free function taking a ThumbnailCache& (see MEMORY.md's Muratori/plain-data note).
+//  free function taking a ThumbnailCache&.
 //============================================================================
 #include "core/rendering/renderer.h" // Renderer, TextureHandle
 

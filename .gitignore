@@ -23,6 +23,27 @@ Thumbs.db
 *.pdb
 *.ilk
 
+# Stray build/configure logs (redirected `cmake`/`ninja` stdout dropped in the repo
+# root by hand during a debugging session) -- never intentional, never committed.
+/*_log.txt
+/build_*.txt
+/configure_*.txt
+
+# Local-only Claude Code permission state -- machine-specific, never shared.
+.claude/settings.local.json
+
+# This is the public branch: the AI-assisted dev workflow used on `develop` (memory,
+# skills, style guides, formatting config) is intentionally not published here. If any
+# of these ever reappear in a working tree, don't let them get committed to main.
+/CLAUDE.md
+/MEMORY.md
+/ARCHIVE.md
+/.claude/
+/.clang-format
+/.clangd
+/docs/cpp-style-guide.md
+/docs/md-style-guide.md
+
 # NOTE: external/DiligentCore, external/DiligentTools, external/DiligentFX and
 # external/glfw are git submodules — tracked via .gitmodules, not committed as
 # files, so they are not ignored here.

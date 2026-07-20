@@ -2,9 +2,8 @@
 
 One list, start to finish in ranked order. There are no
 calendar dates: an item moves up when something below finishes and frees it to start, or when
-new research (see the `update-roadmap` skill) finds a reason to re-rank it. For the reasoning
-behind already-shipped systems, see [MEMORY.md](../MEMORY.md); for the project's guiding
-principle (build on Diligent, don't reinvent it), see [CLAUDE.md](../CLAUDE.md).
+new research finds a reason to re-rank it. The project's guiding principle is to build on
+Diligent Engine, not reinvent it.
 
 ```
 Shipped  █████████░░░░░░░░░░░░░░░░  9 / 25 items
@@ -126,7 +125,7 @@ flowchart LR
     faster iteration now pays back on all of them.
 11. **Skeletal animation.** Play the fox/dragon clips via an animation entity component.
     The first of three ports from `ToonEngineOld` (the old OpenGL 4.1 engine kept only as a
-    porting reference, see MEMORY.md's "ToonEngineOld: Carry-Over Reference"); its
+    porting reference); its
     `animator.cpp` (keyframe sampling, topological joint-hierarchy evaluation, bind-pose
     fallback for un-animated joints) ports close to line-for-line. Ranked ahead of the two
     items below it because animated characters are the single biggest lever for making the
@@ -151,7 +150,7 @@ flowchart LR
     the camera/cascade frustum before drawing it, instead of today's unconditional
     every-entity loop in both the shadow pass and the main color pass
     (`app/editor_render.cpp`'s `RenderFrame`), a gap deliberately deferred when cascaded
-    shadow maps shipped (see MEMORY.md's "Toon Pipeline" section) and shared, it turns out,
+    shadow maps shipped) and shared, it turns out,
     by the main pass that was never named alongside it. Ranked right after instancing
     because both are scale-driven: cheap and correct to add whenever someone's already
     touching either draw loop, but nothing today measures either as an actual bottleneck at
@@ -227,14 +226,3 @@ Two items from the most recent `update-roadmap` pass cleared the research bar bu
   features (`ISteamUserStats`, the Steam Input API), but common for a solo dev to add
   post-launch rather than at launch, and both are additive once there's actual gameplay to
   hook them into. Both now depend on item 18's Steamworks SDK bootstrap existing first.
-
-## How This List Is Maintained
-
-- `update-roadmap` researches what to add and where to rank it (architectural health, gaps
-  blocking a Steam release, performance), proposes changes to this file, and promotes an
-  item that's actually shipped: migrates its design/rationale into MEMORY.md, moves it into
-  "Shipped," and renumbers the list so it still reads start to finish with no gaps.
-- `plan-roadmap` takes the top not-yet-shipped item, or one the user names directly, and
-  designs it in depth before implementation starts.
-- `tidy-md` keeps this file's prose and cross-references accurate and current, the same
-  treatment as `docs/architecture.md`, but doesn't touch the ranked-list content itself.

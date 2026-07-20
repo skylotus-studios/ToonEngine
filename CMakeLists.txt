@@ -23,9 +23,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # --- Diligent Engine (git submodules under external/) ------------------------
 # Core defaults to building every backend the platform can support (on
 # Windows: D3D11, D3D12, OpenGL, Vulkan) regardless of which ones we actually
-# link — that's most of the compile time. ToonEngine is Vulkan-first (see
-# CLAUDE.md roadmap), so disable the others; re-enable individually later if a
-# specific backend is needed (e.g. D3D12 for RenderDoc/PIX debugging).
+# link — that's most of the compile time. ToonEngine is Vulkan-first, so disable the
+# others; re-enable individually later if a specific backend is needed (e.g. D3D12 for
+# RenderDoc/PIX debugging).
 set(DILIGENT_NO_DIRECT3D11 ON CACHE BOOL "" FORCE)
 set(DILIGENT_NO_DIRECT3D12 ON CACHE BOOL "" FORCE)
 set(DILIGENT_NO_OPENGL     ON CACHE BOOL "" FORCE)
@@ -41,7 +41,7 @@ set(DILIGENT_NO_RADIENT    ON CACHE BOOL "" FORCE)
 # to the docking branch) instead of DiligentTools' vendored non-docking imgui.
 # DiligentTools' ThirdParty/CMakeLists.txt only sets this if we haven't, so this wins;
 # Diligent-Imgui then defines IMGUI_HAS_DOCK and the editor dock space (main.cpp)
-# activates. Durable across clone/submodule-update — see MEMORY.md -> Docking.
+# activates. Durable across clone/submodule-update.
 set(DILIGENT_DEAR_IMGUI_PATH "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui"
     CACHE PATH "Dear ImGui source dir (docking branch)" FORCE)
 

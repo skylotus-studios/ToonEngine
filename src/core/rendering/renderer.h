@@ -146,8 +146,7 @@ namespace toon {
         // exposed to us), so it compounds through up to 16 frames of heavy history trust
         // into a persistent ghost that never resolves on its own. ResetAccumulation is
         // the one sanctioned lever available, so: never accumulate while anything is
-        // continuously moving. See MEMORY.md ("Bugs found dogfooding") for the full
-        // investigation.
+        // continuously moving.
         bool suppressTemporalHistory = false;
 
         // Depth of field (DiligentFX's DepthOfField via PostFXContext). Blurs by depth-

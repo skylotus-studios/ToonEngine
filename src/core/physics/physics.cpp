@@ -30,7 +30,7 @@
 #include <Jolt/RegisterTypes.h>
 
 // Disables the common clang/MSVC warnings Jolt's own headers are known to trigger (see
-// Jolt's Core.h) — the same role CLAUDE.md's DILIGENT_NO_* trimming plays for Diligent.
+// Jolt's Core.h) — the same role the DILIGENT_NO_* trimming plays for Diligent.
 JPH_SUPPRESS_WARNINGS
 
 #include <cmath>

@@ -58,8 +58,7 @@ panels](docs/screenshots/editor-overview.png)
 The SSAO/TAA pipeline had a temporal-reprojection ghosting bug that took six rounds of
 investigation to root-cause: the post-processing context had no real previous-frame depth
 history, and a rotating silhouette's true motion can't be fully captured by a per-vertex
-motion vector. Fixed with a real double-buffered depth history. Full write-up in
-[MEMORY.md](MEMORY.md).
+motion vector. Fixed with a real double-buffered depth history.
 
 ## Tech Stack
 
@@ -85,9 +84,7 @@ behind `core/rendering/renderer.cpp`. The application layer (`main.cpp`, `src/ap
 `EndScene` / `EndFrame`. A backend swap or a console port is scoped to writing another
 `renderer_*.cpp`.
 
-See [docs/architecture.md](docs/architecture.md) for the full architecture writeup,
-[CLAUDE.md](CLAUDE.md) for guiding principles and conventions, and [MEMORY.md](MEMORY.md) for
-the detailed history and reasoning behind the non-obvious decisions.
+See [docs/architecture.md](docs/architecture.md) for the full architecture writeup.
 
 ## Building
 
@@ -112,8 +109,8 @@ one-time toolchain and preset setup (Linux and macOS setup docs also exist).
 ## Roadmap
 
 Windows on Vulkan is currently supported. Linux (Vulkan) and macOS (Vulkan via MoltenVK) are
-planned. See [CLAUDE.md](CLAUDE.md) for what's shipped and
-[docs/roadmap.md](docs/roadmap.md) for the full ranked list of what's next.
+planned. See [docs/roadmap.md](docs/roadmap.md) for what's shipped and for the full ranked
+list of what's next.
 
 ```mermaid
 flowchart LR

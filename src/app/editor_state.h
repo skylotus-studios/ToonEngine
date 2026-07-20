@@ -5,7 +5,7 @@
 //  A plain data bundle (no methods, no hidden internals) that main.cpp's InitEditor/
 //  TickEditor/RenderFrame and every ui/panels/* function share by reference — the same
 //  plain-struct-plus-free-functions shape core/scene/scene.h's Scene already uses, not a class
-//  wrapping this state in private members (see MEMORY.md's Muratori/plain-data note):
+//  wrapping this state in private members:
 //  nothing here hides a third-party dependency the way Renderer/PhysicsWorld's PIMPL does,
 //  so there's nothing to justify hiding it behind accessors either.
 //============================================================================
