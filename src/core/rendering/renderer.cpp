@@ -310,6 +310,10 @@ namespace toon {
             RefCntAutoPtr<IBuffer> vertexBuffer;
             RefCntAutoPtr<IBuffer> indexBuffer;
             Uint32 indexCount = 0;
+            // Local-space (object-space) bounds, min/max swept over `vertices[i].position` at
+            // creation — mouse-pick (app/picking.cpp) transforms these by an entity's worldMatrix.
+            Vec3 boundsMin;
+            Vec3 boundsMax;
         };
         std::vector<GpuMesh> meshes; // handle N -> meshes[N-1]; handle 0 = Invalid
 
@@ -320,6 +324,10 @@ namespace toon {
         RefCntAutoPtr<IPipelineState> modelOutlinePSO; // inverted-hull outline
         RefCntAutoPtr<IShaderResourceBinding> modelOutlineSRB;
         std::vector<std::unique_ptr<GLTF::Model>> models;
+        // Local-space bounds (model-space, RootTransform = identity) — index-matched with
+        // `models` (one push_back site, LoadModel, keeps them in sync). Same mouse-pick use as
+        // GpuMesh::boundsMin/Max above.
+        std::vector<std::pair<Vec3, Vec3>> modelBounds;
 
         // Editor-UI textures (asset browser thumbnails/previews) — decoded image files,
         // unrelated to the toon draw path. handle N -> textures[N-1], same 1-based
@@ -1616,6 +1624,19 @@ namespace toon {
 
         Impl::GpuMesh mesh;
         mesh.indexCount = indexCount;
+        mesh.boundsMin = vertices[0].position;
+        mesh.boundsMax = vertices[0].position;
+        for (uint32_t i = 1; i < vertexCount; ++i) {
+            // Plain comparisons, not std::min/max: dwmapi.h (above) pulls in <windows.h>
+            // without NOMINMAX, so min/max are reserved macros in this TU.
+            const Vec3 &p = vertices[i].position;
+            if (p.x < mesh.boundsMin.x) { mesh.boundsMin.x = p.x; }
+            if (p.y < mesh.boundsMin.y) { mesh.boundsMin.y = p.y; }
+            if (p.z < mesh.boundsMin.z) { mesh.boundsMin.z = p.z; }
+            if (p.x > mesh.boundsMax.x) { mesh.boundsMax.x = p.x; }
+            if (p.y > mesh.boundsMax.y) { mesh.boundsMax.y = p.y; }
+            if (p.z > mesh.boundsMax.z) { mesh.boundsMax.z = p.z; }
+        }
 
         BufferDesc vbDesc;
         vbDesc.Name = "toon mesh VB";

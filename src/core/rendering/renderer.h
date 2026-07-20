@@ -206,6 +206,12 @@ namespace toon {
         MeshHandle CreateMesh(const Vertex *vertices, uint32_t vertexCount, const uint32_t *indices,
                               uint32_t indexCount);
 
+        // Local-space (object-space) axis-aligned bounds, computed once at creation/load — the
+        // app layer's mouse-pick (app/picking.cpp) transforms these by an entity's worldMatrix to
+        // ray-test it. False (out-params untouched) for an invalid handle.
+        bool GetMeshBounds(MeshHandle mesh, Vec3 &outMin, Vec3 &outMax) const;
+        bool GetModelBounds(ModelHandle model, Vec3 &outMin, Vec3 &outMax) const;
+
         // Per-frame scene state (set between BeginFrame and the DrawMesh calls).
         void SetCamera(const Camera &camera);
 
@@ -217,6 +223,13 @@ namespace toon {
         // Current view + projection (as of the last SetCamera), for the editor's transform gizmo
         // (ImGuizmo). Handed out as plain Mat4 so the app/gizmo stay Diligent-free.
         void GetViewProj(Mat4 &view, Mat4 &proj) const;
+
+        // Unproject a viewport pixel (as of the last SetCamera) to a world-space ray: origin on
+        // the near plane, outDir normalized. `vpW`/`vpH` are the viewport's pixel size (today the
+        // whole window, since the scene renders fullscreen behind the passthrough dockspace).
+        // For mouse-pick (app/picking.cpp): feed ImGui's mouse position + io.DisplaySize.
+        void ScreenPointToRay(float mouseX, float mouseY, float vpW, float vpH, Vec3 &outOrigin,
+                               Vec3 &outDir) const;
 
         // Draw a mesh with the toon pipeline (outline pass + banded fill pass).
         // `prevTransform` is the object's placement *last* frame — it drives the motion
