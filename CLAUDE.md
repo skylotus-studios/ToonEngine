@@ -40,9 +40,11 @@ into an **HDR + normal + motion-vector G-buffer**; a **DiligentFX post chain** (
 TAA/DoF/SSR, Bloom) resolves through ACES tone-mapping to the back buffer. A docked
 **Dear ImGui editor** (3 themes) provides an Objects hierarchy panel, a Properties inspector
 with an ImGuizmo gizmo, a Settings panel (every post effect, a collider debug wireframe
-toggle), and an Asset Browser with thumbnails. An **editor camera** and a rebindable
-**action-map input system** (mouse/keyboard/gamepad) drive it, with input suppressed while
-using the UI. HLSL shaders cross-compile to SPIR-V at runtime. Gameplay state advances via
+toggle), and an Asset Browser with thumbnails. Clicking an entity in the viewport selects it
+(a geometric ray-vs-bounds pick, not a physics raycast, so it works in Editing mode for every
+visible entity, collider or not). An **editor camera** and a rebindable **action-map input
+system** (mouse/keyboard/gamepad) drive it, with input suppressed while using the UI. HLSL
+shaders cross-compile to SPIR-V at runtime. Gameplay state advances via
 per-entity native scripts (a demo spin today) and **Jolt Physics** rigid bodies (independent
 Collider/Rigid Body components; Box/Sphere/Capsule shapes) on a fixed 60 Hz sim tick,
 decoupled from and interpolated into the render rate, and only while an explicit Editing /
@@ -92,7 +94,7 @@ Presets build into `build/<preset>/` with the engine DLLs copied next to the exe
 ```
 src/
   main.cpp                Entry point: window + editor loop glue (calls into app/ + ui/panels/); no Diligent headers
-  app/                    Editor state (plain EditorState struct) + init/tick/render/physics-glue/scene-ops free functions
+  app/                    Editor state (plain EditorState struct) + init/tick/render/physics-glue/picking/scene-ops free functions
   core/
     math.h                 Minimal Diligent-free vector/matrix types for the abstraction layer's public API
     rendering/             The abstraction layer + its Diligent (Vulkan) backend, plus procedural mesh generators

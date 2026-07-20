@@ -138,7 +138,7 @@ flowchart LR
     direction TB
     N8["Mouse-pick via raycast"]
     N9["Contact events to scripts"]
-    N10["#Shader hot-reload"]
+    N10["Shader hot-reload"]
     N8 --> N9 --> N10
   end
 
@@ -153,7 +153,7 @@ flowchart LR
   subgraph V05["v0.5: Scale &amp; Tools"]
     direction TB
     N14["Instancing"]
-    N15["Shadow frustum culling"]
+    N15["Frustum culling"]
     N16["Prefabs"]
     N17["Particles &amp; VFX"]
     N14 --> N15 --> N16 --> N17
@@ -161,18 +161,20 @@ flowchart LR
 
   subgraph V10["v1.0: Ship"]
     direction TB
-    N18["Settings menu"]
-    N19["Crash reporting"]
-    N20["Asset packaging"]
-    N18 --> N19 --> N20
+    N18["Steamworks SDK bootstrap"]
+    N19["Settings menu"]
+    N20["Controller UI &amp; Steam Deck keyboard"]
+    N21["Crash reporting"]
+    N22["Asset packaging"]
+    N18 --> N19 --> N20 --> N21 --> N22
   end
 
   subgraph V11["v1.1: Platform Expansion"]
     direction TB
-    N21["Linux support"]
-    N22["macOS support"]
-    N23["Re-enable D3D11"]
-    N21 --> N22 --> N23
+    N23["Linux support"]
+    N24["macOS support"]
+    N25["Re-enable D3D11"]
+    N23 --> N24 --> N25
   end
 
   V01 --> V02 --> V03 --> V04 --> V05 --> V10 --> V11
@@ -190,8 +192,8 @@ flowchart LR
   class N8,N9,N10 v03
   class N11,N12,N13 v04
   class N14,N15,N16,N17 v05
-  class N18,N19,N20 v10
-  class N21,N22,N23 v11
+  class N18,N19,N20,N21,N22 v10
+  class N23,N24,N25 v11
 ```
 
 ## License

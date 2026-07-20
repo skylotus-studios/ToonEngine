@@ -7,7 +7,7 @@ behind already-shipped systems, see [MEMORY.md](../MEMORY.md); for the project's
 principle (build on Diligent, don't reinvent it), see [CLAUDE.md](../CLAUDE.md).
 
 ```
-Shipped  ███████░░░░░░░░░░░░░░░░  7 / 23 items
+Shipped  ███████░░░░░░░░░░░░░░░░░░  7 / 25 items
 ```
 
 ```mermaid
@@ -33,7 +33,7 @@ flowchart LR
         direction TB
         N8["Mouse-pick via raycast"]
         N9["Contact events to scripts"]
-        N10["#Shader hot-reload"]
+        N10["Shader hot-reload"]
         N8 --> N9 --> N10
     end
 
@@ -48,7 +48,7 @@ flowchart LR
     subgraph V05["v0.5: Scale &amp; Tools"]
         direction TB
         N14["Instancing"]
-        N15["Shadow frustum culling"]
+        N15["Frustum culling"]
         N16["Prefabs"]
         N17["Particles &amp; VFX"]
         N14 --> N15 --> N16 --> N17
@@ -56,18 +56,20 @@ flowchart LR
 
     subgraph V10["v1.0: Ship"]
         direction TB
-        N18["Settings menu"]
-        N19["Crash reporting"]
-        N20["Asset packaging"]
-        N18 --> N19 --> N20
+        N18["Steamworks SDK bootstrap"]
+        N19["Settings menu"]
+        N20["Controller UI &amp; Steam Deck keyboard"]
+        N21["Crash reporting"]
+        N22["Asset packaging"]
+        N18 --> N19 --> N20 --> N21 --> N22
     end
 
     subgraph V11["v1.1: Platform Expansion"]
         direction TB
-        N21["Linux support"]
-        N22["macOS support"]
-        N23["Re-enable D3D11"]
-        N21 --> N22 --> N23
+        N23["Linux support"]
+        N24["macOS support"]
+        N25["Re-enable D3D11"]
+        N23 --> N24 --> N25
     end
 
     V01 --> V02 --> V03 --> V04 --> V05 --> V10 --> V11
@@ -85,8 +87,8 @@ flowchart LR
     class N8,N9,N10 v03
     class N11,N12,N13 v04
     class N14,N15,N16,N17 v05
-    class N18,N19,N20 v10
-    class N21,N22,N23 v11
+    class N18,N19,N20,N21,N22 v10
+    class N23,N24,N25 v11
 ```
 
 ## Shipped
@@ -143,45 +145,71 @@ flowchart LR
 14. **Instancing.** A per-instance draw path for scenes with many copies of the same mesh.
     Ranked here because it only pays off once a scene actually has enough repeated objects
     to matter, which the content systems above it are what will start creating that
-    scenario.
-15. **Shadow frustum culling.** Bounds-test each entity against a cascade's frustum before
-    drawing it into that cascade's shadow pass, instead of today's unconditional
-    every-entity-into-every-cascade loop, a gap deliberately deferred when cascaded shadow
-    maps shipped (see MEMORY.md's "Toon Pipeline" section). Ranked right after instancing
+    scenario. `Renderer::DrawMesh`/`DrawModel` already rebind the same outline/fill PSOs on
+    every entity even when they're shared, the same redundant state-setting this item's
+    batching would remove, so fold that cleanup into the same pass rather than a separate one.
+15. **Frustum culling: shadow cascades and the main pass.** Bounds-test each entity against
+    the camera/cascade frustum before drawing it, instead of today's unconditional
+    every-entity loop in both the shadow pass and the main color pass
+    (`app/editor_render.cpp`'s `RenderFrame`), a gap deliberately deferred when cascaded
+    shadow maps shipped (see MEMORY.md's "Toon Pipeline" section) and shared, it turns out,
+    by the main pass that was never named alongside it. Ranked right after instancing
     because both are scale-driven: cheap and correct to add whenever someone's already
-    touching the shadow pass, but nothing today measures it as an actual bottleneck at the
-    current scene's object count, so it stays below every content system that outranks it.
+    touching either draw loop, but nothing today measures either as an actual bottleneck at
+    the current scene's object count, so it stays below every content system that outranks it.
 16. **Prefabs.** Reusable entity templates for runtime spawning. A workflow multiplier: it
     cuts the cost of populating a scene with everything shipped above it, so it's ranked
     ahead of pure-visual polish that doesn't compound the same way.
 17. **Particles and VFX.** A toon-appropriate particle system. Doesn't depend on anything
     above it and doesn't unlock anything below it either, so it sits after the items that do
     one or the other.
-18. **Settings menu.** A player-facing menu for display (resolution, fullscreen, VSync) and
+18. **Steamworks SDK bootstrap.** Link the Steamworks SDK and wire `SteamAPI_Init`/
+    `SteamAPI_Shutdown`, a per-frame `SteamAPI_RunCallbacks`, a dev-time `steam_appid.txt`,
+    and the overlay-activation callback. Small and mechanical, but every other Steam-specific
+    item, achievements and Steam Input glyph mapping (see "Researched, Not Yet Ranked" below)
+    and the controller-navigable UI item right after this one, assumes this exists first.
+    Ranked ahead of the settings menu because it blocks nothing above it and opens the
+    release-readiness cluster the rest of this tier belongs to.
+19. **Settings menu.** A player-facing menu for display (resolution, fullscreen, VSync) and
     input (a rebind UI over the already-shipped action-map system), replacing today's
     dev-only Settings panel for anything a player, not a developer, needs to control. Steam's
     own launch checklist tests for exactly this, and ToonEngine has no player-facing display
-    settings today. Ranked with crash reporting and asset packaging below it because none of
-    the three block or unlock anything else; they're release-readiness work a real release
-    can't ship without, not features that create new gameplay.
-19. **Crash reporting.** A crash-reporting handler or SDK integration so a crash leaves a
+    settings today. Should default to, or strongly favor, borderless windowed over true
+    exclusive fullscreen (Vulkan titles under the Steam Overlay have documented
+    exclusive-fullscreen rendering failures), and persist graphics settings per device rather
+    than through cloud sync, per Valve's own Steam Deck guidance. Ranked with crash reporting
+    and asset packaging below it because none of the three block or unlock anything else;
+    they're release-readiness work a real release can't ship without, not features that
+    create new gameplay.
+20. **Controller-navigable UI and Steam Deck on-screen keyboard.** Every player-facing menu,
+    starting with the settings menu this depends on, navigable end to end with a controller,
+    plus `ShowGamepadTextInput`/`ShowFloatingGamepadTextInput` wired for any text entry. A
+    real, separate requirement from the already-deferred Steam Input glyph mapping (that's
+    which icon to show; this is whether the menu can be driven with a controller at all), and
+    a genuine lever for Steam Deck Verified badging per Valve's own QA checklist. Ranked
+    directly after the settings menu because it hardens the one player-facing menu system
+    that item establishes, and is roughly comparable in scope to skeletal animation, not a
+    small polish pass.
+21. **Crash reporting.** A crash-reporting handler or SDK integration so a crash leaves a
     diagnostic trail instead of a silent exit, tested against a live endpoint before release,
-    per Steam's own launch checklist. Ranked next to the settings menu for the same reason: a
-    small, bounded release requirement, not a new subsystem, closer in shape to asset
-    packaging below it than to any content system above it.
-20. **Asset packaging for a shippable build.** Relative shader/asset paths so the engine can
+    per Steam's own launch checklist. Valve's own `SteamAPI_WriteMiniDump` is documented as
+    32-bit-Windows-only, so the real implementation will be a third-party service (Sentry,
+    Backtrace, or a Breakpad-based one), not the Steamworks call itself. Ranked next to the
+    settings menu for the same reason: a small, bounded release requirement, not a new
+    subsystem, closer in shape to asset packaging below it than to any content system above it.
+22. **Asset packaging for a shippable build.** Relative shader/asset paths so the engine can
     ship outside a dev environment. A genuine hard requirement before any real release, but
     small and mechanical, and it blocks nothing above it. Ranked alongside the settings menu
     and crash reporting above it, the same release-readiness cluster, without displacing the
     systems that need to exist before there's a game worth releasing.
-21. **Linux support** (Vulkan). Expands the eventual audience, but Windows-only is a normal,
+23. **Linux support** (Vulkan). Expands the eventual audience, but Windows-only is a normal,
     viable starting point for a first release on Steam; a solo project's time before that
     point is better spent on the game itself than a second platform.
-22. **macOS support** (Vulkan via MoltenVK, needs an `NSView` from a GLFW Cocoa `.mm`
+24. **macOS support** (Vulkan via MoltenVK, needs an `NSView` from a GLFW Cocoa `.mm`
     helper). Ranked after Linux because it builds on the same Vulkan-portability work Linux
     already exercises, and because it's the smaller of the two non-Windows audiences for a
     PC-first indie title.
-23. **Re-enable D3D11.** Only matters for players on hardware too old for Vulkan, a small
+25. **Re-enable D3D11.** Only matters for players on hardware too old for Vulkan, a small
     and shrinking slice of the Steam hardware survey. Ranked last because every item above
     it either unlocks gameplay, unlocks content, or is a hard release requirement, and this
     is none of those.
@@ -199,7 +227,7 @@ Two items from the most recent `update-roadmap` pass cleared the research bar bu
 - **Achievements/stats and Steam Input controller glyph mapping.** Confirmed real Steamworks
   features (`ISteamUserStats`, the Steam Input API), but common for a solo dev to add
   post-launch rather than at launch, and both are additive once there's actual gameplay to
-  hook them into.
+  hook them into. Both now depend on item 18's Steamworks SDK bootstrap existing first.
 
 ## How This List Is Maintained
 

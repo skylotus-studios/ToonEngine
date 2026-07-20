@@ -91,9 +91,11 @@ public:
     void Resize(uint32_t width, uint32_t height);
 
     MeshHandle CreateMesh(const Vertex*, uint32_t vertexCount, const uint32_t* indices, uint32_t indexCount);
+    bool GetMeshBounds(MeshHandle, Vec3& outMin, Vec3& outMax) const;
     void SetCamera(const Camera&);
     void SetLight(const Vec3& directionToLight, const Vec3& color, float intensity);
     void GetViewProj(Mat4& view, Mat4& proj) const;
+    void ScreenPointToRay(float mouseX, float mouseY, float vpW, float vpH, Vec3& outOrigin, Vec3& outDir) const;
     void DrawMesh(MeshHandle, const Transform&, const Transform& prevTransform, const Material&);
     void DrawMesh(MeshHandle, const Mat4& world, const Mat4& prevWorld, const Material&);
 
@@ -104,6 +106,7 @@ public:
     void EndShadowPass();
 
     ModelHandle LoadModel(const char* path);
+    bool GetModelBounds(ModelHandle, Vec3& outMin, Vec3& outMax) const;
     void DrawModel(ModelHandle, const Transform&, const Transform& prevTransform, const Material& style);
     void DrawModel(ModelHandle, const Mat4& world, const Mat4& prevWorld, const Material& style);
 
@@ -129,6 +132,7 @@ private:
     bool CreatePostFX();
     bool CreateOffscreenTargets(uint32_t width, uint32_t height);
     bool CreateShadowMap();
+    bool CreateWireframePipeline();
 
     struct Impl;
     Impl* m_impl = nullptr;
@@ -143,9 +147,10 @@ models (`LoadModel`, `DrawModel`: mirroring `DrawMesh`'s two-overload shape); ed
 textures (`LoadTexture` etc., for the asset browser, not part of the toon draw path, since
 materials don't carry textures yet); post-processing (`SetPostParams`, `EndScene`); the
 collider debug overlay (`DrawWireframe`, M2.1, see "The physics abstraction layer" below and
-"The rendering pipeline"'s "Collider debug wireframe"); and the Dear ImGui glue (`InitUI` through
-`EndUI`). "The rendering pipeline" below walks through what each group actually does on the
-GPU.
+"The rendering pipeline"'s "Collider debug wireframe"); mouse-pick's unproject and bounds
+queries (`ScreenPointToRay`, `GetMeshBounds`, `GetModelBounds`, see "The editor layer"'s
+"Mouse-pick" below); and the Dear ImGui glue (`InitUI` through `EndUI`). "The rendering
+pipeline" below walks through what each group actually does on the GPU.
 
 ### Why Data Encapsulation, Not a Virtual `IRenderer`
 
@@ -206,7 +211,9 @@ public:
     void GetBodyTransform(BodyHandle, Vec3&, Quat&) const;        // read back after Step
     void Step(float dt);
     void SetGravity(const Vec3&);
-    bool Raycast(const Vec3& origin, const Vec3& dir, RaycastHit&) const;  // shipped, not wired to selection yet
+    bool Raycast(const Vec3& origin, const Vec3& dir, RaycastHit&) const;  // gameplay-facing; editor
+                                                                            // click-to-select uses its own
+                                                                            // geometric ray instead (below)
 
 private:
     struct Impl;
@@ -256,6 +263,8 @@ src/
                                  and the collider-wireframe debug overlay.
     physics_glue.{h,cpp}        ScaledColliderExtents + BuildPhysicsWorld, shared by editor_tick.cpp's
                                  Play/Step rebuild (via ui/panels/playback_panel.cpp) and the collider overlay.
+    picking.{h,cpp}             PickEntity (ray-vs-entity-world-bounds) + DoMousePicking: viewport
+                                 click-to-select, called from main.cpp before the gizmo overlay (M2.3).
     scene_ops.{h,cpp}           LoadSceneInto/SaveSceneFrom/NewScene, called from both the File menu
                                  (ui/panels/menu_bar.cpp) and a double-clicked .scene in the asset browser.
   core/
@@ -616,7 +625,8 @@ toggle (`EditorState::showColliders`) gates a loop in `app/editor_render.cpp`'s
 `RenderFrame` that calls it once per collider-bearing entity, directly after `EndScene()`
 and before `Renderer::BeginUI()`;
 it draws straight onto the already-bound back buffer from the tone-map resolve above, so no
-extra render-target binding is needed in `DrawWireframe` itself.
+extra render-target binding is needed in `DrawWireframe` itself. The same call draws
+mouse-pick's collider-less-entity markers too (see "The editor layer"'s "Mouse-pick" above).
 
 ### ImGui Glue
 
@@ -771,6 +781,33 @@ abstraction layer, through a `Renderer&`.
 world-space basis from `RotationX(-pitch) * RotationY(-yaw)`, the same Diligent matrices
 `Renderer::SetCamera` builds its view matrix from, so the controls agree exactly with what the
 renderer actually does with yaw/pitch, rather than a hand-guessed set of axis signs.
+
+### Mouse-Pick (Click-to-Select)
+
+`app/picking.h`'s `DoMousePicking` (called from `main.cpp` each frame, right before the gizmo
+overlay) turns a viewport click into a selection, geometrically rather than through the
+physics engine: `PhysicsWorld::Raycast` (see "The physics abstraction layer" above) only sees
+bodies that exist, which is only true while Playing, and only entities with a collider, so
+editor selection needs its own path that works in Editing mode for every visible entity, the
+same reason Unity's Scene view and Unreal's/Godot's editors decouple their own editor picking
+from their runtime physics raycast.
+
+`Renderer::ScreenPointToRay` unprojects the mouse position through the inverse of the exact
+`view * proj` matrix `SetCamera` built this frame, giving a world-space ray origin (on the near
+plane) and direction. `PickEntity` (`app/picking.cpp`) then walks every transformed entity
+(skipping the root), building each one's world-space axis-aligned bounding box: a mesh or
+model entity transforms its local bounds (`Renderer::GetMeshBounds`/`GetModelBounds`, swept
+once at creation/load time) by its `worldMatrix`; anything else (a light, an empty anchor) gets
+a fixed-size box centered on its world position instead, so it's still clickable with no mesh
+of its own. A standard ray-vs-AABB slab test picks the nearest hit and writes it to
+`scene.selected`. `DoMousePicking` gates the whole thing behind a click-vs-drag distance check
+(`ImGui::GetMouseDragDelta`) and `io.WantCaptureMouse`/`ImGuizmo::IsOver()`/`IsUsing()`, so a
+gizmo drag or a panel click never triggers a pick.
+
+The fixed-size fallback box (`picking.h`'s `kPickBoxHalfExtent`) is drawn as a wireframe marker
+in `app/editor_render.cpp`'s existing `DrawWireframe` overlay (see "The rendering pipeline"'s
+"Collider debug wireframe" below) for every collider-less entity, so a light or empty anchor
+reads as clickable instead of a dead zone.
 
 ### Procedural Primitives
 
@@ -980,10 +1017,9 @@ gradient is a new full-screen shader pass (like the tone-map resolve); 2D/sprite
 vertex format and a blended draw path; skeletal animation needs a bone/skinning vertex format
 and per-frame joint-matrix upload, alongside a new animation entity component in `core/scene/scene.h`.
 
-Gameplay systems (the roadmap's M1 and M2.1, now shipped, and M2's remaining audio item) are
-a different shape: they're Diligent-free by default, since nothing about a fixed-timestep
-loop, an entity-behavior/update layer, physics, or audio needs to touch the renderer
-directly. The first of M1, the fixed-timestep sim loop (see "The frame loop" above), shipped
+Gameplay systems (the roadmap's M1, M2.1 physics, and M2.2 audio, all now shipped) are a
+different shape: they're Diligent-free by default, since nothing about a fixed-timestep loop,
+an entity-behavior/update layer, physics, or audio needs to touch the renderer directly. The first of M1, the fixed-timestep sim loop (see "The frame loop" above), shipped
 as a restructuring of `main.cpp`'s existing loop plus two new `core/scene/scene.h` members
 (`prevSimTransform`, `SnapshotSimState`), not a new `core/` module: a scoped choice for that
 item, not a pattern the next one had to follow. The second, the entity behavior system (M1.3,
@@ -1004,10 +1040,11 @@ prediction held exactly: physics steps inside the same `kFixedDt` loop scripts a
 writing dynamic bodies' results back into `entity.transform` each tick, the same landing spot
 a script's write already used. The predicted `core/sim_clock` extraction never became
 necessary: the accumulator/`kFixedDt` loop still didn't change shape, only gained one more
-thing to run inside it, the same outcome M1.3 had. Audio (M2's other item) is expected to need
-no fixed-loop involvement at all, unlike physics and scripts: sound playback has no
-per-tick simulation state to step, just fire-and-forget or streaming voices triggered by
-scripts/gameplay events.
+thing to run inside it, the same outcome M1.3 had. Audio (M2.2) confirmed the fourth
+prediction exactly: it needed no fixed-loop involvement at all, unlike physics and scripts,
+since its listener tracks the interpolated render-rate camera pose each frame (not the fixed
+sim tick) and sound playback has no per-tick simulation state to step, just fire-and-forget or
+streaming voices triggered by scripts/gameplay events.
 
 See MEMORY.md's "ToonEngineOld carry-over" section (and its "Port gotchas for the un-shipped
 systems" subsection) for the concrete algorithms and gotchas behind the still-open M3 items.

@@ -1,16 +1,17 @@
 ---
 name: update-roadmap
-description: Research what to prioritize next on ToonEngine's roadmap across three lenses (architectural health, gaps blocking a Steam release, performance) and update docs/roadmap.md + CLAUDE.md's roadmap pointer with the result. Code/architecture research is grounded in docs/cpp-style-guide.md; the roadmap prose it writes follows docs/md-style-guide.md. Use when the user asks to update, refresh, reprioritize, or groom the roadmap, or "what should we work on next" in the open-ended sense. Not for planning one already-chosen item, that's `plan-roadmap`, and not for pruning shipped items, that's `tidy-md`.
+description: Research what to prioritize next on ToonEngine's roadmap across three lenses (architectural health, gaps blocking a Steam release, performance), promote anything that's actually shipped into docs/roadmap.md's Shipped section (including its mermaid diagram's shipped-status coloring), and update docs/roadmap.md + CLAUDE.md's roadmap pointer with the result. Code/architecture research is grounded in docs/cpp-style-guide.md; the roadmap prose it writes follows docs/md-style-guide.md. Use when the user asks to update, refresh, reprioritize, or groom the roadmap, mark an item shipped, or "what should we work on next" in the open-ended sense. Not for planning one already-chosen item, that's `plan-roadmap`.
 ---
 
 # update-roadmap: Research and Reprioritize ToonEngine's Roadmap
 
-Three other skills already own adjacent jobs: `plan-roadmap` takes one already-identified
-roadmap item and designs it in ELI5 depth before implementation; `tidy-md` moves items into
-`docs/roadmap.md`'s "Shipped" section once they ship. Neither one asks *what should be on the
-roadmap at all, and in what order*. That's this skill's job: survey the codebase and the
-outside world across three lenses, then propose additions or re-ranks for the user to accept
-or reject before anything gets written.
+Two other skills own adjacent jobs: `plan-roadmap` takes one already-identified roadmap item
+and designs it in ELI5 depth before implementation; `tidy-md` keeps every markdown doc's prose
+accurate and current, including this file's own, but not `docs/roadmap.md`'s shipped/unshipped
+bookkeeping itself. Neither one asks *what should be on the roadmap at all, and in what order*,
+or *what's actually shipped by now*. That's this skill's job: confirm the roadmap matches
+reality, then survey the codebase and the outside world across three lenses, and propose
+additions or re-ranks for the user to accept or reject before anything new gets written.
 
 This is a **triage pass across many candidates**, not a single deep design decision. Keep
 each candidate's writeup tight (a paragraph, not a page); depth on any one chosen item is
@@ -36,6 +37,44 @@ Before researching anything new, read what's already true:
 
 Never propose an item that's already listed, already shipped, or already explicitly deferred
 with a stated reason you'd just be repeating.
+
+## Promote Anything That's Actually Shipped
+
+The grounding check above sometimes turns up an item marked pending in "What's Next" that's
+actually landed (verified against `git log` and the real current code, not a commit message
+alone). When it does, promote it before researching anything new, so the rest of this pass
+reasons about the real not-yet-shipped list:
+
+1. Confirm the full story (what was built, why, any gotchas) already lives in `MEMORY.md`
+   under the relevant topic section (`grep '^## ' MEMORY.md` lists the current sections). If
+   `docs/roadmap.md`'s entry has detail not yet in MEMORY.md, migrate it there first, don't
+   delete it: losing the "why" behind a decision is the one mistake this step exists to
+   prevent. Skip the migration only if the item genuinely has nothing more to say than its
+   existing one-liner.
+2. Move the item out of "What's Next" and into "Shipped," at the end of that section (it
+   joins in the order things actually landed), and renumber every item below it so the list
+   still reads as one unbroken sequence with no gaps. Re-check whether anything ranked below
+   it should move up: a rank was often justified by what was still outstanding above it, and
+   that reasoning can go stale the moment something ships.
+3. Recompute the progress line (`Shipped X / Y items`) at the top of the file.
+4. Update the mermaid diagram: rename the item's node id from its `N`-prefixed id to the
+   `S`-prefixed id matching its new position in the Shipped count (the 8th item to ship
+   becomes `S8`, wherever it sits in the diagram, in both its node-definition line and any
+   arrow chain naming it), and move it out of the `class` grouping it shared with its
+   still-unshipped milestone siblings into the shared `classDef shipped` style (add this
+   classDef, reusing `v01`'s muted green, if the diagram doesn't have one yet). It stays
+   inside its own thematic milestone subgraph (`v0.3: Interaction`, etc. — that grouping is
+   chronological/thematic, not a shipped/unshipped signal) but reads as done at a glance. If
+   every node in a milestone subgraph ends up shipped, that subgraph's own `classDef` can
+   adopt the same shipped-green treatment wholesale, matching how `V01`/`V02` are already
+   colored solid green.
+5. Update CLAUDE.md's `## Roadmap` pointer paragraph only if it no longer accurately describes
+   the list's structure; re-check the 200-line cap.
+
+This is a factual correction, not a design decision, so it doesn't wait for the
+`AskUserQuestion` gate later in this skill: do it directly, then continue. It absorbs what
+used to be `tidy-md`'s job for `docs/roadmap.md` specifically; `tidy-md` still owns everything
+else about keeping markdown accurate, this file's own prose included.
 
 ## Research the Three Lenses, in Parallel
 
@@ -118,7 +157,6 @@ Only after the user has picked:
 ## Non-Goals
 
 No engine code changes. No implementation planning for a chosen item in ELI5 depth (that's
-`plan-roadmap`, a separate, later ask). No moving already-shipped items into the Shipped
-section (`tidy-md`'s job, though flag it in passing if this pass's grounding step notices
-one). No adding a candidate the user didn't actually pick, no matter how well-supported the
-research.
+`plan-roadmap`, a separate, later ask). No adding a candidate the user didn't actually pick,
+no matter how well-supported the research. No general markdown prose/staleness fixes outside
+`docs/roadmap.md`/CLAUDE.md's roadmap pointer (that's `tidy-md`'s job).

@@ -2777,3 +2777,36 @@ pass.
   member-init list had never been extended for `audioSource`, silently dropping the
   component on every scene copy. Docs synced in the same pass: this entry plus the "Audio"
   technical section above, CLAUDE.md's roadmap (M2 item 1 removed), README's Highlights.
+- **2026-07-20**: **Mouse-pick via raycast shipped** (M2.3, `docs/roadmap.md`'s former item
+  8): geometric click-to-select (`app/picking.{h,cpp}`'s `PickEntity`/`DoMousePicking`),
+  deliberately not wired to `PhysicsWorld::Raycast` (Jolt bodies only exist while Playing, and
+  only collider-bearing entities would be hittable; editor selection needs both). New
+  `Renderer::ScreenPointToRay`/`GetMeshBounds`/`GetModelBounds`; collider-less entities
+  (lights, empty anchors) get a fixed-size pick box, visualized via a `DrawWireframe` marker.
+  Verified by build, API-signature checks against the vendored ImGui/ImGuizmo/Diligent
+  headers, and a temporary instrumented run (removed before commit) confirming the unproject
+  math and nearest-hit resolution against live camera/scene state; no synthetic input reaches
+  this environment's windows, so a live click couldn't be driven directly. Full design
+  write-up intentionally deferred to `docs/roadmap.md`'s shipped-item promotion (next entry),
+  which migrates it in when the item formally moves to "Shipped."
+- **2026-07-20**: **Roadmap-skill reorg, user-directed.** `docs/roadmap.md`'s shipped-item
+  promotion (verify against real code, migrate detail into MEMORY.md, move the item into
+  "Shipped," renumber, recompute the progress line, recolor the mermaid diagram) moved from
+  `tidy-md` to a new "Promote Anything That's Actually Shipped" step in `update-roadmap`; see
+  that skill's own file for the full mechanic and its new shipped-node mermaid convention
+  (rename the node's `N`-id to an `S`-id matching its Shipped position, move it into a shared
+  `classDef shipped` reusing `v01`'s green, but leave it inside its own thematic milestone
+  subgraph rather than relocating it, since that grouping is chronological, not a
+  shipped/unshipped signal). `tidy-md`'s `docs/roadmap.md` section narrowed to prose/
+  staleness checks only, the same treatment as `docs/architecture.md`; `plan-roadmap`'s two
+  stale `tidy-md` cross-references were updated to `update-roadmap` in the same pass. Same
+  session: a fresh `update-roadmap` triage pass added two Steam-release-gap items
+  (Steamworks SDK bootstrap; controller-navigable UI + Steam Deck on-screen keyboard) and
+  four wording amendments (frustum culling widened to name the main pass too, an
+  instancing/PSO-batching note, a settings-menu borderless/per-device note, a
+  crash-reporter third-party-SDK note), all confirmed via `AskUserQuestion` before writing.
+  A following `tidy-md` pass fixed a pre-existing stray `#` typo in the roadmap mermaid's
+  `N10` label (both `docs/roadmap.md` and README's duplicate copy), synced `docs/
+  architecture.md`'s `Renderer` class listing and Source Layout to the mouse-pick additions
+  above, and re-synced README's own copy of the roadmap mermaid diagram, which had drifted
+  out of step with `docs/roadmap.md`'s structure.

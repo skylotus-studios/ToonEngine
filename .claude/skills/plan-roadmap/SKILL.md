@@ -28,9 +28,9 @@ hot-reload, asset packaging) anymore; they're ranked inline with everything else
 one exactly like any other item if it's sitting at the top of the list.
 
 Sanity-check the pick against `git log -10` and the tail of MEMORY.md's `## History`
-section. `tidy-md` prunes shipped items out of docs/roadmap.md, but there can be a short lag
-right after a commit; if the top bullet looks already built, say so and move to the next one
-instead of planning something already done.
+section. `update-roadmap` prunes shipped items out of docs/roadmap.md, but there can be a
+short lag right after a commit; if the top bullet looks already built, say so and move to the
+next one instead of planning something already done.
 
 ## Ground It in the Current Architecture
 
@@ -137,7 +137,7 @@ user's next ask, a separate task.
 
 ## Non-Goals
 
-No engine code changes, and no edits to CLAUDE.md or MEMORY.md: `tidy-md` handles the
+No engine code changes, and no edits to CLAUDE.md or MEMORY.md: `update-roadmap` handles the
 roadmap once the item ships. Commits are `commit`'s job. This is not a general research
 report: `deep-research` is the tool for a broad, adversarially verified, multi-source
 report; this skill is narrower, applied research aimed at one concrete decision.

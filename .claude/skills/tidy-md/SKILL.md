@@ -1,6 +1,6 @@
 ---
 name: tidy-md
-description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/roadmap.md, docs/**) accurate and current. Prunes docs/roadmap.md into MEMORY.md as items ship, keeps CLAUDE.md under its hard 200-line cap, keeps README.md a portfolio-quality feature showcase, and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships.
+description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/roadmap.md, docs/**) accurate and current. Keeps CLAUDE.md under its hard 200-line cap, keeps README.md a portfolio-quality feature showcase (including a new highlight when a shipped item earns one), and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Moving a shipped item into docs/roadmap.md's Shipped section, including its mermaid diagram's shipped-status coloring, is `update-roadmap`'s job, not this skill's. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships (for the README/architecture side effects, not the roadmap-list bookkeeping itself).
 ---
 
 # tidy-md: Keep ToonEngine's Markdown Docs Accurate, Current, and Right-Sized
@@ -46,10 +46,10 @@ after any edit. If a genuinely new line needs to go in and the file is already n
 something else has to move out or get tighter in the same edit, not "later."
 
 CLAUDE.md's `## Roadmap` section is now just a short pointer to `docs/roadmap.md` (see that
-file's own section below for where the actual detail lives and how it's pruned). Keep that
-pointer paragraph accurate to `docs/roadmap.md`'s actual structure (a single shipped-to-least-
-urgent list, no milestone codenames) if it ever changes, but don't let roadmap detail creep
-back into CLAUDE.md itself; that's exactly the growth this cap exists to prevent.
+file's own section below for where the actual detail lives). Keep that pointer paragraph
+accurate to `docs/roadmap.md`'s actual structure (a single shipped-to-least-urgent list, no
+milestone codenames) if it ever changes, but don't let roadmap detail creep back into
+CLAUDE.md itself; that's exactly the growth this cap exists to prevent.
 
 Re-scan the rest of CLAUDE.md while you're in there: a stale cross-reference, a "Current
 state" paragraph that no longer matches what's actually built, a constraint that's been
@@ -100,8 +100,8 @@ pipeline (a new PostFX stage, a new pass), the scene model, or a roadmap item sh
 changes what's true today (a new pipeline stage, a new engine-layer system). That's a
 different trigger than the rest of `docs/**` below. A broken path/command isn't the signal
 here, a changed system is. Verify against the actual current code (read the relevant
-header/source; don't infer from a commit message or a roadmap checkbox) the same way the
-`docs/roadmap.md` pruning check below does.
+header/source; don't infer from a commit message or a roadmap checkbox), the same standard
+`update-roadmap`'s own shipped-item verification holds itself to.
 
 Keep README's `## Architecture` summary and its pointer to `architecture.md` in sync with
 this file, the same way the Building sections are kept in sync (see above).
@@ -109,7 +109,7 @@ this file, the same way the Building sections are kept in sync (see above).
 Stays **unlocked**; it tracks the code, so don't mark it `tidy-md:locked` by reflex even
 after a careful pass. Locking is for content that shouldn't churn; this file is supposed to.
 
-## docs/roadmap.md: One Prioritized List, Pruned Into MEMORY.md as Items Ship
+## docs/roadmap.md: Actively Maintained, but Ship Bookkeeping Lives Elsewhere
 
 The deep what's-next reference: a single list, shipped items first in the order they landed,
 then everything left ranked from most to least important to work on next. No milestone
@@ -117,27 +117,15 @@ codenames, no separate "someday" bucket for infra; every remaining item, gamepla
 otherwise, has an actual rank. Actively maintained, the same tier as `architecture.md`, not
 part of the passive `docs/**` bucket below.
 
-Whenever a roadmap item has actually shipped (verify against recent commits and current
-code, not just because someone said so):
-
-1. Confirm the full story (what was built, why, any gotchas) already lives in `MEMORY.md`
-   under the relevant topic section (`## Toon pipeline`, `## Audio`, etc.; `grep '^## '
-   MEMORY.md` shows the current section list). If `docs/roadmap.md`'s entry has detail that
-   isn't in MEMORY.md yet, migrate it there first. Move it, don't delete it. Losing the
-   "why" behind a decision is the one mistake this skill exists to prevent.
-2. Move the item out of "What's Next" and into "Shipped," at the end of that section (it
-   joins the list in the order things actually landed), and renumber every item below it so
-   the whole list still reads as one unbroken sequence with no gaps. Re-check whether
-   anything ranked below it should move up: an item's rank was often justified by what was
-   still outstanding above it, and that reasoning can go stale the moment something ships.
-3. Recompute the progress line (`Shipped X / Y items`) at the top of the file to match the
-   new counts.
-4. If a roadmap item is done and genuinely has no further detail worth archiving (a
-   one-liner with nothing more to say), it's fine to just delete its MEMORY.md migration
-   step. Not everything needs a MEMORY.md entry, only things a future session would actually
-   want to know.
-5. Update CLAUDE.md's `## Roadmap` pointer paragraph only if it no longer accurately
-   describes the list's structure; re-check the 200-line cap.
+The actual ship/unship bookkeeping — confirming an item has really landed, migrating its
+full story into `MEMORY.md`, moving it from "What's Next" into "Shipped," renumbering,
+recomputing the progress line, and updating the mermaid diagram's shipped-status coloring —
+is `update-roadmap`'s job now, not this skill's (see its "Promote Anything That's Actually
+Shipped" step). This skill's remaining job for this file is the same as `architecture.md`'s:
+prose-quality and staleness checks (`docs/md-style-guide.md` compliance, a broken relative
+link, a stale cross-reference), not the ranked-list content itself. If a routine pass turns
+up an item that looks shipped but is still listed under "What's Next," flag it and point at
+`update-roadmap` rather than moving it yourself.
 
 Stays **unlocked**, for the same reason `architecture.md` does.
 
@@ -173,7 +161,8 @@ rather than duplicating them.
 - Re-check every relative markdown link you touched (`[text](path)`) still resolves to a
   real file.
 - `wc -l CLAUDE.md`: confirm it's 200 lines or fewer.
-- Summarize what moved where: what left CLAUDE.md or docs/roadmap.md, what (if anything)
-  landed in MEMORY.md or README.md, what changed in docs/architecture.md, what in the rest
-  of docs/** you verified-but-left-alone vs. actually changed, and any file you newly marked
+- Summarize what moved where: what left CLAUDE.md, what (if anything) landed in MEMORY.md or
+  README.md, what changed in docs/architecture.md or docs/roadmap.md (prose/staleness fixes
+  only; ship/unship bookkeeping is `update-roadmap`'s job), what in the rest of docs/** you
+  verified-but-left-alone vs. actually changed, and any file you newly marked
   `tidy-md:locked`.
