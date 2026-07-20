@@ -22,8 +22,8 @@ panels](docs/screenshots/editor-overview.png)
   outlines, with per-object base and outline color and width, applied the same way to
   procedural primitives and textured glTF models.
 - Cascaded shadow maps (4 cascades, PCF-filtered) via Diligent's own `ShadowMapManager`,
-  feeding directly into the cel-shading ramp — a shadowed pixel lands on a darker rung of the
-  same toon band ladder, not a separate flat overlay.
+  feeding directly into the cel-shading ramp, so a shadowed pixel lands on a darker rung of
+  the same toon band ladder.
 - Full HDR post-processing stack via DiligentFX's `PostFXContext`: temporal-denoised SSAO,
   TAA, depth of field, screen-space reflections, bloom, and an ACES filmic tone map, every
   parameter live-tunable from the editor.
@@ -42,7 +42,7 @@ panels](docs/screenshots/editor-overview.png)
   Play and stepped on the same fixed tick, with a collider debug wireframe overlay.
 - Scene serialization: save/load the full hierarchy, transforms, materials, and lighting to
   a human-readable text file. Procedural geometry round-trips from its generator parameters
-  (radius, segment counts), not baked mesh data, so a saved scene has no binary blobs.
+  (radius, segment counts), so a saved scene has no binary blobs.
 - Editor UI built from scratch on Dear ImGui: a docked layout with 3 selectable themes, a
   scene hierarchy with drag-drop reparenting, an inspector with live material, transform,
   and light editing, ImGuizmo move/rotate/scale gizmos with Unity-style hotkeys (W/E/R/X)
@@ -52,14 +52,14 @@ panels](docs/screenshots/editor-overview.png)
 - Editor camera: orbit, pan, zoom, and WASD/QE fly, with input capture suppressed correctly
   while interacting with the UI or dragging a gizmo.
 - Built for portability: an abstraction layer keeps every Diligent/Vulkan type out of the
-  application code (see Architecture below), so a backend swap or a new platform port means
-  writing another implementation file instead of rewriting the engine.
+  application code (see Architecture below), so a backend swap or a new platform port is
+  scoped to a single new implementation file.
 
 The SSAO/TAA pipeline had a temporal-reprojection ghosting bug that took six rounds of
 investigation to root-cause: the post-processing context had no real previous-frame depth
 history, and a rotating silhouette's true motion can't be fully captured by a per-vertex
-motion vector. Fixed with a real double-buffered depth history instead of a partial
-workaround. Full write-up in [MEMORY.md](MEMORY.md).
+motion vector. Fixed with a real double-buffered depth history. Full write-up in
+[MEMORY.md](MEMORY.md).
 
 ## Tech Stack
 
@@ -76,14 +76,14 @@ workaround. Full write-up in [MEMORY.md](MEMORY.md).
 
 ## Architecture
 
-The engine is built on Diligent, not around a reimplementation of it: asset loading, the
-ImGui render backend, post-processing, and shader cross-compilation are all Diligent's own.
+The engine is built directly on Diligent: asset loading, the ImGui render backend,
+post-processing, and shader cross-compilation are all Diligent's own.
 What ToonEngine adds is a thin abstraction layer: `core/rendering/renderer.h` exposes opaque
 resource handles and a data-encapsulated `Renderer`, keeping every Diligent header and type
 behind `core/rendering/renderer.cpp`. The application layer (`main.cpp`, `src/app/`,
 `ui/panels/`) never includes a Diligent header; it calls `Init` / `BeginFrame` / `DrawMesh` /
-`EndScene` / `EndFrame`. A backend swap or a console port means writing another
-`renderer_*.cpp`, not a rewrite.
+`EndScene` / `EndFrame`. A backend swap or a console port is scoped to writing another
+`renderer_*.cpp`.
 
 See [docs/architecture.md](docs/architecture.md) for the full architecture writeup,
 [CLAUDE.md](CLAUDE.md) for guiding principles and conventions, and [MEMORY.md](MEMORY.md) for
@@ -107,12 +107,11 @@ cmake --build --preset windows-debug
 ```
 
 The IDE is **CLion**. See [docs/clion-setup-windows.md](docs/clion-setup-windows.md) for
-one-time toolchain and preset setup (Linux and macOS setup docs also exist, for when those
-platforms land).
+one-time toolchain and preset setup (Linux and macOS setup docs also exist).
 
 ## Status
 
-Windows on Vulkan is the active target; Linux (Vulkan) and macOS (Vulkan via MoltenVK) are
+Windows on Vulkan is currently supported. Linux (Vulkan) and macOS (Vulkan via MoltenVK) are
 planned. See [CLAUDE.md](CLAUDE.md) → *Roadmap* for what's shipped and what's next.
 
 ## License

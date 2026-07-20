@@ -8,18 +8,18 @@ and roadmap, see [CLAUDE.md](../CLAUDE.md); for the history and reasoning behind
 decisions (and a long list of hard-won build/API gotchas), see [MEMORY.md](../MEMORY.md).
 
 The app today is an editor: it opens a window, builds a small demo scene, and renders it live
-through a full toon rendering pipeline — cel-shaded fill with inverted-hull outlines, cascaded
-shadow maps, an HDR G-buffer, and a DiligentFX post-processing chain — with a docked Dear ImGui
+through a full toon rendering pipeline (cel-shaded fill with inverted-hull outlines, cascaded
+shadow maps, an HDR G-buffer, and a DiligentFX post-processing chain) with a docked Dear ImGui
 UI for inspecting and editing the scene. The defining architectural decision, covered first
 below, is the renderer's abstraction layer: every Diligent type and header is quarantined
-inside one translation unit, so the rest of the engine — the scene graph, the editor camera,
-the input system, the serializer, the UI panels, and gameplay systems (native scripts,
-physics, audio next) — never touches Diligent directly and stays backend-agnostic by
+inside one translation unit, so the rest of the engine, including the scene graph, the editor
+camera, the input system, the serializer, the UI panels, and gameplay systems (native scripts,
+physics, audio next), never touches Diligent directly and stays backend-agnostic by
 construction. Physics (M2.1) added a second, twin abstraction layer the same way: every Jolt
 Physics type is quarantined inside `core/physics/physics.cpp` (see "The physics abstraction layer"
 below).
 
-## The renderer abstraction layer
+## The Renderer Abstraction Layer
 
 `core/rendering/renderer.h` is the one header the rest of the engine includes for GPU work. Its file
 banner states the contract directly: no Diligent type, and no Diligent header, escapes it. It
@@ -27,7 +27,7 @@ includes only `<cstdint>` and `core/math.h`, and forward-declares `struct GLFWwi
 including it pulls in neither GLFW nor Diligent. `core/rendering/renderer.cpp` is the only translation
 unit allowed to include a Diligent header or name a `Diligent::` type.
 
-### Vocabulary: opaque handles and plain scene types
+### Vocabulary: Opaque Handles and Plain Scene Types
 
 GPU resources are named by plain, scoped 32-bit enums, never by the underlying Diligent object:
 
@@ -40,41 +40,41 @@ enum class MeshHandle : uint32_t { Invalid = 0 };
 enum class ModelHandle : uint32_t { Invalid = 0 }; // a loaded glTF/GLB asset
 ```
 
-`BufferHandle`, `ShaderHandle`, and `PipelineHandle` exist for contract completeness — their
-creation APIs land with future shader/pipeline work — but only `MeshHandle`, `ModelHandle`, and
+`BufferHandle`, `ShaderHandle`, and `PipelineHandle` exist for contract completeness (their
+creation APIs land with future shader/pipeline work), but only `MeshHandle`, `ModelHandle`, and
 `TextureHandle` are live today. The id-to-resource mapping lives entirely inside the renderer's
 `Impl`; nothing outside `renderer.cpp` ever sees the real object behind a handle.
 
 Alongside the handles, `renderer.h` defines the plain scene vocabulary the rest of the engine
 speaks in:
 
-- **`Vertex`** — `position`, `normal`, `smoothNormal` (three tightly-packed `Vec3`s). `normal`
+- **`Vertex`**: `position`, `normal`, `smoothNormal` (three tightly-packed `Vec3`s). `normal`
   shades the fill and may be faceted per-face; `smoothNormal` is the averaged normal the
   inverted-hull outline extrudes along, so hard edges (a cube's corners) stay closed instead of
   splitting apart. The two are identical on a smooth mesh.
-- **`Camera`** — an orbit camera (`pivot`, `distance`, `yaw`, `pitch`, `fovY`, `nearZ`, `farZ`)
+- **`Camera`**: an orbit camera (`pivot`, `distance`, `yaw`, `pitch`, `fovY`, `nearZ`, `farZ`)
   plus editor-control tuning the renderer itself never reads (`lookSensitivity`,
-  `panSensitivity`, `zoomSpeed`, `moveSpeed` — consumed only by `core/camera/camera.h`). The renderer
+  `panSensitivity`, `zoomSpeed`, `moveSpeed`, consumed only by `core/camera/camera.h`). The renderer
   builds the actual view/projection matrices from these fields; keeping NDC and handedness
   conventions on the Diligent side of the abstraction layer means the app never has to know
   them.
-- **`Material`** — the per-object toon look passed to `DrawMesh`/`DrawModel`: `baseColor`,
+- **`Material`**: the per-object toon look passed to `DrawMesh`/`DrawModel`: `baseColor`,
   `outlineColor`, `outlineWidth`, `bands` (shading band count), `ambient` (shadow-side floor),
   `roughness` (gates screen-space reflections).
-- **`Transform`** — `position`, `rotation` (a `Quat`, replacing the old Euler-angle field so
+- **`Transform`**: `position`, `rotation` (a `Quat`, replacing the old Euler-angle field so
   physics write-back and render interpolation need no lossy decompose/recompose each tick,
   and interpolation can slerp instead of a per-axis lerp; the inspector still edits Euler
-  degrees, converted at the widget boundary), `scale` (may be non-uniform — `DrawMesh`
+  degrees, converted at the widget boundary), `scale` (may be non-uniform: `DrawMesh`
   derives an inverse-transpose normal matrix so shading, the normal G-buffer, and the outline
   width all stay correct under any scale).
-- **`PostParams`** — the full live post-processing control block the Settings panel edits:
+- **`PostParams`**: the full live post-processing control block the Settings panel edits:
   exposure/tone-map, Bloom, SSAO, depth of field, TAA, SSR, and a `shadows` toggle (default
   `true`), each with its own parameters. It also carries `suppressTemporalHistory`, an
   app-computed flag (not a UI toggle) set whenever a gizmo drag, an edited ImGui widget, or
-  continuous animation means temporal history shouldn't be trusted — see "The motion-history
+  continuous animation means temporal history shouldn't be trusted. See "The motion-history
   chain" below for why.
 
-### The `Renderer` class
+### The `Renderer` Class
 
 `Renderer` is a non-copyable, data-encapsulated class: every public method has a plain,
 Diligent-free signature, and `struct Impl` is only forward-declared in the header. Its real
@@ -136,41 +136,41 @@ private:
 ```
 
 Grouped by what they do: lifecycle (`Init`/`Shutdown`/`BeginFrame`/`EndFrame`/`Resize`); the
-toon draw path (`CreateMesh`, `SetCamera`, `SetLight`, `DrawMesh` — two overloads, one taking a
+toon draw path (`CreateMesh`, `SetCamera`, `SetLight`, `DrawMesh`: two overloads, one taking a
 `Transform` pair and one a pre-composed `Mat4` pair for callers that already compose hierarchy
 transforms); the cascaded-shadow pre-pass (`BeginShadowPass` through `EndShadowPass`); glTF
-models (`LoadModel`, `DrawModel` — mirroring `DrawMesh`'s two-overload shape); editor-only
-textures (`LoadTexture` etc., for the asset browser — not part of the toon draw path, since
+models (`LoadModel`, `DrawModel`: mirroring `DrawMesh`'s two-overload shape); editor-only
+textures (`LoadTexture` etc., for the asset browser, not part of the toon draw path, since
 materials don't carry textures yet); post-processing (`SetPostParams`, `EndScene`); the
-collider debug overlay (`DrawWireframe`, M2.1 — see "The physics abstraction layer" below and
+collider debug overlay (`DrawWireframe`, M2.1, see "The physics abstraction layer" below and
 "The rendering pipeline"'s "Collider debug wireframe"); and the Dear ImGui glue (`InitUI` through
 `EndUI`). "The rendering pipeline" below walks through what each group actually does on the
 GPU.
 
-### Why data encapsulation, not a virtual `IRenderer`
+### Why Data Encapsulation, Not a Virtual `IRenderer`
 
 MEMORY.md's "Architecture decisions" section records the reasoning: Diligent already provides
 runtime backend selection (Vulkan/D3D12/GL/Metal) beneath the abstraction layer, so a second
 layer of runtime polymorphism in ToonEngine would buy nothing. A backend swap or console port
 is a
-build-time concern — write another `renderer_*.cpp` and point the build at it — not a rewrite,
+build-time concern (write another `renderer_*.cpp` and point the build at it), not a rewrite,
 and not a virtual-dispatch cost on the hot path.
 
-### Dear ImGui is exempt
+### Dear ImGui Is Exempt
 
 Dear ImGui is a plain UI library, not a Diligent type, so engine and game code may `#include
-"imgui.h"` and call `ImGui::` directly — every `ui/panels/*.cpp` file does, extensively,
+"imgui.h"` and call `ImGui::` directly. Every `ui/panels/*.cpp` file does, extensively,
 between `Renderer::BeginUI()` and `EndUI()` (both called from `main.cpp`'s loop). Only
 ImGui's Diligent render backend (`ImGuiImplDiligent`) is confined to
 `core/rendering/renderer.cpp`.
 
-## The physics abstraction layer
+## The Physics Abstraction Layer
 
 `core/physics/physics.h` mirrors the renderer's abstraction layer almost exactly, for the same
 reason: every Jolt Physics type and header is quarantined inside `core/physics/physics.cpp`, so the
 rest of the engine
 never depends on the physics library directly. `physics.h` includes only `core/math.h` and
-speaks purely in `toon::` types — no `JPH::` type escapes it.
+speaks purely in `toon::` types: no `JPH::` type escapes it.
 
 ```cpp
 enum class BodyHandle : uint32_t { Invalid = 0 };
@@ -190,7 +190,7 @@ struct RaycastHit { BodyHandle body; Vec3 point; Vec3 normal; float distance; };
 ```
 
 `PhysicsWorld` is data-encapsulated, the same shape as `Renderer` and for the same reason
-(see "Why data encapsulation, not a virtual `IRenderer`" above — Jolt already *is* the one
+(see "Why data encapsulation, not a virtual `IRenderer`" above; Jolt already *is* the one
 physics implementation this engine uses, so a second layer of runtime polymorphism over it
 would buy nothing):
 
@@ -230,7 +230,7 @@ and its extents, it returns a flat list of line-segment endpoints (a box's 12 ed
 sphere's 3 orthogonal great circles, a capsule's 2 rings + 4 struts + 4 hemisphere-cap arcs)
 for the debug overlay described in "The rendering pipeline" below.
 
-## Source layout
+## Source Layout
 
 ```
 src/
@@ -241,7 +241,7 @@ src/
   icon.rc.in                   CMake-configured Win32 resource script; embeds GLFW_ICON for the taskbar/Alt-Tab icon.
   app/                         Editor state + the non-UI glue that used to be main()'s body. A plain
                                 EditorState struct (core/scene/scene.h's Scene precedent) + free functions
-                                operating on it — not a class, since nothing here hides a third-party
+                                operating on it, not a class, since nothing here hides a third-party
                                 dependency the way Renderer/PhysicsWorld's data encapsulation does (see
                                 CLAUDE.md's guiding principle and MEMORY.md's Muratori/plain-data note).
     editor_state.h              EditorState: every field main()'s locals used to be (Renderer, PhysicsWorld,
@@ -259,7 +259,7 @@ src/
     scene_ops.{h,cpp}           LoadSceneInto/SaveSceneFrom/NewScene, called from both the File menu
                                  (ui/panels/menu_bar.cpp) and a double-clicked .scene in the asset browser.
   core/
-    math.h                      Dependency-free Vec2/Vec3/Vec4 + a data-only row-major Mat4 — the
+    math.h                      Dependency-free Vec2/Vec3/Vec4 + a data-only row-major Mat4: the
                                  abstraction layer's public-API vocabulary; shared by every subsystem
                                  below, so it stays directly under core/ rather than in one of them.
     rendering/
@@ -271,7 +271,7 @@ src/
       script.{h,cpp}               Native gameplay scripts: per-entity Update hooks + name->factory registry (M1.3).
       scripts/
         spin_script.{h,cpp}         First concrete Script: replaces main.cpp's old hardcoded spin block.
-      serializer.{h,cpp}          Scene save/load — entity/camera state to a text .scene file.
+      serializer.{h,cpp}          Scene save/load: entity/camera state to a text .scene file.
     physics/
       physics.{h,cpp}              The physics abstraction layer: opaque BodyHandle + data-encapsulated PhysicsWorld (Jolt Physics), ColliderWireframe (M2.1).
     camera/
@@ -302,13 +302,13 @@ CMake bakes several absolute path macros into the binary (`target_compile_defini
 
 | Macro | Points at |
 |---|---|
-| `TOON_SHADERS_DIR` | `assets/shaders` — the HLSL shader source root |
-| `TOON_MODELS_DIR` | `assets/models` — glTF/GLB/FBX test models |
-| `TOON_FONTS_DIR` | `assets/fonts` — editor UI fonts |
-| `TOON_ICON_PATH` | `assets/icon.png` — runtime window icon |
-| `TOON_SCENES_DIR` | `assets/scenes` — saved `.scene` files |
-| `TOON_INPUT_JSON` | `assets/input.json` — saved input bindings |
-| `TOON_ASSETS_DIR` | `assets` — the asset browser's root |
+| `TOON_SHADERS_DIR` | `assets/shaders`: the HLSL shader source root |
+| `TOON_MODELS_DIR` | `assets/models`: glTF/GLB/FBX test models |
+| `TOON_FONTS_DIR` | `assets/fonts`: editor UI fonts |
+| `TOON_ICON_PATH` | `assets/icon.png`: runtime window icon |
+| `TOON_SCENES_DIR` | `assets/scenes`: saved `.scene` files |
+| `TOON_INPUT_JSON` | `assets/input.json`: saved input bindings |
+| `TOON_ASSETS_DIR` | `assets`: the asset browser's root |
 
 A shipped build would copy these directories next to the executable and switch to relative
 paths; today they're dev-convenience absolute paths into the source tree.
@@ -324,18 +324,18 @@ paths; today they're dev-convenience absolute paths into the source tree.
 | `model_outline.hlsl` | Inverted-hull outline for glTF models, extruded along the shading normal (models carry no smooth normal). |
 | `shadow_depth.hlsl` | Depth-only pass for procedural meshes into a shadow cascade. |
 | `model_shadow_depth.hlsl` | Depth-only pass for glTF models into a shadow cascade. |
-| `tonemap.hlsl` | Full-screen HDR resolve: AO/SSR composite, exposure, ACES tone map, optional sRGB encode. No vertex buffer — the triangle is generated from `SV_VertexID`. |
+| `tonemap.hlsl` | Full-screen HDR resolve: AO/SSR composite, exposure, ACES tone map, optional sRGB encode. No vertex buffer. The triangle is generated from `SV_VertexID`. |
 | `wireframe.hlsl` | Collider debug overlay (M2.1): flat-color line-list draw for `DrawWireframe`, no lighting/shadow/G-buffer output. |
 
-## The frame loop
+## The Frame Loop
 
 `main.cpp` itself is now ~90 lines of glue: it creates the GLFW window, builds an
 `app::EditorState`, calls `InitEditor` once, then drives the per-frame sequence below by
 calling into `app/editor_tick.{h,cpp}`, `app/editor_render.{h,cpp}`, and every
-`ui/panels/*.{h,cpp}` `DrawXPanel(state)` function — none of the actual init/tick/render/UI
+`ui/panels/*.{h,cpp}` `DrawXPanel(state)` function; none of the actual init/tick/render/UI
 logic lives in `main.cpp` itself anymore, only the calls that sequence it. `main.cpp` still
 includes no Diligent header (matching the abstraction layer's contract), and no longer
-includes `imgui.h`/`ImGuizmo.h` directly either — those come in through `app/editor_state.h`,
+includes `imgui.h`/`ImGuizmo.h` directly either; those come in through `app/editor_state.h`,
 which every `app/` and `ui/panels/` file includes, and none of them touch Diligent. This
 `EditorState` struct + free-functions shape (not a class) mirrors `core/scene/scene.h`'s own
 `Scene`, for the same reason: nothing here hides a third-party dependency the way
@@ -355,14 +355,14 @@ framebuffer-resize callback to `Renderer::Resize`; `state.physicsWorld.Init()` (
 `Factory`/`RegisterTypes` are process-global one-time setup, see "The physics abstraction
 layer" above); build the demo scene graph (ground with a static box collider, sphere, cube,
 satellite orbiting the cube, torus, a loaded glTF helmet, a light entity, and a few dynamic
-Box/Sphere colliders dropped above the ground — the sphere/cube/torus/helmet each get a
+Box/Sphere colliders dropped above the ground: the sphere/cube/torus/helmet each get a
 `SpinScript` attached, see "The scene model" -> "Scripts" below; the dynamic primitives get a
 `ColliderComponent` + `RigidBodyComponent` instead, see "The scene model" -> "Physics
 components" below); construct the editor `Camera`, the shared `Material style`, `PostParams
-post`, and the `FileBrowser` — all as fields on the `EditorState` `main.cpp` passes in by
+post`, and the `FileBrowser`, all as fields on the `EditorState` `main.cpp` passes in by
 reference.
 
-### Per frame
+### Per Frame
 
 ```
 // app/editor_tick.cpp -- TickEditor(state)
@@ -427,7 +427,7 @@ renderer.EndScene()              // PostFX chain + exposure + tone map -> back b
 // + the collider-wireframe overlay, if state.showColliders is set (see "The rendering
 // pipeline" -> "Collider debug wireframe" above)
 
-// main.cpp's loop, calling into ui/panels/*.cpp — ImGui is abstraction-layer-exempt, see above
+// main.cpp's loop, calling into ui/panels/*.cpp -- ImGui is abstraction-layer-exempt, see above
 renderer.BeginUI()               // ImGui::NewFrame
 GizmoHotkeys(state)              // ImGuizmo::BeginFrame() + the W/E/R/X hotkeys (gizmo_overlay.cpp)
 DrawMenuBar(state)                // File/Edit/Tools/View/Help + their modals (menu_bar.cpp)
@@ -468,14 +468,14 @@ in the fixed-step loop, `SnapshotSimState` must run before that iteration mutate
 itself must be computed *after* the `while` has fully drained the accumulator, not before, since
 it reads the accumulator's final leftover for this frame.
 
-## The rendering pipeline
+## The Rendering Pipeline
 
 End to end: **shadow pre-pass** (its own depth-only cascade atlas) → **main scene pass** into an
 **HDR + world-normal + motion-vector G-buffer** (reading the shadow atlas inline) → **DiligentFX
 post-FX** (SSAO and SSR produced separately; TAA → DoF → Bloom form a color chain) → **tone-map
 resolve** (composites AO/SSR, applies exposure + ACES, writes the back buffer) → **ImGui overlay**.
 
-### Internal formats and the shared cbuffer contract
+### Internal Formats and the Shared Cbuffer Contract
 
 ```cpp
 static constexpr TEXTURE_FORMAT kHDRFormat        = TEX_FORMAT_RGBA16_FLOAT; // scene color
@@ -515,64 +515,64 @@ Matrices are declared `row_major` in HLSL so Diligent's row-major `float4x4` upl
 struct and the `.hlsli` cbuffer trips an immediate Diligent validation error, which is how the
 layout stays honest across edits.
 
-### Shadow map creation runs first, before either toon pipeline
+### Shadow Map Creation Runs First, Before Either Toon Pipeline
 
 `Renderer::Init` calls its setup helpers in a specific order: `CreateShadowMap()` **before**
 `CreateToonPipeline()`/`CreateModelPipeline()`, then `CreateOffscreenTargets`,
 `CreatePostPipeline`, `CreatePostFX`. The reason is a real Diligent constraint, not a stylistic
 choice: `CreateShadowMap` allocates the shadow atlas and binds it into the fill PSOs'
 `ShadowAttribsCB`/`g_ShadowMap`/`g_ShadowMap_sampler` as `STATIC` shader resource variables, and
-a static variable must be set before its pipeline's shader resource binding (SRB) is created —
+a static variable must be set before its pipeline's shader resource binding (SRB) is created,
 so the shadow map has to exist before the toon/model PSOs that reference it do.
 
 `CreateShadowMap` builds a `Diligent::ShadowMapManager` (`external/DiligentFX/Components`,
-`ShadowMapManager.hpp`) — the component that owns cascade distribution and the depth-only atlas
-— with `SHADOW_MODE_PCF`, `kShadowCascades` cascades at `kShadowResolution` each, plus a
+`ShadowMapManager.hpp`), the component that owns cascade distribution and the depth-only atlas,
+with `SHADOW_MODE_PCF`, `kShadowCascades` cascades at `kShadowResolution` each, plus a
 comparison sampler (`LESS`, for hardware PCF via `SampleCmp`) and two depth-only PSOs
 (`shadowPSO` for procedural meshes, `modelShadowPSO` for glTF, built from `shadow_depth.hlsl` /
 `model_shadow_depth.hlsl`). Unlike the window-sized offscreen targets, the shadow atlas doesn't
-resize with the swap chain — it's fixed at `Init`.
+resize with the swap chain; it's fixed at `Init`.
 
-### The shadow pre-pass
+### The Shadow Pre-Pass
 
 Per frame, `BeginShadowPass()` maps a `ShadowMapAttribs` constant buffer and calls
 `ShadowMapManager::DistributeCascadeInfo` to compute each cascade's light-space transform from
 the current camera and light, returning the cascade count (`kShadowCascades`, or `0` if
-`PostParams::shadows` is off — the caller's loop becomes a no-op). For each cascade,
+`PostParams::shadows` is off, so the caller's loop becomes a no-op). For each cascade,
 `BeginShadowCascade(i)` binds and clears that cascade's depth slice; `DrawMeshShadow`/
 `DrawModelShadow` render every shadow-casting entity into it with the depth-only PSOs
-(`GetCascadeTransform(i).WorldToLightProjSpace` supplies the light-space WVP — no motion
+(`GetCascadeTransform(i).WorldToLightProjSpace` supplies the light-space WVP: no motion
 vectors, no material, just position). `EndShadowPass()` is a no-op today, kept for symmetry and
 future filtering modes.
 
 The main pass later reads the finished atlas through `toon_common.hlsli`'s
 `ComputeShadowFactor(worldPos, cameraSpaceZ)`: it transforms `worldPos` into the shared
 light-facing space (`ShadowMapAttribs.mWorldToLightView`), picks the correct cascade from
-`cameraSpaceZ` (which is just `pin.CurrClip.w`, since clip-space W already is camera-space Z —
-no separate view matrix needed in the cbuffer), and calls DiligentFX's `FilterShadowMap` for
+`cameraSpaceZ` (which is just `pin.CurrClip.w`, since clip-space W already is camera-space Z,
+so no separate view matrix is needed in the cbuffer), and calls DiligentFX's `FilterShadowMap` for
 3×3 PCF. The result feeds `CelShade`'s `shadow` parameter, which multiplies `N·L` **before**
-quantizing into bands — so a shadowed pixel lands on a darker rung of the same band ladder
+quantizing into bands, so a shadowed pixel lands on a darker rung of the same band ladder
 lighting already uses, rather than reading as a separate flat overlay color.
 
-### The toon two-pass draw
+### The Toon Two-Pass Draw
 
 Both `fillPSO` and `outlinePSO` output three render targets (color/normal/motion) plus depth,
 with `FrontCounterClockwise = True` (primitives are authored CCW-front for the left-handed
 projection). **Fill culls back faces; outline culls front faces**, keeping the outline pass's
 enlarged inverted hull. `DrawMesh` computes `wvp`/`prevWvp`/`normalMatrix`/`prevNormalMatrix`
 from the current and previous world matrices, maps the whole `ShaderConstants` block once, and
-draws **outline first, then fill** — the fill's nearer depth overwrites the enlarged shell
+draws **outline first, then fill**: the fill's nearer depth overwrites the enlarged shell
 everywhere except the silhouette rim. `DrawModel` follows the identical two-pass shape for glTF
 primitives, with `FrontCounterClockwise = False` (glTF's right-handed winding flips under the
 left-handed projection) and a `Texture2DArray` albedo sample (slice 0) in place of a flat base
 color.
 
-### The DiligentFX post-FX chain
+### The DiligentFX Post-FX Chain
 
 `RunPostFX` runs once per frame from `EndScene`. It first calls `PostFXContext::Execute` with
 the current **and previous** depth SRV, the motion-vector SRV, and current/previous camera
 attributes, giving every downstream effect real reprojection history instead of treating the
-current frame as its own previous frame (a deliberate fix for an earlier ghosting bug — see
+current frame as its own previous frame (a deliberate fix for an earlier ghosting bug; see
 MEMORY.md's "Bugs found dogfooding"). Then, if the PSOs are ready:
 
 - **SSAO** (if enabled) reads depth + the normal G-buffer and produces a separate ambient
@@ -580,14 +580,14 @@ MEMORY.md's "Bugs found dogfooding"). Then, if the PSOs are ready:
   `suppressTemporalHistory` is set.
 - **SSR** (if enabled) reads color + depth + normal (roughness from `.w`, `RoughnessChannel =
   3`) + motion and produces a separate reflection-radiance SRV.
-- The **color chain** runs scene → **TAA** → **DoF** → **Bloom**, in that order — each enabled
+- The **color chain** runs scene → **TAA** → **DoF** → **Bloom**, in that order: each enabled
   stage reads the previous stage's output, so `colorOut` ends on the last one that ran. TAA
   runs first specifically so DoF and Bloom process the anti-aliased image, not the raw one.
 
 SSAO and SSR are never part of the color chain; they're always composited separately in the
 resolve, described next.
 
-### The tone-map resolve
+### The Tone-Map Resolve
 
 `EndScene` picks the processed color (or the raw HDR scene if nothing in the color chain ran),
 the AO texture (or a 1×1 white default), and the SSR texture (or a 1×1 black default), binds the
@@ -604,30 +604,30 @@ color = toneMap ? ACESFilm(hdr) : saturate(hdr)
 `EndScene` leaves the back buffer bound afterward so the ImGui overlay draws directly on top,
 and copies the current depth into `prevSceneDepth` for next frame's reprojection history.
 
-### Collider debug wireframe (M2.1)
+### Collider Debug Wireframe (M2.1)
 
 `DrawWireframe` (see "The physics abstraction layer" above for `ColliderWireframe`, the
 geometry it draws) uses its own small PSO: `PRIMITIVE_TOPOLOGY_LINE_LIST`, depth test
-**off**, back-buffer-only render target — the same "back buffer only" shape as the tonemap
+**off**, back-buffer-only render target, the same "back buffer only" shape as the tonemap
 PSO above, reused rather than reinvented. Depth test is off deliberately: an always-on-top overlay avoids adding a
 depth-tested variant's G-buffer MRT-compatibility risk, and a debug aid benefiting from never
 being occluded is a reasonable trade. `ui/panels/settings_panel.cpp`'s "Show Colliders"
 toggle (`EditorState::showColliders`) gates a loop in `app/editor_render.cpp`'s
 `RenderFrame` that calls it once per collider-bearing entity, directly after `EndScene()`
-and before `Renderer::BeginUI()`
-— it draws straight onto the already-bound back buffer from the tone-map resolve above, so no
+and before `Renderer::BeginUI()`;
+it draws straight onto the already-bound back buffer from the tone-map resolve above, so no
 extra render-target binding is needed in `DrawWireframe` itself.
 
-### ImGui glue
+### ImGui Glue
 
 `InitUI` constructs `ImGuiImplDiligent` (which creates the ImGui context) **before**
-`ImGui_ImplGlfw_InitForVulkan` — the GLFW backend calls `ImGui::GetIO()`, which asserts if no
+`ImGui_ImplGlfw_InitForVulkan`: the GLFW backend calls `ImGui::GetIO()`, which asserts if no
 context exists yet. `ShutdownUI` tears down in the exact reverse order; getting either wrong
 either fails an assert on startup or aborts the process on window close. The ImGui PSO is built
 with `TEX_FORMAT_UNKNOWN` for its depth format, since the UI draws to the back buffer with no
 depth attachment bound.
 
-## The scene model
+## The Scene Model
 
 `core/scene/scene.h` is a flat entity tree: parents always precede their children in the vector, and
 index 0 is the implicit root, so a single forward pass composes every world transform.
@@ -658,7 +658,7 @@ struct Scene {
 ```
 
 A light entity is aimed by its **rotation** (Unity/Godot-style): its local +Z axis in world
-space is the direction light travels, so rotating the entity — with the gizmo, for instance —
+space is the direction light travels, so rotating the entity, with the gizmo, for instance,
 re-aims it. `GetActiveLight` reads that direction off the first light entity's cached world
 matrix (row 2), falling back to a fixed default if the scene has none.
 
@@ -680,7 +680,7 @@ to a local TRS, writing `transform`, the authoritative pose the next fixed step'
 
 The editor mutation API (`AddChildEntity`, `DeleteEntity`, `DuplicateEntity`, `ReparentEntity`,
 `MoveEntityAsSibling`) all preserve the parents-before-children invariant and fix up `selected`,
-and all mutate the entity vector — so `ui/panels/objects_panel.cpp`'s hierarchy panel records requested operations
+and all mutate the entity vector, so `ui/panels/objects_panel.cpp`'s hierarchy panel records requested operations
 while iterating and applies them only after the loop ends. `ReparentEntity` is world-preserving
 (the entity doesn't visually jump) and refuses cycles via `IsAncestorOrSelf`. `DestroyScene`
 just clears the vector: entities hold only handles, never GPU resources, so there's nothing
@@ -688,7 +688,7 @@ GPU-side to release here (see "Ownership" below).
 
 ### Scripts
 
-`core/scene/script.h` (M1.3) is where per-entity gameplay logic lives — a native-script layer in
+`core/scene/script.h` (M1.3) is where per-entity gameplay logic lives: a native-script layer in
 Cherno/Hazel's `NativeScriptComponent` shape, backed by `Entity::scripts` rather than an
 `entt` registry (ECS stays a deliberate later option, not built; see MEMORY.md's "Entity
 behavior system" section for the full survey and reasoning). `Script` is a virtual base:
@@ -734,13 +734,13 @@ with no call-site changes: a copy is no longer free, but it's still just a copy 
 caller's side.
 
 A script serializes as one `.scene` line, `script <Name> <field...>`, resolved through the
-registry on load — the same shape `primitive <kind> <field...>` already uses.
+registry on load, the same shape `primitive <kind> <field...>` already uses.
 
-### Physics components (M2.1)
+### Physics Components (M2.1)
 
 `ColliderComponent` (shape + extents) and `RigidBodyComponent` (mass/friction/restitution/
 type + a transient, never-serialized `BodyHandle`) are independent `std::optional` fields,
-matching the grain `LightComponent`/`ScriptComponent` already established — not one merged
+matching the grain `LightComponent`/`ScriptComponent` already established, not one merged
 component. A collider alone is an implicit static collider (a wall/floor with no authored
 body); collider **and** body is a dynamic/kinematic mover, the same split Unity's
 `Collider`/`Rigidbody` and Godot's `CollisionShape`/`RigidBody` both use. See "The physics
@@ -751,7 +751,7 @@ abstraction layer" above for `BodyHandle`/`BodyDesc`/`PhysicsWorld` themselves.
 scratch every time Play (or Step-from-Editing) begins: `Clear()`s the world, then for each
 entity with a `ColliderComponent`, synthesizes an implicit static `RigidBodyComponent` if
 none was authored, and calls `CreateBody` seeded from the entity's current world pose. This
-assumes every collider-bearing entity is root-parented — a collider on a nested entity is
+assumes every collider-bearing entity is root-parented: a collider on a nested entity is
 seeded once at Play-start but never re-synced against a moving parent afterward, since Jolt
 bodies simulate in world space and this step doesn't fold a parent chain in. Non-uniform
 scale has no exact representation for every shape: `Box`'s three half-extents bake a
@@ -759,23 +759,23 @@ non-uniform scale in exactly, one axis at a time, but `Sphere`/`Capsule` (1-2 de
 freedom) approximate it with the largest relevant axis and log a one-time warning naming the
 entity.
 
-## The editor layer
+## The Editor Layer
 
 Everything in this section is Diligent-free; it only ever reaches the GPU across the
 abstraction layer, through a `Renderer&`.
 
-### Editor camera
+### Editor Camera
 
 `core/camera/camera.h` exposes free functions (`CameraOrbit`, `CameraPan`, `CameraZoom`, `CameraFly`,
 `CameraFocus`) that mutate a `toon::Camera` in place. `camera.cpp` derives the camera's
-world-space basis from `RotationX(-pitch) * RotationY(-yaw)` — the same Diligent matrices
-`Renderer::SetCamera` builds its view matrix from — so the controls agree exactly with what the
+world-space basis from `RotationX(-pitch) * RotationY(-yaw)`, the same Diligent matrices
+`Renderer::SetCamera` builds its view matrix from, so the controls agree exactly with what the
 renderer actually does with yaw/pitch, rather than a hand-guessed set of axis signs.
 
-### Procedural primitives
+### Procedural Primitives
 
 `core/rendering/primitives.h` generates `MeshData` (a plain vertex + index array) for a sphere, cube,
-torus, or ground plane, all wound counter-clockwise as seen from outside — matching the fill
+torus, or ground plane, all wound counter-clockwise as seen from outside: matching the fill
 pass's back-face culling and the outline pass's front-face culling. Each primitive also carries
 a `PrimitiveDesc` (kind + generation parameters), which is what lets the serializer regenerate a
 procedural mesh on load instead of needing a source file.
@@ -787,10 +787,10 @@ procedural mesh on load instead of needing a source file.
 `Scene`/`Camera` on full success, so a malformed file leaves the caller untouched. A procedural
 entity's mesh is rebuilt via `renderer.CreateMesh(MakePrimitiveMesh(desc))`; a model entity's is
 reloaded via `renderer.LoadModel(modelPath)`; a script reconstructs via `CreateScript(name)`
-(see "The scene model" -> "Scripts" above) — the serializer's only contact with the GPU is the
+(see "The scene model" -> "Scripts" above); the serializer's only contact with the GPU is the
 mesh/model path, always across the abstraction layer. Loading resets `scene.selected` to `-1`.
 
-### The input system
+### The Input System
 
 Layered, GLFW-based, and Diligent-free:
 
@@ -809,20 +809,20 @@ Layered, GLFW-based, and Diligent-free:
   combines a positive/negative binding set into one `-1..1` value (so keyboard WASD and a
   gamepad stick can drive the same named axis transparently). Actions are hashed by name
   (compile-time FNV-1a) for lookup, and a push/pop **context stack** lets a future mode (play
-  vs. edit, say) shadow the bindings below it — today only an `"editor"` context is ever pushed,
+  vs. edit, say) shadow the bindings below it; today only an `"editor"` context is ever pushed,
   registering `camera.fly.forward/right/up`, `camera.orbit.x/y`, and `camera.focus`.
 - **`binding_io.{h,cpp}`** persists an `InputContext`'s bindings as JSON (`assets/input.json`,
   via the nlohmann/json library DiligentTools already vendors), using the same
   side-buffer-swap-on-success contract as the scene serializer.
 
-### Asset browser
+### Asset Browser
 
 `ui/panels/file_browser.h`'s `FileBrowser` draws the "Asset Browser" panel: a breadcrumb bar, a
 sortable file table, and an image preview pane, rooted at `assets/` (`TOON_ASSETS_DIR`). It's
-passive beyond navigation — the one active behavior is returning the path of a file the user
+passive beyond navigation: the one active behavior is returning the path of a file the user
 double-clicked this frame; it has no notion of what a `.scene` file means, so `main.cpp`'s
 loop decides that, routing an activated `.scene` path through `app/scene_ops.h`'s
-`LoadSceneInto` — the same function the File menu's "Open Scene..." command
+`LoadSceneInto`, the same function the File menu's "Open Scene..." command
 (`ui/panels/menu_bar.cpp`) calls. `ui/thumbnail_cache.h`'s `ThumbnailCache` decodes an image to a texture once per path via
 `Renderer::LoadTexture`, and remembers failures too, so a bad file is only ever attempted once.
 
@@ -830,14 +830,14 @@ loop decides that, routing an activated `.scene` path through `app/scene_ops.h`'
 
 `EditorMode` (`app/editor_state.h`) is `Editing`, `Playing`, or `Paused`, driving the
 fixed-timestep gating described in "The frame loop" above. A "Playback" panel
-(`ui/panels/playback_panel.cpp`: a Play/Pause toggle, Step, Stop — no separate text status
+(`ui/panels/playback_panel.cpp`: a Play/Pause toggle, Step, Stop, no separate text status
 readout, since the Play/Pause button's own icon plus Step/Stop's enabled state already tell
 the whole story) docks as a thin strip at the top of the main dockspace
 (`ui/panels/dockspace.cpp`), one more `DockBuilderSplitNode` alongside the existing panel
 splits, not a new positioning mechanism.
 
 Pressing Play snapshots `scene` into a `sceneBackup` (a `Scene` copy: a `vector<Entity>` plus
-an `int`; mesh/model copy as plain handles, never touching the `Renderer` — see "The scene
+an `int`; mesh/model copy as plain handles, never touching the `Renderer`; see "The scene
 model" -> "Scripts" above for why this copy is an explicit `Entity` constructor rather than a
 free memberwise one now that entities can carry scripts) and switches to Playing, also firing
 each script's `OnCreate` once (`CreateScripts`) and building the physics world from the
@@ -857,7 +857,7 @@ it in on Step), so both set `suppressNextFrameHistory`, folded into `suppressTem
 the next frame alongside the existing gizmo-drag/edited-widget/`runScripts` cases (see "The
 motion-history chain" below).
 
-## Data flow and ownership
+## Data Flow and Ownership
 
 ### Ownership
 
@@ -868,7 +868,7 @@ motion-history chain" below).
 | Editor textures | `Renderer::Impl::textures` (`vector<RefCntAutoPtr<ITexture>>`) | 1-based; `DestroyTexture` nulls the slot (no compaction, handles stay stable) |
 | Entities | `Scene::entities`, owned by the app (`EditorState::scene`) | Entities hold only handles + a `Material` + cached matrices, never GPU resources |
 
-Because entities never hold GPU resources directly, `DestroyScene` is just `entities.clear()` —
+Because entities never hold GPU resources directly, `DestroyScene` is just `entities.clear()`:
 the actual meshes/models/textures belong to the `Renderer` and are released at its own
 `Shutdown`.
 
@@ -879,16 +879,16 @@ scene-wide look controls and per-object color/outline coexist without the entity
 material being overwritten. The single directional light is separate scene state, sourced from
 `GetActiveLight` each frame rather than carried per-draw.
 
-### Entity to draw call
+### Entity to Draw Call
 
 The draw loop walks `scene.entities` in vector order, skips entities with neither a mesh nor a
-model handle (the root, and light entities — nothing draws a light), and always uses the
+model handle (the root, and light entities, since nothing draws a light), and always uses the
 pre-composed-`Mat4` overloads of `DrawMesh`/`DrawModel`, since the scene graph has already
 composed hierarchy world transforms in `UpdateWorldTransforms`. The shadow pre-pass walks the
-same entities but calls `DrawMeshShadow`/`DrawModelShadow` with only the current `worldMatrix` —
+same entities but calls `DrawMeshShadow`/`DrawModelShadow` with only the current `worldMatrix`:
 shadows don't need motion vectors.
 
-### The motion-history chain
+### The Motion-History Chain
 
 Every temporal effect (SSAO's accumulation, DoF, TAA, SSR) depends on per-object and per-camera
 motion vectors being correct, which means threading "last frame's" state through several places
@@ -915,19 +915,19 @@ in the same order every frame:
    item is being edited, the Run Scripts toggle is on, or a Stop-restore/Step just happened
    (see "The editor layer" -> "Play / Pause / Step" above -- both are a one-frame pose jump,
    not smooth motion). `RunPostFX` then forces
-   `ResetAccumulation` on SSAO and TAA — the fix for a documented ghosting bug where a slowly
+   `ResetAccumulation` on SSAO and TAA, the fix for a documented ghosting bug where a slowly
    spinning silhouette's view-dependent contour slipped under DiligentFX's own compiled-in
    motion-distrust threshold (see MEMORY.md's "Bugs found dogfooding" for the full
    investigation).
 
-## Build and dependencies
+## Build and Dependencies
 
 Dependencies are git submodules under `external/`, not vcpkg (see `.gitmodules`):
 `DiligentCore`, `DiligentTools`, `DiligentFX`, `glfw`, `ImGuizmo`, `JoltPhysics`, and
-ToonEngine's own `imgui` (pinned to upstream's `docking` branch — see below).
+ToonEngine's own `imgui` (pinned to upstream's `docking` branch, see below).
 
 Jolt's own `CMakeLists.txt` lives under `Build/`, so it's added as
-`add_subdirectory(external/JoltPhysics/Build)`, linking the `Jolt` target — with
+`add_subdirectory(external/JoltPhysics/Build)`, linking the `Jolt` target, with
 `USE_STATIC_MSVC_RUNTIME_LIBRARY OFF` and `INTERPROCEDURAL_OPTIMIZATION OFF` set as `CACHE
 BOOL ... FORCE` beforehand, the same cache-variable-before-`add_subdirectory` pattern the
 `DILIGENT_NO_*` block below uses (Jolt otherwise defaults to a runtime library and an LTO
@@ -938,11 +938,11 @@ exact link errors this produces).
 BOOL ... FORCE` **before** `add_subdirectory(external/DiligentCore)` (these are cache variables,
 so changing them needs a build-dir reconfigure to take effect): `DILIGENT_NO_DIRECT3D11`,
 `DILIGENT_NO_DIRECT3D12`, `DILIGENT_NO_OPENGL`, and `DILIGENT_NO_RADIENT` (DiligentFX's
-real-time GI module — unused, and it fails to compile under clang-cl).
+real-time GI module: unused, and it fails to compile under clang-cl).
 
 Dear ImGui is built against ToonEngine's own `external/imgui` submodule rather than
 DiligentTools' vendored one, by setting `DILIGENT_DEAR_IMGUI_PATH` before
-`add_subdirectory(external/DiligentTools)` — DiligentTools only defaults that path if the
+`add_subdirectory(external/DiligentTools)`; DiligentTools only defaults that path if the
 caller hasn't already set it. This is what makes `IMGUI_HAS_DOCK` (and the editor's dock space)
 available at all; DiligentTools' own vendored imgui is not on the docking branch. `imgui_impl_glfw.cpp`
 is compiled directly as a ToonEngine source, since DiligentTools' Imgui module only
@@ -955,21 +955,21 @@ Linked Diligent libraries and what each is for:
 | `Diligent-BuildSettings` | Platform defines (`PLATFORM_WIN32` etc.) and compiler flags; linked first |
 | `Diligent-GraphicsEngineVk-shared` | The Vulkan backend, loaded at runtime (`ENGINE_DLL=1`, `LoadGraphicsEngineVk()`) |
 | `Diligent-Common` | `RefCntAutoPtr.hpp` and other `Common/interface` utilities |
-| `Diligent-GraphicsTools` | `MapHelper.hpp` (dynamic constant-buffer updates) and `IRenderStateCache` (unused today — the roadmap's planned shader-hot-reload path) |
-| `Diligent-AssetLoader` | `GLTF::Model` — glTF/GLB loading, self-contained, no PBR renderer |
-| `Diligent-TextureLoader` | `CreateTextureFromFile` — image decode for model textures and the asset browser |
+| `Diligent-GraphicsTools` | `MapHelper.hpp` (dynamic constant-buffer updates) and `IRenderStateCache` (unused today; the roadmap's planned shader-hot-reload path) |
+| `Diligent-AssetLoader` | `GLTF::Model`: glTF/GLB loading, self-contained, no PBR renderer |
+| `Diligent-TextureLoader` | `CreateTextureFromFile`: image decode for model textures and the asset browser |
 | `Diligent-Imgui` | `ImGuiImplDiligent` render backend + the vendored Dear ImGui build |
-| `Diligent-JSON` | nlohmann/json, for `binding_io.cpp`'s input-bindings persistence (linked explicitly — `Diligent-AssetLoader` pulls it in `PRIVATE`, so it doesn't propagate transitively) |
+| `Diligent-JSON` | nlohmann/json, for `binding_io.cpp`'s input-bindings persistence (linked explicitly: `Diligent-AssetLoader` pulls it in `PRIVATE`, so it doesn't propagate transitively) |
 | `DiligentFX` | `PostFXContext`, Bloom, SSAO, DoF, TAA, SSR, and `ShadowMapManager` |
 | `glfw` | Windowing + raw input |
 
 `core/rendering/renderer.cpp` also includes two of DiligentFX's C++-side shader-structure headers
 (`BasicStructures.fxh` → `CameraAttribs`, `BloomStructures.fxh` → `BloomAttribs`) directly,
 inside `namespace Diligent::HLSL`, to build the host-side structs `PostFXContext`/`Bloom`
-expect — this is why `CMakeLists.txt` adds `external/DiligentFX/Shaders/Common/public` to the
+expect. This is why `CMakeLists.txt` adds `external/DiligentFX/Shaders/Common/public` to the
 include path (`BasicStructures.fxh` does a bare `#include "ShaderDefinitions.fxh"`).
 
-## Where new systems plug in
+## Where New Systems Plug In
 
 The cascaded shadow maps described above are the most recent example of the pattern any new
 rendering feature follows: declare it in the abstraction layer, `renderer.h` (new methods, new
@@ -1003,7 +1003,7 @@ fields, matching Unity/Godot's own Collider/Rigidbody split. The fixed-loop half
 prediction held exactly: physics steps inside the same `kFixedDt` loop scripts already use,
 writing dynamic bodies' results back into `entity.transform` each tick, the same landing spot
 a script's write already used. The predicted `core/sim_clock` extraction never became
-necessary — the accumulator/`kFixedDt` loop still didn't change shape, only gained one more
+necessary: the accumulator/`kFixedDt` loop still didn't change shape, only gained one more
 thing to run inside it, the same outcome M1.3 had. Audio (M2's other item) is expected to need
 no fixed-loop involvement at all, unlike physics and scripts: sound playback has no
 per-tick simulation state to step, just fire-and-forget or streaming voices triggered by
@@ -1012,11 +1012,11 @@ scripts/gameplay events.
 See MEMORY.md's "ToonEngineOld carry-over" section (and its "Port gotchas for the un-shipped
 systems" subsection) for the concrete algorithms and gotchas behind the still-open M3 items.
 
-## See also
+## See Also
 
-- [CLAUDE.md](../CLAUDE.md) — guiding principles, conventions, build instructions, roadmap.
-- [MEMORY.md](../MEMORY.md) — the detailed history and reasoning behind every decision here,
+- [CLAUDE.md](../CLAUDE.md): guiding principles, conventions, build instructions, roadmap.
+- [MEMORY.md](../MEMORY.md): the detailed history and reasoning behind every decision here,
   plus a long list of build and API gotchas.
-- [docs/cpp-style-guide.md](cpp-style-guide.md) — C++ house style and abstraction-layer rules.
-- [docs/md-style-guide.md](md-style-guide.md) — the prose style this document follows.
-- [docs/clion-setup-windows.md](clion-setup-windows.md) — toolchain and IDE setup.
+- [docs/cpp-style-guide.md](cpp-style-guide.md): C++ house style and abstraction-layer rules.
+- [docs/md-style-guide.md](md-style-guide.md): the prose style this document follows.
+- [docs/clion-setup-windows.md](clion-setup-windows.md): toolchain and IDE setup.
