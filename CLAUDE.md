@@ -48,6 +48,8 @@ Collider/Rigid Body components; Box/Sphere/Capsule shapes) on a fixed 60 Hz sim 
 decoupled from and interpolated into the render rate, and only while an explicit Editing /
 Playing / Paused mode (Play/Step/Stop controls in a **Playback** panel) is set to Playing.
 Stop always reverts the scene, and the physics world, to how it was before Play started.
+**miniaudio** drives positional 3D SFX and music through an `AudioSource` entity component,
+its listener tracking the interpolated editor camera each rendered frame.
 
 See **[docs/architecture.md](docs/architecture.md)** for the full design: the renderer's
 abstraction layer, frame loop, rendering pipeline, scene model, and data flow.
@@ -111,6 +113,7 @@ CMakeLists.txt            add_subdirectory the submodules; disables unused Dilig
 CMakePresets.json         windows-debug / windows-release (Ninja + clang-cl)
 .clangd                   Points clangd at build/windows-debug's compile_commands.json
 docs/architecture.md          Full architecture writeup: abstraction layer, frame loop, pipeline, data flow
+docs/roadmap.md                One prioritized list, shipped to not-yet-started (see CLAUDE.md's Roadmap)
 docs/clion-setup-windows.md    CLion toolchain + preset + debug setup (Windows, active)
 docs/clion-setup-{linux,macos}.md  Setup notes for those platforms (planned)
 docs/cpp-style-guide.md        C++ house style (formatting + comments + abstraction-layer rules)
@@ -167,29 +170,7 @@ matrix-convention, winding, and outline-ordering details.
 
 ## Roadmap
 
-The renderer and editor are done (toon fill + outline, HDR + full DiligentFX post stack;
-scene graph, inspector/gizmos, editor camera, action-map input, serialization, asset
-browser), and so is M1's simulation foundation and M2.1's physics + collision (see Current
-state above). The app is an editor with a working simulation loop; the arc below adds the
-interaction and world systems a real game needs, sequenced by dependency. See
-docs/architecture.md for the current design and MEMORY.md for history + the ToonEngineOld
-carry-over survey.
-
-**M2: Interaction and world.** Rules and feedback.
-1. Audio: SFX + music, positional (new submodule, e.g. miniaudio).
-2. Mouse-pick via raycast: wire the shipped `PhysicsWorld::Raycast` to click-to-select.
-3. Contact events → scripts: an `OnCollision`-style `Script` hook via a Jolt contact listener.
-
-**M3: Characters and fidelity.** Populate and light the world (ports from `ToonEngineOld`).
-1. Skeletal animation: play the fox/dragon clips; an animation entity component.
-2. Grid + sky gradient: HLSL port of the old editor backdrop.
-3. 2D / sprites, plus a sprite entity component.
-
-**M4: Scale and polish** (later): instancing (a per-instance draw path for many-object
-scenes); particles / VFX; prefabs (reusable entity templates for runtime spawning).
-
-**Infra / cross-cutting** (unscheduled): Linux (Vulkan) then macOS (MoltenVK, needs the
-GLFW Cocoa `NSView` `.mm` helper); re-enable D3D11 for older Windows devices; shader
-hot-reload via Diligent's `IRenderStateCache` (`EnableHotReload` + `Reload()`, already
-reachable through the linked `Diligent-GraphicsTools`); asset packaging + relative
-shader/asset paths for shipping a build.
+**[docs/roadmap.md](docs/roadmap.md)** is one list, start to finish: what's already shipped
+(see also Current State above), then everything left, ranked from what to work on next down
+to what's least urgent right now. No milestone codenames, no separate "someday" bucket for
+infra: every remaining item, gameplay or otherwise, has an actual rank.

@@ -109,10 +109,86 @@ cmake --build --preset windows-debug
 The IDE is **CLion**. See [docs/clion-setup-windows.md](docs/clion-setup-windows.md) for
 one-time toolchain and preset setup (Linux and macOS setup docs also exist).
 
-## Status
+## Roadmap
 
 Windows on Vulkan is currently supported. Linux (Vulkan) and macOS (Vulkan via MoltenVK) are
-planned. See [CLAUDE.md](CLAUDE.md) → *Roadmap* for what's shipped and what's next.
+planned. See [CLAUDE.md](CLAUDE.md) for what's shipped and
+[docs/roadmap.md](docs/roadmap.md) for the full ranked list of what's next.
+
+```mermaid
+flowchart LR
+  subgraph V01["v0.1 — Foundation"]
+    direction TB
+    S1["Vulkan renderer &amp; toon pipeline"]
+    S2["Dear ImGui editor"]
+    S3["Editor camera &amp; input"]
+    S4["Scene graph &amp; serialization"]
+    S1 --> S2 --> S3 --> S4
+  end
+
+  subgraph V02["v0.2 — Simulation"]
+    direction TB
+    S5["Fixed-timestep simulation"]
+    S6["Physics: Jolt"]
+    S7["Audio: miniaudio"]
+    S5 --> S6 --> S7
+  end
+
+  subgraph V03["v0.3 — Interaction"]
+    direction TB
+    N8["Mouse-pick via raycast"]
+    N9["Contact events to scripts"]
+    N10["#Shader hot-reload"]
+    N8 --> N9 --> N10
+  end
+
+  subgraph V04["v0.4 — Characters &amp; World"]
+    direction TB
+    N11["Skeletal animation"]
+    N12["Grid &amp; sky gradient"]
+    N13["2D &amp; sprites"]
+    N11 --> N12 --> N13
+  end
+
+  subgraph V05["v0.5 — Scale &amp; Tools"]
+    direction TB
+    N14["Instancing"]
+    N15["Prefabs"]
+    N16["Particles &amp; VFX"]
+    N14 --> N15 --> N16
+  end
+
+  subgraph V10["v1.0 — Ship"]
+    direction TB
+    N17["Asset packaging"]
+  end
+
+  subgraph V11["v1.1 — Platform Expansion"]
+    direction TB
+    N18["Linux support"]
+    N19["macOS support"]
+    N20["Re-enable D3D11"]
+    N18 --> N19 --> N20
+  end
+
+  V01 --> V02 --> V03 --> V04 --> V05 --> V10 --> V11
+
+  classDef v01 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
+  classDef v02 fill:#6B9C8C,stroke:#4a7062,color:#EAF6F1;
+  classDef v03 fill:#FF6B4A,stroke:#c94e33,color:#2B0A00;
+  classDef v04 fill:#FF9F40,stroke:#c97927,color:#2B1400;
+  classDef v05 fill:#F4C542,stroke:#c99e28,color:#2B2100;
+  classDef v10 fill:#4FA8D8,stroke:#2f7fac,color:#00202E;
+  classDef v11 fill:#8A7CFF,stroke:#6357cc,color:#160B3E;
+
+  class S1,S2,S3,S4 v01
+  class S5,S6,S7 v02
+  class N8,N9,N10 v03
+  class N11,N12,N13 v04
+  class N14,N15,N16 v05
+  class N17 v10
+  class N18,N19,N20 v11
+```
 
 ## License
 

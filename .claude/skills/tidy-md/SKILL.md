@@ -1,15 +1,16 @@
 ---
 name: tidy-md
-description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/**) accurate and current. Prunes CLAUDE.md's roadmap into MEMORY.md as items ship (hard 200-line cap), keeps README.md a portfolio-quality feature showcase, and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships.
+description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/roadmap.md, docs/**) accurate and current. Prunes docs/roadmap.md into MEMORY.md as items ship, keeps CLAUDE.md under its hard 200-line cap, keeps README.md a portfolio-quality feature showcase, and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships.
 ---
 
 # tidy-md: Keep ToonEngine's Markdown Docs Accurate, Current, and Right-Sized
 
-Four documents have four different jobs. `CLAUDE.md` is a lean, always-loaded map.
+Five documents have five different jobs. `CLAUDE.md` is a lean, always-loaded map.
 `MEMORY.md` is the unlimited detailed archive. `README.md` is the public-facing pitch.
-`docs/architecture.md` is the deep design reference, actively maintained alongside the other
-three (see its own section below). Don't give them all the same treatment. The rest of
-`docs/**` are narrower reference docs; touch those only when they're actually wrong.
+`docs/architecture.md` is the deep design reference and `docs/roadmap.md` is the deep
+what's-next reference, both actively maintained alongside the other three (see their own
+sections below). Don't give them all the same treatment. The rest of `docs/**` are narrower
+reference docs; touch those only when they're actually wrong.
 
 ## The "Locked" Marker: Skip a File Entirely
 
@@ -37,33 +38,23 @@ comma, bold used as a fake header on every list item, puffery or marketing words
 just X, but Y" framing. Run its Pre-Output Checklist on anything substantial you write, not
 just on `docs/**` content.
 
-## CLAUDE.md: Hard 200-Line Cap, Roadmap Flows to MEMORY.md
+## CLAUDE.md: Hard 200-Line Cap
 
 CLAUDE.md is loaded into every session's context, so it must stay a lean map, not an
 archive. **Never let it exceed 200 lines.** Check with `wc -l CLAUDE.md` (or equivalent)
 after any edit. If a genuinely new line needs to go in and the file is already near the cap,
 something else has to move out or get tighter in the same edit, not "later."
 
-The main way it grows is the Roadmap section. Whenever a roadmap item has actually shipped
-(verify against recent commits and current code, not just because someone said so):
+CLAUDE.md's `## Roadmap` section is now just a short pointer to `docs/roadmap.md` (see that
+file's own section below for where the actual detail lives and how it's pruned). Keep that
+pointer paragraph accurate to `docs/roadmap.md`'s actual structure (a single shipped-to-least-
+urgent list, no milestone codenames) if it ever changes, but don't let roadmap detail creep
+back into CLAUDE.md itself; that's exactly the growth this cap exists to prevent.
 
-1. Confirm the full story (what was built, why, any gotchas) already lives in `MEMORY.md`
-   under the relevant topic section (`## Toon pipeline`, `## Editor UI`, etc.; `grep '^## '
-   MEMORY.md` shows the current section list). If CLAUDE.md's roadmap entry has detail that
-   isn't in MEMORY.md yet, migrate it there first. Move it, don't delete it. Losing the
-   "why" behind a decision is the one mistake this skill exists to prevent.
-2. Delete the item from CLAUDE.md's roadmap. Don't leave a "done" checkbox or a stub line;
-   gone means gone, MEMORY.md is the permanent record now. (This already happened once by
-   hand for the editor-UI arc; see MEMORY.md's `## Editor UI` section for the shape a good
-   migration takes.)
-3. If a roadmap item is done and genuinely has no further detail worth archiving (a
-   one-liner with nothing more to say), it's fine to just delete it. Not everything needs a
-   MEMORY.md entry, only things a future session would actually want to know.
-
-Also re-scan the rest of CLAUDE.md while you're in there, not just the roadmap: a stale
-cross-reference, a "Current state" paragraph that no longer matches what's actually built, a
-constraint that's been superseded. Fix what's actually wrong; don't rewrite prose that's
-still accurate just to rephrase it.
+Re-scan the rest of CLAUDE.md while you're in there: a stale cross-reference, a "Current
+state" paragraph that no longer matches what's actually built, a constraint that's been
+superseded. Fix what's actually wrong; don't rewrite prose that's still accurate just to
+rephrase it.
 
 ## README.md: Portfolio-Quality Feature Showcase
 
@@ -74,7 +65,7 @@ like "inverted-hull outlines" or "temporal-denoised SSAO," not vague marketing w
 as an engineering log. It's the section most exposed to `docs/md-style-guide.md`'s rules
 (see above): portfolio prose is exactly where puffery and AI writing tells creep in.
 
-When a roadmap item ships and graduates out of CLAUDE.md (above), check whether it's
+When a roadmap item ships and graduates out of `docs/roadmap.md` (below), check whether it's
 significant enough to be its own README highlight (a new rendering technique, a new editor
 capability; not an internal refactor or a bugfix). Add it if so. Keep the section scannable
 rather than exhaustive: a dense bullet list of real capabilities beats a changelog.
@@ -96,7 +87,9 @@ rendering pipeline, the scene model, data flow and ownership, and build/dependen
 canonical split across the docs, so nothing duplicates:
 
 - `docs/architecture.md`: the deep design reference (this file).
-- `CLAUDE.md`, the lean, always-loaded map: guiding principles, conventions, the roadmap.
+- `docs/roadmap.md`: the deep what's-next reference (its own section below).
+- `CLAUDE.md`, the lean, always-loaded map: guiding principles, conventions, short pointers
+  to both of the above.
 - `README.md`'s `## Architecture` section: a short summary for a reader landing on the repo
   cold, pointing to `docs/architecture.md` for the full writeup.
 - `MEMORY.md`: history, reasoning, and gotchas behind individual decisions.
@@ -108,7 +101,7 @@ changes what's true today (a new pipeline stage, a new engine-layer system). Tha
 different trigger than the rest of `docs/**` below. A broken path/command isn't the signal
 here, a changed system is. Verify against the actual current code (read the relevant
 header/source; don't infer from a commit message or a roadmap checkbox) the same way the
-CLAUDE.md roadmap check does.
+`docs/roadmap.md` pruning check below does.
 
 Keep README's `## Architecture` summary and its pointer to `architecture.md` in sync with
 this file, the same way the Building sections are kept in sync (see above).
@@ -116,10 +109,42 @@ this file, the same way the Building sections are kept in sync (see above).
 Stays **unlocked**; it tracks the code, so don't mark it `tidy-md:locked` by reflex even
 after a careful pass. Locking is for content that shouldn't churn; this file is supposed to.
 
+## docs/roadmap.md: One Prioritized List, Pruned Into MEMORY.md as Items Ship
+
+The deep what's-next reference: a single list, shipped items first in the order they landed,
+then everything left ranked from most to least important to work on next. No milestone
+codenames, no separate "someday" bucket for infra; every remaining item, gameplay or
+otherwise, has an actual rank. Actively maintained, the same tier as `architecture.md`, not
+part of the passive `docs/**` bucket below.
+
+Whenever a roadmap item has actually shipped (verify against recent commits and current
+code, not just because someone said so):
+
+1. Confirm the full story (what was built, why, any gotchas) already lives in `MEMORY.md`
+   under the relevant topic section (`## Toon pipeline`, `## Audio`, etc.; `grep '^## '
+   MEMORY.md` shows the current section list). If `docs/roadmap.md`'s entry has detail that
+   isn't in MEMORY.md yet, migrate it there first. Move it, don't delete it. Losing the
+   "why" behind a decision is the one mistake this skill exists to prevent.
+2. Move the item out of "What's Next" and into "Shipped," at the end of that section (it
+   joins the list in the order things actually landed), and renumber every item below it so
+   the whole list still reads as one unbroken sequence with no gaps. Re-check whether
+   anything ranked below it should move up: an item's rank was often justified by what was
+   still outstanding above it, and that reasoning can go stale the moment something ships.
+3. Recompute the progress line (`Shipped X / Y items`) at the top of the file to match the
+   new counts.
+4. If a roadmap item is done and genuinely has no further detail worth archiving (a
+   one-liner with nothing more to say), it's fine to just delete its MEMORY.md migration
+   step. Not everything needs a MEMORY.md entry, only things a future session would actually
+   want to know.
+5. Update CLAUDE.md's `## Roadmap` pointer paragraph only if it no longer accurately
+   describes the list's structure; re-check the 200-line cap.
+
+Stays **unlocked**, for the same reason `architecture.md` does.
+
 ## docs/**: Touch Only What's Actually Stale
 
-For each non-locked file under `docs/` other than `architecture.md` (covered above), default
-to leave it alone. Only edit one when:
+For each non-locked file under `docs/` other than `architecture.md` and `roadmap.md` (both
+covered above), default to leave it alone. Only edit one when:
 
 - The user names it explicitly, or
 - A quick verification turns up something actually wrong: a referenced file/command/path
@@ -148,7 +173,7 @@ rather than duplicating them.
 - Re-check every relative markdown link you touched (`[text](path)`) still resolves to a
   real file.
 - `wc -l CLAUDE.md`: confirm it's 200 lines or fewer.
-- Summarize what moved where: what left CLAUDE.md, what (if anything) landed in MEMORY.md or
-  README.md, what changed in docs/architecture.md, what in the rest of docs/** you
-  verified-but-left-alone vs. actually changed, and any file you newly marked
+- Summarize what moved where: what left CLAUDE.md or docs/roadmap.md, what (if anything)
+  landed in MEMORY.md or README.md, what changed in docs/architecture.md, what in the rest
+  of docs/** you verified-but-left-alone vs. actually changed, and any file you newly marked
   `tidy-md:locked`.

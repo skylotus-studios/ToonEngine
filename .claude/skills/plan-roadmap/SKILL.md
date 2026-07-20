@@ -19,16 +19,18 @@ touching a file before the user has approved anything.
 
 ## Identify the Target Item
 
-If the user named a specific roadmap item, plan that one. Otherwise read CLAUDE.md's
-`## Roadmap` section. Milestones are dependency-sequenced ("sequenced by dependency": M1
-before M2 before M3...), so the target is the first bullet of the first milestone that
-still has bullets. `Infra / cross-cutting` is unscheduled and lower priority than any
-numbered milestone; only plan an infra item if the user asks for it by name.
+If the user named a specific roadmap item, plan that one. Otherwise read
+[docs/roadmap.md](../../../docs/roadmap.md) (CLAUDE.md's `## Roadmap` section is now just a
+pointer to it): one list, shipped items first, then everything left in a single rank order
+from most to least important. The target is the first item under "What's Next," full stop.
+There is no separate lower-priority bucket for infra items (Linux/macOS, D3D11, shader
+hot-reload, asset packaging) anymore; they're ranked inline with everything else, so treat
+one exactly like any other item if it's sitting at the top of the list.
 
 Sanity-check the pick against `git log -10` and the tail of MEMORY.md's `## History`
-section. `tidy-md` prunes shipped items out of CLAUDE.md's roadmap, but there can be a
-short lag right after a commit; if the top bullet looks already built, say so and move to
-the next one instead of planning something already done.
+section. `tidy-md` prunes shipped items out of docs/roadmap.md, but there can be a short lag
+right after a commit; if the top bullet looks already built, say so and move to the next one
+instead of planning something already done.
 
 ## Ground It in the Current Architecture
 
@@ -54,10 +56,11 @@ section first: it already maintains a system-by-system map and a "Port Gotchas f
 Un-Shipped Systems" note, so if the item is covered there, that is a previous session's
 vetted answer, not something to re-derive. Then independently `Glob`/`Grep`
 `ToonEngineOld/src/**` for the item's own keywords. The carry-over survey was written for
-the M3 ports (animation, grid/sky, sprites) and says nothing about items outside that
-scope. If something turns up, say what it would cost to adapt (ToonEngineOld used glm and
-vcpkg; this engine uses hand-rolled `core/math.h` and no ECS), not only that it exists. A
-milestone 1 or 2 item with no ToonEngineOld counterpart at all is a legitimate result.
+the three ToonEngineOld ports (skeletal animation, grid/sky, sprites) and says nothing about
+items outside that scope. If something turns up, say what it would cost to adapt
+(ToonEngineOld used glm and vcpkg; this engine uses hand-rolled `core/math.h` and no ECS),
+not only that it exists. An item with no ToonEngineOld counterpart at all is a legitimate
+result.
 
 **b. What Diligent Engine already provides.** The load-bearing check, per CLAUDE.md's
 "Guiding principle" section: build on Diligent, don't reinvent it. MEMORY.md has real

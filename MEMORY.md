@@ -1686,6 +1686,51 @@ speculative future tense into a descriptive account of what actually got built (
 fields, the frame loop's physics step, and the Play/Stop section, all updated to match).
 README's Highlights gained a physics bullet.
 
+## Audio (Roadmap M2.2)
+
+**miniaudio** (single-header, MIT, zero build-system friction) via a new `external/miniaudio`
+submodule. `core/audio/audio.h`/`audio.cpp` is a third seam, the same PIMPL shape as
+`Renderer` and `PhysicsWorld`: an opaque `SoundHandle` (`enum class : uint32_t`, `Invalid = 0`,
+identical to `BodyHandle`/`MeshHandle`), a `class AudioEngine` whose header speaks only
+`toon::Vec3` and plain structs/enums, and every `ma_engine`/`ma_sound` type confined to
+`audio.cpp` via an `Impl`. `miniaudio_impl.cpp` is the one TU that does
+`#define MINIAUDIO_IMPLEMENTATION` before including the header (a single-header-library
+convention: exactly one TU emits the implementation, every other includer just gets
+declarations), keeping that macro out of `audio.cpp` itself.
+
+**API shape** (`audio.h`): `PlayOneShot`/`PlayOneShotAt` are fire-and-forget (miniaudio frees
+their resources itself, no handle to track); `Play(SoundDesc)` returns a `SoundHandle` for
+anything that needs to be stopped, repositioned, or re-volumed later (scene emitters, music),
+mirroring `PhysicsWorld`'s handle lifetime. `SoundDesc` carries `spatial` (3D-positioned vs.
+plays-everywhere) and `stream` (decode-as-you-play for long music vs. load-fully-upfront for
+short SFX) as independent flags, plus `maxDistance` for attenuation falloff. `SetListener` is
+driven from the **editor camera every rendered frame, not the fixed sim tick**: audio is a
+presentation concern like rendering (the interpolated camera pose), not a simulation concern
+like physics, the same category `Transform` interpolation already put rendering in for M1.
+`PauseAll`/`ResumeAll`/`StopAll` mirror `PhysicsWorld::Clear()` for the Playback panel's
+Play/Pause/Stop session control.
+
+**Engine-side plumbing**: a new `AudioSource` entity component (`scene.h` + `serializer.cpp`,
+same shape as the existing `RigidBody`/`Collider` components: present only when
+`entity.audioSource.has_value()`) and `app/audio_glue.{h,cpp}`'s `BuildAudioWorld`, a direct
+structural twin of `BuildPhysicsWorld`: walks the scene once at Play-start, calls
+`AudioEngine::Play` for every `AudioSource`, and stores the returned handles for teardown at
+Stop. Properties panel gained Add/Remove Audio Source with a "Preview" toggle that auditions a
+source's exact authored settings (loop/volume/pitch/spatial) via the same `Play`/`Stop` calls
+a real Play session would use, works in any Editing/Playing/Paused mode since `AudioEngine`
+itself tracks no such state. Settings panel gained master volume + mute. Clip paths resolve
+against a new `TOON_AUDIO_DIR` when not already absolute, the same pattern
+`assets/models`/`assets/fonts` use elsewhere.
+
+**Bug caught during implementation**: `Entity`'s copy constructor had an explicit member-init
+list that predated `audioSource` and was never extended when the field was added, so every
+scene copy (`Play`'s pre-play snapshot, `DuplicateEntity`) silently dropped an entity's audio
+component. Fixed in the same commit. General lesson, same shape as the `RigidBody`/`Collider`
+addition before it: an explicit copy-constructor member list is a trap for every field added
+after it exists; a defaulted copy constructor would not have had this failure mode, and is
+worth preferring the next time `Entity` grows a component, unless a field genuinely needs
+non-default copy behavior.
+
 ## Verifying a Vulkan Build
 
 ### Link Fails: `permission denied` Writing `ToonEngine.exe`
@@ -1857,10 +1902,29 @@ folder can be deleted once those land without losing anything:
   itself, but the **ufbx FBX path has no current-engine equivalent at all** (DiligentTools
   is glTF-only), so it's the only reference if FBX/skeleton import is ever wanted; only
   `dragon.fbx` needs it, `dragon.gltf` already loads through the normal path.
+- **Sprites.** Named in the un-shipped list above but never actually written up until this
+  audit (2026-07-20); the design is a real per-entity component, not just the two shader
+  files. `ShadingMode::Sprite` (`scene.h`) carries `spriteTint` (vec4), `spriteUVRect`
+  (xy=offset, zw=scale, an atlas/sub-texture rect), and `spriteFlipX`/`spriteFlipY`, all
+  round-tripped through `serializer.cpp` and editable in `overlay.cpp`'s inspector.
+  Rendering is a **separate transparent pass** after the opaque toon pass (`main.cpp`'s
+  `RenderSprite`): one shared unit quad (`gSpriteQuad`, pos+uv, 6 vertices, built once) is
+  drawn per sprite entity via `sprite.vert`/`sprite.frag` (`uMVP`, `uTintColor`, `uUVRect`,
+  alpha `discard` below 0.01). Every sprite entity is collected into a list each frame and
+  **sorted back-to-front by view-space depth**, the dot product of (entity world position
+  minus camera position) against the camera's forward vector, not raw distance to camera,
+  so overlapping alpha-blended sprites composite correctly regardless of viewing angle.
+  Porting notes: the flip is applied by negating `uUVRect`'s offset/scale in C++ before
+  upload, not in the shader; the quad is one shared mesh reused per draw via `uMVP`, not one
+  mesh per sprite instance.
 - **Deletion trigger.** Once grid+sky, skeletal animation, and sprites have all shipped
   (roadmap M3), `ToonEngineOld/` can be deleted wholesale: its CLAUDE.md and every
   already-ported subsystem (scene, camera, input, serializer, file browser/thumbnails/themes,
-  glTF loading, cascaded shadow maps) carry zero further value once that happens.
+  glTF loading, cascaded shadow maps) carry zero further value once that happens. As of this
+  audit (2026-07-20), M3 has not shipped (no skeletal animation, grid+sky, or sprites in the
+  current engine yet), so the folder stays; this entry plus the four bullets above are now a
+  complete port-gotcha record, so no further ToonEngineOld audit is needed before deleting it
+  once M3 lands.
 
 ## Architecture Decisions
 
@@ -2702,3 +2766,14 @@ pass.
   `docs/architecture.md` were updated to match in the same pass. Comment content in the
   moved/new files was carried over largely as-is; a separate later pass is intended to
   rewrite comments so they explain the code without leaning on this session's own history.
+- **2026-07-20**: **Audio shipped (roadmap M2.2).** Full writeup under "Audio" above.
+  Headline points: `core/audio/audio.{h,cpp}` is a third PIMPL seam (`SoundHandle`,
+  `AudioEngine`) twinning `Renderer`/`PhysicsWorld`, built on the new **miniaudio** submodule;
+  a listener driven from the interpolated editor-camera pose each rendered frame (not the
+  fixed sim tick, since audio is presentation, like rendering, not simulation); a new
+  `AudioSource` entity component plus `BuildAudioWorld` glue mirroring `BuildPhysicsWorld`;
+  and Playback/Properties/Settings panel UI (Play/Pause/Stop, per-source Preview, master
+  volume/mute). Fixed a real bug along the way: `Entity`'s copy constructor's explicit
+  member-init list had never been extended for `audioSource`, silently dropping the
+  component on every scene copy. Docs synced in the same pass: this entry plus the "Audio"
+  technical section above, CLAUDE.md's roadmap (M2 item 1 removed), README's Highlights.

@@ -3,9 +3,9 @@
 This document describes how ToonEngine's pieces fit together: the renderer's abstraction
 layer, the frame loop, the rendering pipeline, the scene model, and how data flows between
 them. It's the deep reference for onboarding onto the codebase. For the project's guiding
-principles, conventions,
-and roadmap, see [CLAUDE.md](../CLAUDE.md); for the history and reasoning behind individual
-decisions (and a long list of hard-won build/API gotchas), see [MEMORY.md](../MEMORY.md).
+principles and conventions, see [CLAUDE.md](../CLAUDE.md); for what's next, see
+[docs/roadmap.md](roadmap.md); for the history and reasoning behind individual decisions
+(and a long list of hard-won build/API gotchas), see [MEMORY.md](../MEMORY.md).
 
 The app today is an editor: it opens a window, builds a small demo scene, and renders it live
 through a full toon rendering pipeline (cel-shaded fill with inverted-hull outlines, cascaded
@@ -1014,7 +1014,8 @@ systems" subsection) for the concrete algorithms and gotchas behind the still-op
 
 ## See Also
 
-- [CLAUDE.md](../CLAUDE.md): guiding principles, conventions, build instructions, roadmap.
+- [CLAUDE.md](../CLAUDE.md): guiding principles, conventions, build instructions.
+- [docs/roadmap.md](roadmap.md): what's next, diagram plus per-milestone detail.
 - [MEMORY.md](../MEMORY.md): the detailed history and reasoning behind every decision here,
   plus a long list of build and API gotchas.
 - [docs/cpp-style-guide.md](cpp-style-guide.md): C++ house style and abstraction-layer rules.
