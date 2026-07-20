@@ -40,6 +40,19 @@ namespace toon {
             ImGui::SliderFloat("Bands", &state.style.bands, 1.0f, 8.0f, "%.0f");
             ImGui::SliderFloat("Ambient", &state.style.ambient, 0.0f, 1.0f);
             ImGui::SliderFloat("Outline Thickness", &state.outlineScale, 0.0f, 3.0f);
+#ifdef TOON_SHADER_HOT_RELOAD
+            // Roadmap #10: a fallback alongside the automatic file-watcher reload (already
+            // running every frame in Renderer::BeginFrame) -- compiled out of a Release build
+            // entirely, same as the watcher itself.
+            if (ImGui::Button("Reload Now")) {
+                const uint32_t n = state.renderer.ReloadShaders();
+                state.shaderReloadStatus = "Reloaded " + std::to_string(n) + " state(s)";
+            }
+            if (!state.shaderReloadStatus.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", state.shaderReloadStatus.c_str());
+            }
+#endif
 
             ImGui::SeparatorText("Camera");
             ImGui::TextDisabled("Right-drag: orbit (+WASD/QE fly)");

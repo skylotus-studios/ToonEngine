@@ -200,6 +200,13 @@ namespace toon {
         // Keep the swap chain matched to the window's framebuffer size.
         void Resize(uint32_t width, uint32_t height);
 
+        // Manually re-check every shader source file and recompile whatever changed (roadmap
+        // #10). In a Debug build a file-system watcher already does this automatically once
+        // per frame inside BeginFrame; this is a fallback trigger for the Settings panel's
+        // "Reload Now" button. Returns how many shaders/pipelines were reloaded -- always 0 in
+        // a Release build, where hot-reload is compiled out entirely.
+        uint32_t ReloadShaders();
+
         // --- Scene: meshes + toon draw ------------------------------------------
         // Upload a mesh once; returns a handle (MeshHandle::Invalid on failure).
         MeshHandle CreateMesh(const Vertex *vertices, uint32_t vertexCount, const uint32_t *indices,

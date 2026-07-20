@@ -73,6 +73,11 @@ namespace toon {
         char scenePathBuf[256] = {};
         std::string sceneStatus;
 
+        // Roadmap #10: last result of the Settings panel's "Reload Now" shader button
+        // (Debug builds only -- an automatic file watcher already does this every frame; this
+        // status just echoes the manual fallback's own last result, same shape as sceneStatus).
+        std::string shaderReloadStatus;
+
         // "Contents" editor panel: browses assets/ with thumbnails.
         FileBrowser assetBrowser;
 

@@ -94,6 +94,21 @@ add_subdirectory(external/JoltPhysics/Build)
 # src/core/audio/miniaudio_impl.cpp is the one TU that compiles its implementation
 # (MINIAUDIO_IMPLEMENTATION) -- see that file's own banner for why it's split out.
 
+# --- efsw (submodule under external/), Debug builds only ----------------------
+# Roadmap #10 (shader hot-reload): a cross-platform (Windows/Linux/macOS) file-system
+# watcher, used to notice a changed .hlsl file and trigger Diligent's own
+# IRenderStateCache::Reload() (core/rendering/renderer.cpp) -- no engine-side per-platform
+# watcher code needed. Diligent's own docs say hot-reload machinery "should generally be
+# disabled in production builds," so efsw is only built/linked for CMAKE_BUILD_TYPE Debug
+# (windows-debug preset); windows-release (RelWithDebInfo) never touches this block, and
+# TOON_SHADER_HOT_RELOAD (compile definition below) is what core/rendering/renderer.cpp and
+# ui/panels/settings_panel.cpp gate their hot-reload code on.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(BUILD_TEST_APP OFF CACHE BOOL "" FORCE) # efsw's own file-watch demo exe -- don't need it
+    set(EFSW_INSTALL   OFF CACHE BOOL "" FORCE)
+    add_subdirectory(external/efsw)
+endif()
+
 # --- Application -------------------------------------------------------------
 # imgui_impl_glfw.cpp is Dear ImGui's GLFW platform backend. DiligentTools'
 # Imgui module only auto-compiles the Win32/Linux/macOS-native/SDL backends
@@ -188,6 +203,19 @@ target_link_libraries(ToonEngine
         Diligent-GraphicsEngineVk-shared   # Vulkan: Windows, Linux, macOS (via MoltenVK)
         Diligent-Common                    # RefCntAutoPtr.hpp + other Common/interface utilities
         Diligent-GraphicsTools             # MapHelper.hpp (dynamic CB updates) + graphics utilities
+        Diligent-Archiver-shared           # ArchiverFactoryLoader.h (roadmap #10, shader hot-reload):
+                                            # GraphicsTools links Diligent-ArchiverInterface PRIVATE, so
+                                            # it does NOT propagate to us -- link the shared (DLL)
+                                            # variant explicitly instead of just the interface target,
+                                            # the same LoadEngineDll("Archiver", ...) runtime-load
+                                            # pattern ENGINE_DLL already uses for the Vulkan engine
+                                            # factory (its own DILIGENT_ARCHIVER_SHARED=1 PUBLIC define
+                                            # is what selects that path in ArchiverFactoryLoader.h;
+                                            # linking Diligent-ArchiverInterface alone leaves the code on
+                                            # the static-link path, which then fails at link time with
+                                            # no Diligent-Archiver-static in the build). The DLL itself
+                                            # is already built (DILIGENT_NO_ARCHIVER unset) and
+                                            # copy_required_dlls already copies it automatically.
         Diligent-AssetLoader               # GLTF::Model — glTF/GLB loading (self-contained; no PBR renderer)
         Diligent-TextureLoader             # CreateTextureFromFile + image decode (PNG/JPG)
         Diligent-Imgui                     # ImGuiImplDiligent renderer backend + vendored Dear ImGui
@@ -201,6 +229,11 @@ target_link_libraries(ToonEngine
                                             # (instruction-set flags etc.) along transitively.
 )
 
+# efsw only builds in Debug (see the add_subdirectory guard above) -- link it in the same guard.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_link_libraries(ToonEngine PRIVATE efsw-static)
+endif()
+
 # Native title-bar theming (core/renderer.cpp's SetTitleBarTheme, via DWM) needs
 # dwmapi.lib. Windows-only, like the icon/RC block above -- Linux/macOS don't build yet.
 if(WIN32)
@@ -212,6 +245,11 @@ endif()
 # selects that dynamic-load path; copy_required_dlls (below) drops the engine
 # DLLs next to the executable so the loader finds them.
 target_compile_definitions(ToonEngine PRIVATE ENGINE_DLL=1)
+
+# Roadmap #10: gates the shader-hot-reload code path in core/rendering/renderer.cpp and the
+# Settings panel's "Reload Now" button -- see the efsw add_subdirectory guard above for why
+# this is Debug-only.
+target_compile_definitions(ToonEngine PRIVATE $<$<CONFIG:Debug>:TOON_SHADER_HOT_RELOAD>)
 
 # Bake in the absolute path to the HLSL sources so the shader stream factory
 # finds them regardless of the working directory (dev convenience). A shipped

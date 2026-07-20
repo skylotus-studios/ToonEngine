@@ -26,3 +26,6 @@
 [submodule "external/miniaudio"]
 	path = external/miniaudio
 	url = https://github.com/mackron/miniaudio
+[submodule "external/efsw"]
+	path = external/efsw
+	url = https://github.com/SpartanJ/efsw
