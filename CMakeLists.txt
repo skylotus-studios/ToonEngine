@@ -121,6 +121,7 @@ add_executable(ToonEngine
     src/app/editor_render.cpp    # shadow pass, main draw, collider debug overlay
     src/app/physics_glue.cpp     # collider-extent scaling + physics-world (re)construction
     src/app/audio_glue.cpp       # audio-world (re)construction from AudioSource-bearing entities
+    src/app/picking.cpp          # click-to-select: screen-ray vs. entity world bounds
     src/app/scene_ops.cpp        # scene load/save/new (File menu + asset-browser double-click)
     src/ui/thumbnail_cache.cpp  # path -> texture cache (asset browser icons/preview)
     src/ui/panels/file_browser.cpp     # "Asset Browser" editor panel

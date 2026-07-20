@@ -5,6 +5,7 @@
 
 #include "app/editor_state.h"
 #include "app/physics_glue.h"
+#include "app/picking.h"
 
 #include <vector>
 
@@ -79,6 +80,23 @@ namespace toon {
                 const Mat4 world = ComposeWorldMatrix(e.transform->position, e.transform->rotation, {1.0f, 1.0f, 1.0f});
                 const std::vector<Vec3> wireframe = ColliderWireframe(e.collider->shape, scaledExtents);
                 renderer.DrawWireframe(world, wireframe.data(), static_cast<uint32_t>(wireframe.size()), wireColor);
+            }
+        }
+
+        // Mouse-pick markers (roadmap #8): a light or empty anchor has no mesh/model bounds, so
+        // it'd otherwise be a dead zone for click-to-select (see app/picking.cpp's
+        // kPickBoxHalfExtent fallback box). Reuses ColliderWireframe's Box case rather than a new
+        // cube generator -- same shape, sized to exactly match what PickEntity actually tests.
+        {
+            const Color markerColor{0.3f, 0.7f, 1.0f, 1.0f};
+            const Vec3 markerExtents{kPickBoxHalfExtent, kPickBoxHalfExtent, kPickBoxHalfExtent};
+            const std::vector<Vec3> markerWireframe = ColliderWireframe(ColliderShape::Box, markerExtents);
+            for (const Entity &e : scene.entities) {
+                const bool isRenderable = e.mesh != MeshHandle::Invalid || e.model != ModelHandle::Invalid;
+                if (isRenderable || !e.transform) { continue; }
+                const Mat4 world = ComposeWorldMatrix(e.transform->position, e.transform->rotation, {1.0f, 1.0f, 1.0f});
+                renderer.DrawWireframe(world, markerWireframe.data(), static_cast<uint32_t>(markerWireframe.size()),
+                                       markerColor);
             }
         }
     }

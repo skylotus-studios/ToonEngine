@@ -1734,6 +1734,17 @@ namespace toon {
         return out;
     }
 
+    // Row-vector transform (v' = v * M), matching the HLSL shaders' own convention
+    // (toon_common.hlsli: "vectors are transformed row-vector style: mul(v, M)"). Diligent's
+    // free `operator*(Matrix4x4, Vector4)` is the opposite (column-vector, M * v), so
+    // ScreenPointToRay's unproject needs this instead.
+    static float4 TransformRowVector(const float4 &v, const float4x4 &m) {
+        return float4(v.x * m[0][0] + v.y * m[1][0] + v.z * m[2][0] + v.w * m[3][0],
+                      v.x * m[0][1] + v.y * m[1][1] + v.z * m[2][1] + v.w * m[3][1],
+                      v.x * m[0][2] + v.y * m[1][2] + v.z * m[2][2] + v.w * m[3][2],
+                      v.x * m[0][3] + v.y * m[1][3] + v.z * m[2][3] + v.w * m[3][3]);
+    }
+
     // Debug wireframe overlay (M2.1's collider visualization) -- see core/renderer.h's
     // DrawWireframe comment for the call-timing contract (after EndScene, before BeginUI).
     void Renderer::DrawWireframe(const Mat4 &world, const Vec3 *points, uint32_t count, const Color &color) {
@@ -1923,6 +1934,48 @@ namespace toon {
         proj = ToMat4(m_impl->proj);
     }
 
+    // Mouse-pick's unproject (app/picking.cpp): pixel -> NDC -> world, via the inverse of the
+    // SAME view*proj SetCamera built this frame (m_impl->viewProj), so the ray always matches
+    // what's on screen.
+    void Renderer::ScreenPointToRay(float mouseX, float mouseY, float vpW, float vpH, Vec3 &outOrigin,
+                                    Vec3 &outDir) const {
+        if (vpW <= 0.0f || vpH <= 0.0f) {
+            outOrigin = {};
+            outDir = {0.0f, 0.0f, 1.0f};
+            return;
+        }
+
+        // Pixel -> NDC; Y flips (pixel Y grows down, NDC Y grows up).
+        const float ndcX = (2.0f * mouseX / vpW) - 1.0f;
+        const float ndcY = 1.0f - (2.0f * mouseY / vpH);
+
+        // Diligent/Vulkan depth range is [0,1] (NOT OpenGL's [-1,1]) -- near = z 0, far = z 1.
+        const float4x4 invViewProj = m_impl->viewProj.Inverse();
+        float4 nearWorld = TransformRowVector(float4(ndcX, ndcY, 0.0f, 1.0f), invViewProj);
+        float4 farWorld = TransformRowVector(float4(ndcX, ndcY, 1.0f, 1.0f), invViewProj);
+        nearWorld /= nearWorld.w;
+        farWorld /= farWorld.w;
+
+        outOrigin = {nearWorld.x, nearWorld.y, nearWorld.z};
+        outDir = Normalize(Vec3{farWorld.x - nearWorld.x, farWorld.y - nearWorld.y, farWorld.z - nearWorld.z});
+    }
+
+    bool Renderer::GetMeshBounds(MeshHandle mesh, Vec3 &outMin, Vec3 &outMax) const {
+        const uint32_t idx = static_cast<uint32_t>(mesh);
+        if (idx == 0 || idx > m_impl->meshes.size()) { return false; }
+        outMin = m_impl->meshes[idx - 1].boundsMin;
+        outMax = m_impl->meshes[idx - 1].boundsMax;
+        return true;
+    }
+
+    bool Renderer::GetModelBounds(ModelHandle model, Vec3 &outMin, Vec3 &outMax) const {
+        const uint32_t idx = static_cast<uint32_t>(model);
+        if (idx == 0 || idx > m_impl->modelBounds.size()) { return false; }
+        outMin = m_impl->modelBounds[idx - 1].first;
+        outMax = m_impl->modelBounds[idx - 1].second;
+        return true;
+    }
+
     // The toon draw, given a pre-composed object->world matrix (+ last frame's, for motion
     // vectors). The scene graph passes hierarchy-composed world matrices straight in; the
     // Transform overload below builds them from a single object's placement.
@@ -2015,6 +2068,14 @@ namespace toon {
             return ModelHandle::Invalid;
         }
         model->PrepareGPUResources(m_impl->device, m_impl->context);
+
+        // Local-space (model-space) bounds for mouse-pick (app/picking.cpp): ComputeTransforms'
+        // default RootTransform is identity, so ComputeBoundingBox returns the model's own
+        // object-space box, ready for the app layer to transform by an entity's worldMatrix.
+        GLTF::ModelTransforms xforms;
+        model->ComputeTransforms(model->DefaultSceneId, xforms);
+        const BoundBox bb = model->ComputeBoundingBox(model->DefaultSceneId, xforms);
+        m_impl->modelBounds.emplace_back(Vec3{bb.Min.x, bb.Min.y, bb.Min.z}, Vec3{bb.Max.x, bb.Max.y, bb.Max.z});
 
         m_impl->models.push_back(std::move(model));
         return static_cast<ModelHandle>(m_impl->models.size()); // 1-based; 0 = Invalid

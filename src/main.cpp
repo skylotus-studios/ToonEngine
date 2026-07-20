@@ -10,6 +10,7 @@
 #include "app/editor_render.h"
 #include "app/editor_state.h"
 #include "app/editor_tick.h"
+#include "app/picking.h"
 #include "app/scene_ops.h"
 #include "core/input/input_system.h"
 #include "ui/panels/dockspace.h"
@@ -68,6 +69,7 @@ int main() {
         toon::DrawPlaybackPanel(state);
         toon::DrawObjectsPanel(state);
         toon::DrawPropertiesPanel(state);
+        toon::DoMousePicking(state);
         toon::DrawGizmoOverlay(state);
         toon::DrawSettingsPanel(state);
 
