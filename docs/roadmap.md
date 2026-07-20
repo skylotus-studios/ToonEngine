@@ -7,12 +7,12 @@ behind already-shipped systems, see [MEMORY.md](../MEMORY.md); for the project's
 principle (build on Diligent, don't reinvent it), see [CLAUDE.md](../CLAUDE.md).
 
 ```
-Shipped  ███████░░░░░░░░░░░░░  7 / 20 items
+Shipped  ███████░░░░░░░░░░░░░░░░  7 / 23 items
 ```
 
 ```mermaid
 flowchart LR
-    subgraph V01["v0.1 — Foundation"]
+    subgraph V01["v0.1: Foundation"]
         direction TB
         S1["Vulkan renderer &amp; toon pipeline"]
         S2["Dear ImGui editor"]
@@ -21,7 +21,7 @@ flowchart LR
         S1 --> S2 --> S3 --> S4
     end
 
-    subgraph V02["v0.2 — Simulation"]
+    subgraph V02["v0.2: Simulation"]
         direction TB
         S5["Fixed-timestep simulation"]
         S6["Physics: Jolt"]
@@ -29,7 +29,7 @@ flowchart LR
         S5 --> S6 --> S7
     end
 
-    subgraph V03["v0.3 — Interaction"]
+    subgraph V03["v0.3: Interaction"]
         direction TB
         N8["Mouse-pick via raycast"]
         N9["Contact events to scripts"]
@@ -37,7 +37,7 @@ flowchart LR
         N8 --> N9 --> N10
     end
 
-    subgraph V04["v0.4 — Characters &amp; World"]
+    subgraph V04["v0.4: Characters &amp; World"]
         direction TB
         N11["Skeletal animation"]
         N12["Grid &amp; sky gradient"]
@@ -45,25 +45,29 @@ flowchart LR
         N11 --> N12 --> N13
     end
 
-    subgraph V05["v0.5 — Scale &amp; Tools"]
+    subgraph V05["v0.5: Scale &amp; Tools"]
         direction TB
         N14["Instancing"]
-        N15["Prefabs"]
-        N16["Particles &amp; VFX"]
-        N14 --> N15 --> N16
+        N15["Shadow frustum culling"]
+        N16["Prefabs"]
+        N17["Particles &amp; VFX"]
+        N14 --> N15 --> N16 --> N17
     end
 
-    subgraph V10["v1.0 — Ship"]
+    subgraph V10["v1.0: Ship"]
         direction TB
-        N17["Asset packaging"]
-    end
-
-    subgraph V11["v1.1 — Platform Expansion"]
-        direction TB
-        N18["Linux support"]
-        N19["macOS support"]
-        N20["Re-enable D3D11"]
+        N18["Settings menu"]
+        N19["Crash reporting"]
+        N20["Asset packaging"]
         N18 --> N19 --> N20
+    end
+
+    subgraph V11["v1.1: Platform Expansion"]
+        direction TB
+        N21["Linux support"]
+        N22["macOS support"]
+        N23["Re-enable D3D11"]
+        N21 --> N22 --> N23
     end
 
     V01 --> V02 --> V03 --> V04 --> V05 --> V10 --> V11
@@ -80,9 +84,9 @@ flowchart LR
     class S5,S6,S7 v02
     class N8,N9,N10 v03
     class N11,N12,N13 v04
-    class N14,N15,N16 v05
-    class N17 v10
-    class N18,N19,N20 v11
+    class N14,N15,N16,N17 v05
+    class N18,N19,N20 v10
+    class N21,N22,N23 v11
 ```
 
 ## Shipped
@@ -140,27 +144,62 @@ flowchart LR
     Ranked here because it only pays off once a scene actually has enough repeated objects
     to matter, which the content systems above it are what will start creating that
     scenario.
-15. **Prefabs.** Reusable entity templates for runtime spawning. A workflow multiplier: it
+15. **Shadow frustum culling.** Bounds-test each entity against a cascade's frustum before
+    drawing it into that cascade's shadow pass, instead of today's unconditional
+    every-entity-into-every-cascade loop, a gap deliberately deferred when cascaded shadow
+    maps shipped (see MEMORY.md's "Toon Pipeline" section). Ranked right after instancing
+    because both are scale-driven: cheap and correct to add whenever someone's already
+    touching the shadow pass, but nothing today measures it as an actual bottleneck at the
+    current scene's object count, so it stays below every content system that outranks it.
+16. **Prefabs.** Reusable entity templates for runtime spawning. A workflow multiplier: it
     cuts the cost of populating a scene with everything shipped above it, so it's ranked
     ahead of pure-visual polish that doesn't compound the same way.
-16. **Particles and VFX.** A toon-appropriate particle system. Doesn't depend on anything
+17. **Particles and VFX.** A toon-appropriate particle system. Doesn't depend on anything
     above it and doesn't unlock anything below it either, so it sits after the items that do
     one or the other.
-17. **Asset packaging for a shippable build.** Relative shader/asset paths so the engine can
+18. **Settings menu.** A player-facing menu for display (resolution, fullscreen, VSync) and
+    input (a rebind UI over the already-shipped action-map system), replacing today's
+    dev-only Settings panel for anything a player, not a developer, needs to control. Steam's
+    own launch checklist tests for exactly this, and ToonEngine has no player-facing display
+    settings today. Ranked with crash reporting and asset packaging below it because none of
+    the three block or unlock anything else; they're release-readiness work a real release
+    can't ship without, not features that create new gameplay.
+19. **Crash reporting.** A crash-reporting handler or SDK integration so a crash leaves a
+    diagnostic trail instead of a silent exit, tested against a live endpoint before release,
+    per Steam's own launch checklist. Ranked next to the settings menu for the same reason: a
+    small, bounded release requirement, not a new subsystem, closer in shape to asset
+    packaging below it than to any content system above it.
+20. **Asset packaging for a shippable build.** Relative shader/asset paths so the engine can
     ship outside a dev environment. A genuine hard requirement before any real release, but
-    small and mechanical, and it blocks nothing above it. Ranked here so it isn't forgotten,
-    without displacing the systems that need to exist before there's a game worth releasing.
-18. **Linux support** (Vulkan). Expands the eventual audience, but Windows-only is a normal,
+    small and mechanical, and it blocks nothing above it. Ranked alongside the settings menu
+    and crash reporting above it, the same release-readiness cluster, without displacing the
+    systems that need to exist before there's a game worth releasing.
+21. **Linux support** (Vulkan). Expands the eventual audience, but Windows-only is a normal,
     viable starting point for a first release on Steam; a solo project's time before that
     point is better spent on the game itself than a second platform.
-19. **macOS support** (Vulkan via MoltenVK, needs an `NSView` from a GLFW Cocoa `.mm`
+22. **macOS support** (Vulkan via MoltenVK, needs an `NSView` from a GLFW Cocoa `.mm`
     helper). Ranked after Linux because it builds on the same Vulkan-portability work Linux
     already exercises, and because it's the smaller of the two non-Windows audiences for a
     PC-first indie title.
-20. **Re-enable D3D11.** Only matters for players on hardware too old for Vulkan, a small
+23. **Re-enable D3D11.** Only matters for players on hardware too old for Vulkan, a small
     and shrinking slice of the Steam hardware survey. Ranked last because every item above
     it either unlocks gameplay, unlocks content, or is a hard release requirement, and this
     is none of those.
+
+## Researched, Not Yet Ranked
+
+Two items from the most recent `update-roadmap` pass cleared the research bar but not the
+"rank it now" bar; noted here so they aren't rediscovered from scratch next time.
+
+- **Player save/progress system**, distinct from the existing `.scene` authoring
+  serialization (a checkpoint/inventory/unlocked-state format, not a full scene dump). Real
+  Steam cloud-save support needs something save-shaped to sync first, but nothing shipped yet
+  produces actual player state to persist, so this has no scene to attach to until a real
+  gameplay loop exists.
+- **Achievements/stats and Steam Input controller glyph mapping.** Confirmed real Steamworks
+  features (`ISteamUserStats`, the Steam Input API), but common for a solo dev to add
+  post-launch rather than at launch, and both are additive once there's actual gameplay to
+  hook them into.
 
 ## How This List Is Maintained
 

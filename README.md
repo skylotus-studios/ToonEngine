@@ -117,7 +117,7 @@ planned. See [CLAUDE.md](CLAUDE.md) for what's shipped and
 
 ```mermaid
 flowchart LR
-  subgraph V01["v0.1 — Foundation"]
+  subgraph V01["v0.1: Foundation"]
     direction TB
     S1["Vulkan renderer &amp; toon pipeline"]
     S2["Dear ImGui editor"]
@@ -126,7 +126,7 @@ flowchart LR
     S1 --> S2 --> S3 --> S4
   end
 
-  subgraph V02["v0.2 — Simulation"]
+  subgraph V02["v0.2: Simulation"]
     direction TB
     S5["Fixed-timestep simulation"]
     S6["Physics: Jolt"]
@@ -134,7 +134,7 @@ flowchart LR
     S5 --> S6 --> S7
   end
 
-  subgraph V03["v0.3 — Interaction"]
+  subgraph V03["v0.3: Interaction"]
     direction TB
     N8["Mouse-pick via raycast"]
     N9["Contact events to scripts"]
@@ -142,7 +142,7 @@ flowchart LR
     N8 --> N9 --> N10
   end
 
-  subgraph V04["v0.4 — Characters &amp; World"]
+  subgraph V04["v0.4: Characters &amp; World"]
     direction TB
     N11["Skeletal animation"]
     N12["Grid &amp; sky gradient"]
@@ -150,25 +150,29 @@ flowchart LR
     N11 --> N12 --> N13
   end
 
-  subgraph V05["v0.5 — Scale &amp; Tools"]
+  subgraph V05["v0.5: Scale &amp; Tools"]
     direction TB
     N14["Instancing"]
-    N15["Prefabs"]
-    N16["Particles &amp; VFX"]
-    N14 --> N15 --> N16
+    N15["Shadow frustum culling"]
+    N16["Prefabs"]
+    N17["Particles &amp; VFX"]
+    N14 --> N15 --> N16 --> N17
   end
 
-  subgraph V10["v1.0 — Ship"]
+  subgraph V10["v1.0: Ship"]
     direction TB
-    N17["Asset packaging"]
-  end
-
-  subgraph V11["v1.1 — Platform Expansion"]
-    direction TB
-    N18["Linux support"]
-    N19["macOS support"]
-    N20["Re-enable D3D11"]
+    N18["Settings menu"]
+    N19["Crash reporting"]
+    N20["Asset packaging"]
     N18 --> N19 --> N20
+  end
+
+  subgraph V11["v1.1: Platform Expansion"]
+    direction TB
+    N21["Linux support"]
+    N22["macOS support"]
+    N23["Re-enable D3D11"]
+    N21 --> N22 --> N23
   end
 
   V01 --> V02 --> V03 --> V04 --> V05 --> V10 --> V11
@@ -185,9 +189,9 @@ flowchart LR
   class S5,S6,S7 v02
   class N8,N9,N10 v03
   class N11,N12,N13 v04
-  class N14,N15,N16 v05
-  class N17 v10
-  class N18,N19,N20 v11
+  class N14,N15,N16,N17 v05
+  class N18,N19,N20 v10
+  class N21,N22,N23 v11
 ```
 
 ## License
