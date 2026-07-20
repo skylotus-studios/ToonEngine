@@ -6,8 +6,8 @@
 //  each wraps a heap-owned Script subclass (Cherno/Hazel's NativeScriptComponent
 //  shape) reached by a name-keyed registry, so a saved scene (or an in-memory Entity
 //  copy — see scene.h's Entity copy constructor) can reconstruct the right subclass
-//  from just that name. ECS (entt et al.) is deliberately deferred — see CLAUDE.md's
-//  roadmap and the M1.3 planning session — until entity count or a profiled hotspot
+//  from just that name. ECS (entt et al.) is deliberately deferred until entity count or a
+//  profiled hotspot
 //  actually demands it; this stays a thin, Diligent-free layer over the existing
 //  entity vector.
 //============================================================================

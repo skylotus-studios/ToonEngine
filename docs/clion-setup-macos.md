@@ -1,7 +1,7 @@
 # Building ToonEngine in CLion (macOS)
 
 > **Status: planned, not yet built out.** ToonEngine's active development target is
-> Windows (see [CLAUDE.md](../CLAUDE.md) → *Platform support*). macOS needs Vulkan via
+> Windows. macOS needs Vulkan via
 > **MoltenVK** plus a GLFW Cocoa `.mm` helper to hand Diligent an `NSView`. That
 > helper doesn't exist in the repo yet, so the engine won't run on macOS as-is.
 > `CMakePresets.json` also has no `macos-debug` / `macos-release` presets. This doc
@@ -62,4 +62,4 @@ a run configuration for `ToonEngine`, working directory at the project root so
   until the Cocoa `NSView` helper (see step 3) is written; this is the known
   cross-platform gap, not a local misconfiguration.
 - **First configure is slow**: expected; it builds DiligentCore/Tools/FX from
-  source, same as Windows/Linux. See [MEMORY.md](../MEMORY.md) → *Build gotchas*.
+  source, same as Windows/Linux.

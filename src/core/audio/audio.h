@@ -5,8 +5,9 @@
 //  Twin to core/physics/physics.h: the ONE header the rest of the engine talks to for
 //  sound. Every miniaudio type (ma_engine, ma_sound, ...) lives behind it in audio.cpp via
 //  PIMPL, so no miniaudio type — and no miniaudio header — escapes into engine or game
-//  code (see CLAUDE.md's guiding principle and the physics/renderer seams it already
-//  established). This header speaks only toon:: types: Vec3 (core/math.h) and plain
+//  code (per the project's build-on-Diligent guiding principle and the physics/renderer
+//  seams it already established). This header speaks only toon:: types: Vec3 (core/math.h)
+//  and plain
 //  enums/structs defined below.
 //============================================================================
 #include "core/math.h" // toon::Vec3 (plain, miniaudio- and Diligent-free)

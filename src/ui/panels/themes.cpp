@@ -5,7 +5,7 @@
 
 #include "core/rendering/renderer.h" // toon::SetTitleBarTheme
 
-#include "imgui.h" // ImGui is seam-exempt (see CLAUDE.md) — UI code may call it directly
+#include "imgui.h" // ImGui is seam-exempt — UI code may call it directly
 
 #include <GLFW/glfw3.h>
 

@@ -4,8 +4,9 @@
 //
 //  Twin to core/renderer.h: the ONE header the rest of the engine talks to for physics
 //  work. Every Jolt header and JPH:: type lives behind it in physics.cpp via PIMPL, so no
-//  Jolt type — and no Jolt header — escapes into engine or game code (see CLAUDE.md's
-//  guiding principle and the renderer seam it already established). This header speaks
+//  Jolt type — and no Jolt header — escapes into engine or game code (per the project's
+//  build-on-Diligent guiding principle and the renderer seam it already established). This
+//  header speaks
 //  only toon:: types: Vec3, Quat (core/math.h), and plain enums/structs defined below.
 //============================================================================
 #include "core/math.h" // toon::Vec3/Quat (plain, Jolt- and Diligent-free)
@@ -120,8 +121,8 @@ public:
     // Closest-hit raycast against every live body. `direction` carries both the ray's
     // direction AND length (a hit beyond that length is not reported) — Jolt's own
     // RayCast convention. Returns false (outHit untouched) on a miss. Ships with this seam
-    // now so a future mouse-pick/gameplay raycast has no new plumbing to add; nothing
-    // calls it yet (see CLAUDE.md's roadmap — mouse-pick is explicitly deferred).
+    // now so a future gameplay raycast has no new plumbing to add; nothing calls it yet
+    // (the shipped mouse-pick uses a geometric ray-vs-bounds test instead, not this).
     bool Raycast(const Vec3 &origin, const Vec3 &direction, RaycastHit &outHit) const;
 
     // Drain every contact event queued since the last call (Enter/Stay on every touching pair,

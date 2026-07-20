@@ -1,7 +1,7 @@
 # Building ToonEngine in CLion (Linux)
 
 > **Status: planned, not yet built out.** ToonEngine's active development target is
-> Windows (see [CLAUDE.md](../CLAUDE.md) → *Platform support*). GLFW's X11 backend is
+> Windows. GLFW's X11 backend is
 > wired up in `renderer.cpp`, but Linux hasn't been built or run yet, and
 > `CMakePresets.json` has no `linux-debug` / `linux-release` presets: only
 > `windows-debug` / `windows-release`. This doc is the setup CLion will need once
@@ -64,4 +64,4 @@ target. Set **Working directory** to the project root so the baked-in shader pat
 - **X11 headers missing at configure/link**: install the `libx*-dev` packages
   listed above.
 - **First configure is slow**: expected; it builds DiligentCore/Tools/FX from
-  source, same as Windows. See [MEMORY.md](../MEMORY.md) → *Build gotchas*.
+  source, same as Windows.

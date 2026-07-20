@@ -3,8 +3,8 @@
 //  ui/panels/file_browser.h — the "Asset Browser" editor panel.
 //
 //  Browses assets/ with a breadcrumb bar, a sortable file table, and an image
-//  preview pane. Ported from ToonEngineOld/src/ui/file_browser.* (see
-//  MEMORY.md's carry-over notes) onto the current Renderer seam. Rooted at
+//  preview pane. Ported from ToonEngineOld/src/ui/file_browser.* onto the
+//  current Renderer seam. Rooted at
 //  assets/ only (not the whole repo), so the old .gitignore-based FileFilter
 //  is dropped in favor of just hiding dotfiles.
 //
@@ -17,7 +17,7 @@
 //  Plain data + free functions (core/scene/scene.h's Scene shape), not a class:
 //  nothing here quarantines an external dependency or removes real repeated
 //  boilerplate, so private methods would buy nothing over a free function
-//  taking a FileBrowser& (see MEMORY.md's Muratori/plain-data note).
+//  taking a FileBrowser&.
 //============================================================================
 #include "core/rendering/renderer.h" // Renderer
 #include "ui/thumbnail_cache.h"

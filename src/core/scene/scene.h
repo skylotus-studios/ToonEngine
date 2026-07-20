@@ -5,8 +5,8 @@
 //
 //  Backend-agnostic like the rest of the seam vocabulary (toon::Transform + Mat4 +
 //  opaque handles) — no Diligent types leak here. The world-matrix composition (the
-//  actual 4x4 math) lives in scene.cpp, which IS allowed to use Diligent
-//  (build-on-Diligent — see CLAUDE.md). Adapted from ToonEngineOld/src/scene.
+//  actual 4x4 math) lives in scene.cpp, which IS allowed to use Diligent (build-on-Diligent).
+//  Adapted from ToonEngineOld/src/scene.
 //============================================================================
 #include "core/rendering/renderer.h"   // Transform, Material, Mesh/ModelHandle, Mat4 (via math.h)
 #include "core/rendering/primitives.h" // PrimitiveDesc — mesh-regeneration params for serialization

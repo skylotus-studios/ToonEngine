@@ -2,10 +2,8 @@
 
 This document describes how ToonEngine's pieces fit together: the renderer's abstraction
 layer, the frame loop, the rendering pipeline, the scene model, and how data flows between
-them. It's the deep reference for onboarding onto the codebase. For the project's guiding
-principles and conventions, see [CLAUDE.md](../CLAUDE.md); for what's next, see
-[docs/roadmap.md](roadmap.md); for the history and reasoning behind individual decisions
-(and a long list of hard-won build/API gotchas), see [MEMORY.md](../MEMORY.md).
+them. It's the deep reference for onboarding onto the codebase. For what's next, see
+[docs/roadmap.md](roadmap.md).
 
 The app today is an editor: it opens a window, builds a small demo scene, and renders it live
 through a full toon rendering pipeline (cel-shaded fill with inverted-hull outlines, cascaded
@@ -154,7 +152,7 @@ pipeline" below walks through what each group actually does on the GPU.
 
 ### Why Data Encapsulation, Not a Virtual `IRenderer`
 
-MEMORY.md's "Architecture decisions" section records the reasoning: Diligent already provides
+Diligent already provides
 runtime backend selection (Vulkan/D3D12/GL/Metal) beneath the abstraction layer, so a second
 layer of runtime polymorphism in ToonEngine would buy nothing. A backend swap or console port
 is a
@@ -226,8 +224,7 @@ std::vector<Vec3> ColliderWireframe(ColliderShape, const Vec3& extents);  // pur
 `Init` does Jolt's required one-time setup: a default allocator, a `Factory`,
 `RegisterTypes`, a temp allocator, a job-system thread pool, and the three filter classes
 Jolt's own `PhysicsSystem::Init` requires (`BroadPhaseLayerInterface`,
-`ObjectVsBroadPhaseLayerFilter`, `ObjectLayerPairFilter`). See MEMORY.md's "Build gotchas"
-for the CMake and compile gotchas hit getting this to build at all. `GetBodyTransform` reads
+`ObjectVsBroadPhaseLayerFilter`, `ObjectLayerPairFilter`). `GetBodyTransform` reads
 back through Jolt's `GetPositionAndRotation`, deliberately not `GetCenterOfMassPosition`
 (which returns the body's center of mass, not its origin, and the two only coincide for a
 shape whose mass is symmetric about that origin).
@@ -249,8 +246,8 @@ src/
   app/                         Editor state + the non-UI glue that used to be main()'s body. A plain
                                 EditorState struct (core/scene/scene.h's Scene precedent) + free functions
                                 operating on it, not a class, since nothing here hides a third-party
-                                dependency the way Renderer/PhysicsWorld's data encapsulation does (see
-                                CLAUDE.md's guiding principle and MEMORY.md's Muratori/plain-data note).
+                                dependency the way Renderer/PhysicsWorld's data encapsulation does (per
+                                the project's plain-data-over-encapsulation guiding principle).
     editor_state.h              EditorState: every field main()'s locals used to be (Renderer, PhysicsWorld,
                                  Scene + sceneBackup, Camera, gizmo/theme/panel-visibility state, the
                                  fixed-step clock, Play/Pause/Step state) + the EditorMode enum.
@@ -349,8 +346,7 @@ which every `app/` and `ui/panels/` file includes, and none of them touch Dilige
 `EditorState` struct + free-functions shape (not a class) mirrors `core/scene/scene.h`'s own
 `Scene`, for the same reason: nothing here hides a third-party dependency the way
 `Renderer`/`PhysicsWorld`'s data encapsulation does, so wrapping it in private members would
-buy nothing but ceremony (see CLAUDE.md's guiding principle and MEMORY.md's Muratori/plain-data
-note).
+buy nothing but ceremony (per the same plain-data-over-encapsulation guiding principle).
 
 ### Startup
 
@@ -581,8 +577,8 @@ color.
 `RunPostFX` runs once per frame from `EndScene`. It first calls `PostFXContext::Execute` with
 the current **and previous** depth SRV, the motion-vector SRV, and current/previous camera
 attributes, giving every downstream effect real reprojection history instead of treating the
-current frame as its own previous frame (a deliberate fix for an earlier ghosting bug; see
-MEMORY.md's "Bugs found dogfooding"). Then, if the PSOs are ready:
+current frame as its own previous frame (a deliberate fix for an earlier ghosting bug). Then,
+if the PSOs are ready:
 
 - **SSAO** (if enabled) reads depth + the normal G-buffer and produces a separate ambient
   occlusion SRV. `ResetAccumulation` is forced whenever `!ssaoTemporal` or
@@ -700,8 +696,7 @@ GPU-side to release here (see "Ownership" below).
 
 `core/scene/script.h` (M1.3) is where per-entity gameplay logic lives: a native-script layer in
 Cherno/Hazel's `NativeScriptComponent` shape, backed by `Entity::scripts` rather than an
-`entt` registry (ECS stays a deliberate later option, not built; see MEMORY.md's "Entity
-behavior system" section for the full survey and reasoning). `Script` is a virtual base:
+`entt` registry (ECS stays a deliberate later option, not built). `Script` is a virtual base:
 
 ```cpp
 class Script {
@@ -717,9 +712,8 @@ public:
 `self`/`scene` are call-time parameters, never stored on the `Script` instance: storing
 either would dangle the moment `scene.entities` reallocates. A `Script` holds no private
 simulation state; anything persistent lives on the `Entity` (or a future component), so a
-script is a pure function of `(entity data, dt)`. See MEMORY.md for why: a future
-rollback-netcode-style fast snapshot only ever needs the data this way, never the script
-objects. `ScriptComponent` pairs a stable name with the live instance
+script is a pure function of `(entity data, dt)`: a future rollback-netcode-style fast
+snapshot only ever needs the data this way, never the script objects. `ScriptComponent` pairs a stable name with the live instance
 (`{ std::string name; std::unique_ptr<Script> instance; }`); `RegisterScript`/`CreateScript`
 form a name -> factory registry so a name loaded from a `.scene` file, or an in-memory clone
 (next paragraph), can reconstruct the right subclass. `CreateScripts(scene)` fires each
@@ -954,8 +948,7 @@ in the same order every frame:
    not smooth motion). `RunPostFX` then forces
    `ResetAccumulation` on SSAO and TAA, the fix for a documented ghosting bug where a slowly
    spinning silhouette's view-dependent contour slipped under DiligentFX's own compiled-in
-   motion-distrust threshold (see MEMORY.md's "Bugs found dogfooding" for the full
-   investigation).
+   motion-distrust threshold.
 
 ## Build and Dependencies
 
@@ -968,8 +961,7 @@ Jolt's own `CMakeLists.txt` lives under `Build/`, so it's added as
 `USE_STATIC_MSVC_RUNTIME_LIBRARY OFF` and `INTERPROCEDURAL_OPTIMIZATION OFF` set as `CACHE
 BOOL ... FORCE` beforehand, the same cache-variable-before-`add_subdirectory` pattern the
 `DILIGENT_NO_*` block below uses (Jolt otherwise defaults to a runtime library and an LTO
-setting that both mismatch the rest of the build; see MEMORY.md's "Build gotchas" for the
-exact link errors this produces).
+setting that both mismatch the rest of the build).
 
 `CMakeLists.txt` disables the Diligent backends and modules ToonEngine doesn't use, as `CACHE
 BOOL ... FORCE` **before** `add_subdirectory(external/DiligentCore)` (these are cache variables,
@@ -1046,15 +1038,8 @@ since its listener tracks the interpolated render-rate camera pose each frame (n
 sim tick) and sound playback has no per-tick simulation state to step, just fire-and-forget or
 streaming voices triggered by scripts/gameplay events.
 
-See MEMORY.md's "ToonEngineOld carry-over" section (and its "Port gotchas for the un-shipped
-systems" subsection) for the concrete algorithms and gotchas behind the still-open M3 items.
-
 ## See Also
 
-- [CLAUDE.md](../CLAUDE.md): guiding principles, conventions, build instructions.
 - [docs/roadmap.md](roadmap.md): what's next, diagram plus per-milestone detail.
-- [MEMORY.md](../MEMORY.md): the detailed history and reasoning behind every decision here,
-  plus a long list of build and API gotchas.
-- [docs/cpp-style-guide.md](cpp-style-guide.md): C++ house style and abstraction-layer rules.
 - [docs/md-style-guide.md](md-style-guide.md): the prose style this document follows.
 - [docs/clion-setup-windows.md](clion-setup-windows.md): toolchain and IDE setup.

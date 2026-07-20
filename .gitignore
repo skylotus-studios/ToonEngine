@@ -23,6 +23,15 @@ Thumbs.db
 *.pdb
 *.ilk
 
+# Stray build/configure logs (redirected `cmake`/`ninja` stdout dropped in the repo
+# root by hand during a debugging session) -- never intentional, never committed.
+/*_log.txt
+/build_*.txt
+/configure_*.txt
+
+# Local-only Claude Code permission state -- machine-specific, never shared.
+.claude/settings.local.json
+
 # NOTE: external/DiligentCore, external/DiligentTools, external/DiligentFX and
 # external/glfw are git submodules — tracked via .gitmodules, not committed as
 # files, so they are not ignored here.
