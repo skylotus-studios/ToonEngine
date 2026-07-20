@@ -5,8 +5,11 @@ description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/archite
 
 # tidy-md: Keep ToonEngine's Markdown Docs Accurate, Current, and Right-Sized
 
-Five documents have five different jobs. `CLAUDE.md` is a lean, always-loaded map.
-`MEMORY.md` is the unlimited detailed archive. `README.md` is the public-facing pitch.
+Six documents have six different jobs. `CLAUDE.md` is a lean, always-loaded map.
+`MEMORY.md` is the detailed reference, organized by topic/system, not chronology (see its
+own section below for the convention). `ARCHIVE.md` is the true unlimited archive: full
+historical narratives and superseded material demoted out of MEMORY.md's lookup path, never
+read unless explicitly asked for. `README.md` is the public-facing pitch.
 `docs/architecture.md` is the deep design reference and `docs/roadmap.md` is the deep
 what's-next reference, both actively maintained alongside the other three (see their own
 sections below). Don't give them all the same treatment. The rest of `docs/**` are narrower
@@ -55,6 +58,34 @@ Re-scan the rest of CLAUDE.md while you're in there: a stale cross-reference, a 
 state" paragraph that no longer matches what's actually built, a constraint that's been
 superseded. Fix what's actually wrong; don't rewrite prose that's still accurate just to
 rephrase it.
+
+## MEMORY.md and ARCHIVE.md: Organized by Topic, Full Narratives Go to Archive
+
+`MEMORY.md` was reorganized on 2026-07-20 (from a 2900-line file that had drifted into a
+chronological diary) into sections by system/feature, each with its own heading, plus a
+short `## History` section at the end that is just a one-line-per-entry pointer list, not a
+narrative. `ARCHIVE.md` holds the material demoted out of that: the full original History
+log verbatim, complete multi-round debugging narratives, and survey documents whose subject
+matter has since shipped. Nothing in `ARCHIVE.md` needs to be read for routine engineering;
+it exists purely for when the user explicitly asks for the full history behind something.
+Keep both files honoring this split whenever a pass touches either one:
+
+- A newly-shipped feature (whether written up by this skill, by `update-roadmap`'s "Promote
+  Anything That's Actually Shipped" step, or by the implementation session itself) gets its
+  own topical section in `MEMORY.md` — never a fresh paragraph appended to `## History`.
+  Only add a single new one-line entry to `## History` pointing at that section.
+- A multi-round debugging saga, a superseded approach, or any other narrative whose value is
+  the journey rather than the current state belongs in `ARCHIVE.md`, with `MEMORY.md` keeping
+  only the distilled, durable conclusion (see MEMORY.md's "Temporal ghosting fixes" section
+  for the pattern: four short bullets of root cause + fix, with a pointer to `ARCHIVE.md` for
+  the full round-by-round journey).
+- If `## History` or any topical section in `MEMORY.md` starts accumulating long narrative
+  paragraphs again (a "Verified: ..." block running more than a few sentences, a session
+  play-by-play), that's the same anti-pattern recurring: move the full narrative to
+  `ARCHIVE.md` and leave a short, factual summary in `MEMORY.md`.
+- Fix any cross-reference that assumes full narrative detail still lives in `MEMORY.md`
+  itself (e.g. "see MEMORY.md's 2026-07-11 entry for the full story") to point at
+  `ARCHIVE.md` instead, once that detail has actually moved there.
 
 ## README.md: Portfolio-Quality Feature Showcase
 
@@ -152,8 +183,9 @@ thing." It might instead be "the file was deliberately removed and the doc never
 to stop claiming it exists." Check which one actually happened (recent commits, ask the
 user, check MEMORY.md's History) before acting; recreating something a human deliberately
 deleted is a worse outcome than leaving a stale doc alone for one more pass. (This happened
-for real once, with `scripts/vsenv.ps1`; see MEMORY.md's 2026-07-11 "Tooling correction"
-entry for the full story.) If nothing turns up wrong, say so and stop. Don't rewrite a doc
+for real once, with `scripts/vsenv.ps1`; see ARCHIVE.md's "Full chronological history"
+section, 2026-07-11 "Tooling correction" entry, for the full story.) If nothing turns up
+wrong, say so and stop. Don't rewrite a doc
 that's already accurate just because you looked at it. This is the point of the locked
 marker's softer cousin: even unlocked docs shouldn't get touched on every pass, only when
 there's a real reason.

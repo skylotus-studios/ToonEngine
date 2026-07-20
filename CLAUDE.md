@@ -9,7 +9,9 @@ built on **Diligent Engine** (Vulkan-only) + **GLFW** (windowing) + **Dear ImGui
 The detailed story behind every decision, gotcha, and error message below lives in
 **[MEMORY.md](MEMORY.md)**: pull it up when you hit a build error or want the "why"
 behind a rule here. **[ARCHIVE.md](ARCHIVE.md)** holds material demoted out of MEMORY.md's
-day-to-day lookup path (superseded approaches, full debugging narratives); MEMORY.md links
+day-to-day lookup path (superseded approaches, full debugging narratives, the complete
+original chronological history): it never needs to be read for ordinary engineering work,
+only when the user explicitly asks for the full history behind something. MEMORY.md links
 to it where relevant.
 
 > **History:** started as a from-scratch OpenGL 4.1 renderer (`main` branch), then

@@ -2181,11 +2181,13 @@ pass.
 ## History
 
 Chronological ship log, kept short: every entry below has a full technical write-up in its
-own section above. The full round-by-round temporal-ghosting debugging saga (2026-07-11
-through 2026-07-12) is preserved verbatim in **[ARCHIVE.md](ARCHIVE.md)**; only its
-distilled conclusions live in "Temporal ghosting fixes" above. The original ToonEngineOld
-carry-over survey is likewise archived; see "ToonEngineOld: carry-over reference" above for
-what's still active.
+own section above. The complete, unedited version of this entire log (every entry, full
+length) is preserved in **[ARCHIVE.md](ARCHIVE.md)**'s "Full chronological history" section,
+along with the full round-by-round temporal-ghosting debugging saga (2026-07-11 through
+2026-07-12, distilled here into "Temporal ghosting fixes" above) and the original
+ToonEngineOld carry-over survey (see "ToonEngineOld: carry-over reference" above for what's
+still active from it). None of ARCHIVE.md needs to be read for day-to-day work; it's there
+purely for when someone explicitly asks for the full history behind something.
 
 - **2026-07-06**: pivoted from a from-scratch OpenGL 4.1 engine to Diligent Engine + Vulkan;
   first light (window, Vulkan device, swap chain, clear loop).

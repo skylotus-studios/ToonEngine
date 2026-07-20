@@ -30,7 +30,11 @@ Before researching anything new, read what's already true:
 - `grep '^## ' MEMORY.md` plus the tail of its `## History` section, for what's shipped
   recently and any "Not done / deliberately deferred" notes already recorded in a topic
   section: those are prior sessions' own gap lists and count as research, not something to
-  rediscover from scratch.
+  rediscover from scratch. `MEMORY.md` is organized by topic, not chronology (reorganized
+  2026-07-20): `## History` is just a one-line-per-entry pointer list, the full story lives
+  in each feature's own section. `ARCHIVE.md` holds full historical narratives and
+  superseded material demoted out of that lookup path; it's never needed for this grounding
+  step, only if the user explicitly asks for a full history.
 - `git log -15` and the actual current source, to confirm the roadmap doc hasn't drifted from
   reality (an item marked pending that's actually shipped, the way CLAUDE.md's audio item was
   found stale on 2026-07-20).
@@ -50,7 +54,17 @@ reasons about the real not-yet-shipped list:
    `docs/roadmap.md`'s entry has detail not yet in MEMORY.md, migrate it there first, don't
    delete it: losing the "why" behind a decision is the one mistake this step exists to
    prevent. Skip the migration only if the item genuinely has nothing more to say than its
-   existing one-liner.
+   existing one-liner. **Give the feature its own new topical section** (a new `##` heading,
+   placed near related sections) rather than appending a paragraph to `MEMORY.md`'s
+   `## History`; add only a single short one-line entry to `## History` pointing at that new
+   section. This is the exact convention `MEMORY.md`'s 2026-07-20 reorganization established
+   (see its own intro and `ARCHIVE.md`'s existence) specifically to keep `History` from
+   regrowing into the multi-hundred-line narrative log it used to be. If the full story is
+   mostly narrative journey (a multi-round debugging saga, false starts, dead ends) rather
+   than a durable design/gotcha record, put that narrative in `ARCHIVE.md` instead and leave
+   only the distilled conclusion in `MEMORY.md`'s topical section, the same split
+   `MEMORY.md`'s "Temporal ghosting fixes" section and `ARCHIVE.md`'s "Temporal ghosting: the
+   full debugging saga" section demonstrate.
 2. Move the item out of "What's Next" and into "Shipped," at the end of that section (it
    joins in the order things actually landed), and renumber every item below it so the list
    still reads as one unbroken sequence with no gaps. Re-check whether anything ranked below
