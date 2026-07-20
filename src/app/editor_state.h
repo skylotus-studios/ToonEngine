@@ -9,6 +9,7 @@
 //  nothing here hides a third-party dependency the way Renderer/PhysicsWorld's PIMPL does,
 //  so there's nothing to justify hiding it behind accessors either.
 //============================================================================
+#include "core/audio/audio.h"
 #include "core/camera/camera.h"
 #include "core/physics/physics.h"
 #include "core/rendering/renderer.h"
@@ -35,6 +36,7 @@ namespace toon {
 
         Renderer renderer;
         PhysicsWorld physicsWorld;
+        AudioEngine audio;
         Scene scene;
         // Snapshot taken when Play starts, wholesale-restored on Stop (see playback_panel.cpp).
         Scene sceneBackup;
@@ -74,6 +76,14 @@ namespace toon {
         bool runScripts = true;
         // M2.1: overlay each collider-bearing entity's shape as a wireframe (Settings panel).
         bool showColliders = false;
+        // M2.2: master volume + mute (Settings panel) -- applied via AudioEngine::SetMasterVolume.
+        float masterVolume = 1.0f;
+        bool audioMuted = false;
+        // The Properties panel's "Preview"/"Stop Preview" button (see properties_panel.cpp):
+        // one global audition slot, tracked by handle + which entity started it, so switching
+        // entities or pressing the button again always stops the right (or any) preview.
+        SoundHandle previewHandle = SoundHandle::Invalid;
+        int previewEntityIdx = -1;
 #ifdef IMGUI_HAS_DOCK
         bool dockLayoutBuilt = false;
 #endif

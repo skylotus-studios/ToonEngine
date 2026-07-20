@@ -55,6 +55,16 @@ namespace toon {
             ImGui::SeparatorText("Physics");
             ImGui::Checkbox("Show Colliders", &state.showColliders);
 
+            ImGui::SeparatorText("Audio");
+            if (ImGui::Checkbox("Mute", &state.audioMuted)) {
+                state.audio.SetMasterVolume(state.audioMuted ? 0.0f : state.masterVolume);
+            }
+            ImGui::BeginDisabled(state.audioMuted);
+            if (ImGui::SliderFloat("Master Volume", &state.masterVolume, 0.0f, 1.0f)) {
+                state.audio.SetMasterVolume(state.masterVolume);
+            }
+            ImGui::EndDisabled();
+
             ImGui::SeparatorText("Post Processing (HDR)");
             ImGui::Checkbox("Tone map (ACES)", &state.post.toneMap);
             ImGui::SliderFloat("Exposure", &state.post.exposure, 0.1f, 4.0f);

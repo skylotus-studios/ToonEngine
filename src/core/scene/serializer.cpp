@@ -67,6 +67,18 @@ namespace toon {
             f << buf;
         }
 
+        // "audio <clip> <volume> <pitch> <loop> <autoplay> <spatial> <stream> <maxDistance>".
+        // `handle` is deliberately NOT written — like RigidBodyComponent::handle, it's populated
+        // when Play builds the audio world (app/audio_glue.cpp), not part of the saved scene's
+        // data. `clip` is written as a single whitespace-free token, same convention as `model`.
+        void WriteAudioSource(std::ofstream &f, const AudioSource &a) {
+            char buf[320];
+            std::snprintf(buf, sizeof(buf), "  audio %s %.6f %.6f %d %d %d %d %.6f\n",
+                          a.clip.empty() ? "-" : a.clip.c_str(), a.volume, a.pitch, a.loop ? 1 : 0,
+                          a.autoplay ? 1 : 0, a.spatial ? 1 : 0, a.stream ? 1 : 0, a.maxDistance);
+            f << buf;
+        }
+
         // One line per PrimitiveKind, since each generator takes a different param list (see
         // PrimitiveDesc's field comments in primitives.h for the kind -> field mapping).
         void WritePrimitive(std::ofstream &f, const PrimitiveDesc &d) {
@@ -157,6 +169,7 @@ namespace toon {
 
             if (e.collider) { WriteCollider(f, *e.collider); }
             if (e.body) { WriteRigidBody(f, *e.body); }
+            if (e.audioSource) { WriteAudioSource(f, *e.audioSource); }
 
             // One line per script: "script <Name> <field...>" — the name resolves through
             // the registry on load (see below); the fields are whatever that script's own
@@ -315,6 +328,18 @@ namespace toon {
                                                : BodyType::Dynamic;
                 ss >> b.mass >> b.friction >> b.restitution;
                 cur->body = b;
+            } else if (key == "audio") {
+                AudioSource a;
+                std::string clip;
+                int loopInt = 0, autoplayInt = 0, spatialInt = 0, streamInt = 0;
+                ss >> clip >> a.volume >> a.pitch >> loopInt >> autoplayInt >> spatialInt >> streamInt >>
+                    a.maxDistance;
+                a.clip = (clip == "-") ? std::string() : clip;
+                a.loop = loopInt != 0;
+                a.autoplay = autoplayInt != 0;
+                a.spatial = spatialInt != 0;
+                a.stream = streamInt != 0;
+                cur->audioSource = a;
             } else if (key == "script") {
                 std::string scriptName;
                 ss >> scriptName;

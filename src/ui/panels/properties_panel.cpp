@@ -136,6 +136,64 @@ namespace toon {
                     }
                 }
 
+                // Audio Source (M2.2) — a true optional component (core/scene/scene.h), same
+                // Add/Remove idiom as Light/Collider/Rigid Body above. Field edits here only
+                // take effect on the NEXT Play session (BuildAudioWorld builds the handled
+                // sound once, like BuildPhysicsWorld does for bodies); "Preview" is the
+                // exception — it auditions the clip immediately, in ANY mode, independent of
+                // Play/Pause/Stop, using the component's OWN volume/pitch/loop/spatial fields
+                // (a real Play()/Stop() pair, held in state.previewHandle -- see
+                // editor_state.h's comment) so a looping source previews as a loop until
+                // stopped, not a single one-shot.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Audio Source");
+                    if (e.audioSource) {
+                        if (ImGui::Button("Remove Audio Source")) {
+                            e.audioSource.reset();
+                        } else {
+                            char clipBuf[256];
+                            std::snprintf(clipBuf, sizeof(clipBuf), "%s", e.audioSource->clip.c_str());
+                            if (ImGui::InputText("Clip", clipBuf, sizeof(clipBuf))) { e.audioSource->clip = clipBuf; }
+                            ImGui::SameLine();
+                            const bool previewingThis =
+                                (state.previewHandle != SoundHandle::Invalid) && (state.previewEntityIdx == scene.selected);
+                            if (ImGui::Button(previewingThis ? "Stop Preview" : "Preview")) {
+                                if (state.previewHandle != SoundHandle::Invalid) {
+                                    state.audio.Stop(state.previewHandle);
+                                    state.previewHandle = SoundHandle::Invalid;
+                                    state.previewEntityIdx = -1;
+                                }
+                                if (!previewingThis) {
+                                    SoundDesc desc;
+                                    desc.clip = e.audioSource->clip;
+                                    desc.volume = e.audioSource->volume;
+                                    desc.pitch = e.audioSource->pitch;
+                                    desc.loop = e.audioSource->loop;
+                                    desc.spatial = e.audioSource->spatial;
+                                    desc.stream = e.audioSource->stream;
+                                    desc.maxDistance = e.audioSource->maxDistance;
+                                    desc.position = {e.worldMatrix.m[12], e.worldMatrix.m[13], e.worldMatrix.m[14]};
+                                    state.previewHandle = state.audio.Play(desc);
+                                    state.previewEntityIdx = scene.selected;
+                                }
+                            }
+                            ImGui::SliderFloat("Volume", &e.audioSource->volume, 0.0f, 1.0f);
+                            ImGui::DragFloat("Pitch", &e.audioSource->pitch, 0.01f, 0.1f, 4.0f);
+                            ImGui::Checkbox("Loop", &e.audioSource->loop);
+                            ImGui::SameLine();
+                            ImGui::Checkbox("Autoplay", &e.audioSource->autoplay);
+                            ImGui::Checkbox("Spatial", &e.audioSource->spatial);
+                            ImGui::SameLine();
+                            ImGui::Checkbox("Stream", &e.audioSource->stream);
+                            ImGui::BeginDisabled(!e.audioSource->spatial); // meaningless for a non-spatial source
+                            ImGui::DragFloat("Max Distance", &e.audioSource->maxDistance, 0.1f, 0.1f, 200.0f);
+                            ImGui::EndDisabled();
+                        }
+                    } else {
+                        if (ImGui::Button("Add Audio Source")) { e.audioSource = AudioSource{}; }
+                    }
+                }
+
                 // Scripts (core/scene/script.h) — a vector, not a single optional component:
                 // an entity can carry several independent scripts at once (e.g. a Health
                 // script alongside a PlayerMovement script), so each attached script gets its

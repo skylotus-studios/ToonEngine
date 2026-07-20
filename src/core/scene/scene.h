@@ -11,6 +11,7 @@
 #include "core/rendering/renderer.h"   // Transform, Material, Mesh/ModelHandle, Mat4 (via math.h)
 #include "core/rendering/primitives.h" // PrimitiveDesc — mesh-regeneration params for serialization
 #include "core/physics/physics.h"      // ColliderShape/BodyType/BodyHandle — Entity's physics components (M2.1)
+#include "core/audio/audio.h"          // SoundHandle — Entity's AudioSource component (M2.2)
 #include "core/scene/script.h"         // ScriptComponent — Entity's attached native scripts (M1.3)
 
 #include <optional>
@@ -49,6 +50,25 @@ namespace toon {
         BodyHandle handle = BodyHandle::Invalid;
     };
 
+    // A sound emitter carried by an entity (M2.2) — the audio seam's SoundDesc vocabulary
+    // (core/audio/audio.h). `clip` is a path under TOON_AUDIO_DIR, same "asset path on the
+    // component, GPU/audio resource behind a handle" split as Entity::modelPath/model. Autoplay
+    // emitters start when a Play/Step session begins (app/audio_glue.cpp's BuildAudioWorld);
+    // `handle` is runtime-only state (like RigidBodyComponent::handle above) — populated then,
+    // never serialized, harmless to copy as a plain id (Play/Stop, DuplicateEntity are snapshots;
+    // the real sound is rebuilt the next time Play starts).
+    struct AudioSource {
+        std::string clip;
+        float volume = 1.0f;
+        float pitch = 1.0f;
+        bool loop = false;
+        bool autoplay = true;
+        bool spatial = true;    // false = plays the same everywhere (ambience/music/UI)
+        bool stream = false;    // true = decode from disk as it plays (long music tracks)
+        float maxDistance = 25.0f; // spatial only — see SoundDesc
+        SoundHandle handle = SoundHandle::Invalid;
+    };
+
     // One node in the scene. It renders either a procedural primitive (`mesh` set) or a loaded
     // glTF model (`model` set); `material` is the primitive's material, or the model's
     // style/tint. `transform == nullopt` marks a pure grouping/anchor node (the root) that
@@ -84,6 +104,9 @@ namespace toon {
         // paired with a RigidBodyComponent, the entity becomes a dynamic/kinematic mover.
         std::optional<ColliderComponent> collider;
         std::optional<RigidBodyComponent> body;
+
+        // Audio (M2.2): a positional or non-positional sound emitter — see AudioSource above.
+        std::optional<AudioSource> audioSource;
 
         // Attached native scripts (core/scene/script.h) — per-tick gameplay hooks (M1.3). A
         // std::unique_ptr member makes ScriptComponent, and therefore Entity, NOT implicitly

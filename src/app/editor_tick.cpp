@@ -4,6 +4,7 @@
 #include "app/editor_tick.h"
 
 #include "app/editor_state.h"
+#include "core/audio/audio.h"
 #include "core/camera/camera.h"
 #include "core/input/action_map.h"
 #include "core/input/input_system.h"
@@ -100,6 +101,27 @@ namespace toon {
         const float alpha =
             (state.mode == EditorMode::Playing) ? static_cast<float>(state.accumulator / kFixedDt) : 1.0f;
         UpdateWorldTransforms(state.scene, alpha);
+
+        // Audio (M2.2): listener + emitter positions update on the RENDER frame, not the fixed
+        // sim tick above — audio is a presentation concern like rendering, not a determinism
+        // one, so it should track the same smoothly-interpolated transforms just composed by
+        // UpdateWorldTransforms rather than the raw stepped sim pose (see core/audio/audio.h's
+        // SetListener comment). Runs every frame regardless of mode — harmless while Editing/
+        // Paused (BuildAudioWorld hasn't started anything yet, or PauseAll froze it), and keeps
+        // the listener already correctly placed the instant Play starts.
+        {
+            Vec3 eye, forward, up;
+            CameraWorldBasis(state.camera, eye, forward, up);
+            state.audio.SetListener(eye, forward, up);
+        }
+        if (state.mode == EditorMode::Playing) {
+            for (const Entity &e : state.scene.entities) {
+                if (e.audioSource && e.audioSource->spatial && e.audioSource->handle != SoundHandle::Invalid) {
+                    state.audio.SetPosition(e.audioSource->handle, {e.worldMatrix.m[12], e.worldMatrix.m[13],
+                                                                     e.worldMatrix.m[14]});
+                }
+            }
+        }
 
         // Editor camera: poll input, gate on ImGui's capture (last frame's UI state), then
         // navigate. Right-drag orbits (+ WASD/QE = fly); middle-drag pans; scroll zooms;

@@ -27,4 +27,10 @@ namespace toon {
     // Focus: re-target the pivot at a world point (keeps the current distance + orientation).
     void CameraFocus(Camera &cam, const Vec3 &target);
 
+    // The camera's world-space eye position + facing (forward/up) — the audio listener's
+    // source (core/audio/audio.h's SetListener, driven once per render frame from
+    // TickEditor). Derived from the same yaw/pitch/pivot/distance basis SetCamera's view
+    // matrix uses, so "what you hear" always matches "what you see".
+    void CameraWorldBasis(const Camera &cam, Vec3 &outEye, Vec3 &outForward, Vec3 &outUp);
+
 } // namespace toon

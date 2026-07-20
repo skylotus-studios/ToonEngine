@@ -99,7 +99,9 @@ namespace toon {
                 e.material = Material{{0.40f, 0.90f, 0.55f}, {0.03f, 0.07f, 0.04f}, 0.014f};
                 e.material.roughness = 0.15f;
             }
-            // Torus.
+            // Torus — also the audio demo emitter (M2.2): a looping, positional hum, so
+            // orbiting the camera around it while Playing audibly pans/attenuates. Autoplay
+            // starts it the moment Play begins (app/audio_glue.cpp's BuildAudioWorld).
             {
                 const int i = AddEntity(scene, 0, "Torus");
                 Entity &e = scene.entities[i];
@@ -108,6 +110,15 @@ namespace toon {
                 e.material = Material{{0.90f, 0.70f, 0.25f}, {0.32f, 0.20f, 0.03f}, 0.022f};
                 e.material.roughness = 0.15f;
                 AddSpin(scene, i, {1.0f, 0.0f, 0.0f});
+
+                AudioSource audioSrc;
+                audioSrc.clip = TOON_AUDIO_DIR "/demo_hum.wav";
+                audioSrc.volume = 0.6f;
+                audioSrc.loop = true;
+                audioSrc.autoplay = true;
+                audioSrc.spatial = true;
+                audioSrc.maxDistance = 15.0f;
+                e.audioSource = audioSrc;
             }
             // Falling primitives (M2.1 physics demo): dynamic rigid bodies, no spin script -- physics
             // owns their transform each Play tick, unlike the spinning showcase above. Dropped above
@@ -189,6 +200,11 @@ namespace toon {
         // once here, alongside the renderer's own Init -- the world stays empty (no bodies)
         // until a Play/Step session calls BuildPhysicsWorld (app/physics_glue.h).
         if (!state.physicsWorld.Init()) { std::fprintf(stderr, "PhysicsWorld init failed\n"); }
+
+        // Audio (M2.2): miniaudio's engine + its own device/audio thread, alongside physics'
+        // own one-time setup above -- the audio world stays silent (no autoplay emitters
+        // started) until a Play/Step session calls BuildAudioWorld (app/audio_glue.h).
+        if (!state.audio.Init()) { std::fprintf(stderr, "AudioEngine init failed\n"); }
 
         // Install input callbacks BEFORE InitUI, so ImGui's GLFW backend chains ours instead of
         // overwriting them (see core/input/input_system.h's Init banner).

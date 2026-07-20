@@ -85,4 +85,15 @@ namespace toon {
 
     void CameraFocus(Camera &cam, const Vec3 &target) { cam.pivot = target; }
 
+    void CameraWorldBasis(const Camera &cam, Vec3 &outEye, Vec3 &outForward, Vec3 &outUp) {
+        const Basis b = CameraBasis(cam);
+        outForward = {b.forward.x, b.forward.y, b.forward.z};
+        outUp = {b.up.x, b.up.y, b.up.z};
+        // The orbit camera looks FROM the eye TOWARD the pivot, i.e. along +forward — so the
+        // eye sits `distance` back along -forward from the pivot (see CameraBasis's own
+        // comment: b.forward is "view +Z, toward the pivot").
+        const float3 eye = float3(cam.pivot.x, cam.pivot.y, cam.pivot.z) - b.forward * cam.distance;
+        outEye = {eye.x, eye.y, eye.z};
+    }
+
 } // namespace toon

@@ -87,6 +87,13 @@ set(ENABLE_INSTALL               OFF CACHE BOOL "" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/JoltPhysics/Build)
 
+# --- miniaudio (submodule under external/) ------------------------------------
+# M2 roadmap item: SFX + music, positional, behind core/audio/audio.h's seam (twin to
+# core/physics/physics.h's Jolt seam). miniaudio is a single header (no CMakeLists to
+# add_subdirectory) -- its include dir is added to the target below, and
+# src/core/audio/miniaudio_impl.cpp is the one TU that compiles its implementation
+# (MINIAUDIO_IMPLEMENTATION) -- see that file's own banner for why it's split out.
+
 # --- Application -------------------------------------------------------------
 # imgui_impl_glfw.cpp is Dear ImGui's GLFW platform backend. DiligentTools'
 # Imgui module only auto-compiles the Win32/Linux/macOS-native/SDL backends
@@ -99,6 +106,8 @@ add_executable(ToonEngine
     src/core/rendering/primitives.cpp
     src/core/scene/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
     src/core/physics/physics.cpp        # Jolt Physics backend behind the physics seam (M2.1)
+    src/core/audio/audio.cpp            # miniaudio backend behind the audio seam (M2.2)
+    src/core/audio/miniaudio_impl.cpp   # compiles miniaudio.h's implementation (once)
     src/core/scene/script.cpp         # native script registry + per-tick dispatch (M1.3)
     src/core/scene/scripts/spin_script.cpp   # first concrete Script (replaces the old spin block)
     src/core/camera/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
@@ -111,6 +120,7 @@ add_executable(ToonEngine
     src/app/editor_tick.cpp      # per-frame input, fixed-timestep sim, camera nav
     src/app/editor_render.cpp    # shadow pass, main draw, collider debug overlay
     src/app/physics_glue.cpp     # collider-extent scaling + physics-world (re)construction
+    src/app/audio_glue.cpp       # audio-world (re)construction from AudioSource-bearing entities
     src/app/scene_ops.cpp        # scene load/save/new (File menu + asset-browser double-click)
     src/ui/thumbnail_cache.cpp  # path -> texture cache (asset browser icons/preview)
     src/ui/panels/file_browser.cpp     # "Asset Browser" editor panel
@@ -149,7 +159,8 @@ endif()
 target_include_directories(ToonEngine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/external/ImGuizmo/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/IconFontCppHeaders)
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/IconFontCppHeaders
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio) # single-header -- no CMakeLists of its own
 
 # core/renderer.cpp includes DiligentFX's C++-side shader-structure headers
 # (BasicStructures.fxh -> CameraAttribs, BloomStructures.fxh -> BloomAttribs) to
@@ -210,6 +221,7 @@ target_compile_definitions(ToonEngine PRIVATE
     TOON_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
     TOON_ICON_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png"
     TOON_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes"
+    TOON_AUDIO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/audio"
     TOON_INPUT_JSON="${CMAKE_CURRENT_SOURCE_DIR}/assets/input.json"
     TOON_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets" # asset browser's root (ui/file_browser.h)
     # core/input/input_device.h needs <GLFW/glfw3.h> (GLFW_RELEASE, GLFWgamepadstate) and is
