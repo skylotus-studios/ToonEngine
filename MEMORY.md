@@ -1,9 +1,14 @@
 # ToonEngine: Memory / Archive
 
-Detailed history, gotchas, and decision rationale that don't need to be in
-`CLAUDE.md`'s always-loaded context, but are worth keeping on hand. Pull this
-up when you hit one of the errors below, or want the "why" behind a rule in
-CLAUDE.md.
+Detailed gotchas and decision rationale that don't need to be in `CLAUDE.md`'s
+always-loaded context, but are worth keeping on hand. Pull this up when you
+hit one of the errors below, or want the "why" behind a rule in CLAUDE.md.
+Organized by system, not by date: each shipped feature has one section
+covering its design and gotchas. **[ARCHIVE.md](ARCHIVE.md)** holds the
+material that used to live here but no longer earns a place in the
+day-to-day lookup path: the full round-by-round debugging narrative behind
+the temporal-ghosting fix (condensed version below), and the original
+ToonEngineOld carry-over survey for systems that have since shipped.
 
 ## Build Gotchas
 
@@ -283,8 +288,8 @@ supported override hook. So:
   (it moves often, and was at `API256018-28-ge637cfc` when this landed).
 - Superseded the original 2026-07-09 approach (manually checking out
   DiligentTools' *nested* `ThirdParty/imgui` submodule to the same upstream
-  commit, uncommitted, reverted by any `submodule update --recursive`). See that
-  changelog entry.
+  commit, uncommitted, reverted by any `submodule update --recursive`). See
+  **[ARCHIVE.md](ARCHIVE.md)** for that approach's full write-up.
 - **Build stays green either way:** the docking code in `main.cpp` is guarded on
   `#ifdef IMGUI_HAS_DOCK` (imgui defines it only on the docking branch). With a
   non-docking imgui the debug window simply floats instead of docking.
@@ -1731,6 +1736,303 @@ after it exists; a defaulted copy constructor would not have had this failure mo
 worth preferring the next time `Entity` grows a component, unless a field genuinely needs
 non-default copy behavior.
 
+## Mouse-Pick (Roadmap M2.3)
+
+Planned via the `plan-roadmap` skill, then implemented in the same session. Ships as
+**geometric ray-vs-bounds picking**, not `PhysicsWorld::Raycast`: Jolt bodies only exist while
+Playing (`BuildPhysicsWorld` runs at Play/Step, `Clear()`s on Stop), and only collider-bearing
+entities would be hittable, so editor selection needs a path that works in Editing mode for
+every visible entity, the same reason Unity's Scene view and Unreal's/Godot's editors decouple
+their own editor picking from their runtime physics raycast. `PhysicsWorld::Raycast` stays
+exactly what it was shipped for (M2.1): gameplay use, untouched.
+
+**Half 1: screen click to world ray, behind the renderer seam.** `core/math.h` is
+deliberately math-free (no matrix inverse), and view/projection matrices stay behind the seam
+by design, so the unproject lives in `renderer.cpp`: `Renderer::ScreenPointToRay` inverts the
+exact `view * proj` matrix `SetCamera` built that frame (`m_impl->viewProj`), converts the
+mouse pixel to NDC (flipping Y; Diligent/Vulkan's depth range is `[0,1]`, not OpenGL's
+`[-1,1]`, so near = z 0, far = z 1), and transforms both NDC points as **row vectors**
+(`v * M`), matching the HLSL shaders' own `mul(v, M)` convention (`toon_common.hlsli`) --
+Diligent's own free `operator*(Matrix, Vector)` is the opposite (column-vector), so a small
+`TransformRowVector` helper does the actual multiply. The scene renders fullscreen behind the
+dockspace's `PassthruCentralNode`, so the "viewport" is the whole window: `io.MousePos`/
+`io.DisplaySize` feed straight in, no panel-offset math needed.
+
+**Half 2: ray to nearest entity, app layer, plain math.** The renderer can't know about
+`Scene` (that would leak `scene.h` into `renderer.h`), so it only exposes per-resource
+**local** bounds: `Renderer::GetMeshBounds`/`GetModelBounds`, a min/max sweep done once at
+`CreateMesh`/`LoadModel` time (model bounds via `GLTF::Model::ComputeBoundingBox` with an
+identity `RootTransform`, giving the model's own object-space box). New `app/picking.{h,cpp}`
+does the loop: `PickEntity` transforms each renderable entity's 8 local-bounds corners by its
+`worldMatrix` and re-derives a world AABB (a rotated box isn't just its two corners
+transformed); a light or empty anchor with no mesh/model gets a fixed `kPickBoxHalfExtent` box
+centered on its world position instead, so it stays clickable with no geometry of its own. A
+standard ray-vs-AABB slab test keeps the nearest hit and writes it to `scene.selected`.
+
+**Wiring.** `DoMousePicking` (`main.cpp`, right before `DrawGizmoOverlay`) triggers on a
+left-button release whose `ImGui::GetMouseDragDelta` stayed under a few pixels (a click, not
+a drag -- camera orbit/pan use the right/middle buttons, so left is free), gated on
+`!io.WantCaptureMouse && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing()` so a panel click or a
+gizmo drag never triggers a pick (the guard reads last frame's `IsUsing()`/`IsOver()`, the
+same one-frame lag the existing input capture-gate already accepts). A collider-less entity's
+fallback pick box is drawn as a wireframe cube in `app/editor_render.cpp`'s existing
+`DrawWireframe` overlay (reusing `ColliderWireframe`'s `Box` case, sized to exactly match what
+`PickEntity` tests), so a light or empty anchor reads as clickable instead of a dead zone.
+
+**Verified:** clean build; every ImGui/ImGuizmo call (`IsMouseReleased`, `GetMouseDragDelta`,
+`IsOver`/`IsUsing`) checked against the vendored headers; a temporary instrumented run
+(removed before commit) logging a synthetic center-screen ray confirmed `ScreenPointToRay`'s
+direction matched the camera's actual orbit geometry by hand (`sin(pitch)`/`cos(pitch)`
+matched the logged ray direction to three decimal places) and `PickEntity` resolved to the
+geometrically correct nearest entity using live scene state; no synthetic input reaches this
+environment's windows (see the `verify` skill), so a live click couldn't be driven directly.
+
+## Contact Events to Scripts (Roadmap #9)
+
+Shipped by a separate, concurrently running Claude Code session while this session worked on
+mouse-pick and the roadmap-skill reorg above; written here from the actual shipped code, not
+just the commit message, per this skill's own standard of verifying against real code.
+
+Three new `Script` hooks (`core/scene/script.h`): `OnCollisionEnter`/`OnCollisionStay`/
+`OnCollisionExit(Entity &self, Scene &scene, int other, const Vec3 &point, const Vec3
+&normal)`. `other` is an entity INDEX, matching `Entity::parent`/`Scene::selected`/
+`ReparentEntity`'s own convention, never a raw `Entity&` alias into the entities vector.
+`normal` points away from `self` toward `other` (Unity's own convention); Enter fires once
+when contact starts, Stay every tick it continues, Exit once it ends.
+
+**The physics seam gained `ContactPhase`/`ContactEvent`/`ConsumeContactEvents`**
+(`core/physics/physics.h`). The real complication: Jolt's contact callbacks
+(`JPH::ContactListener::OnContactAdded/Persisted/Removed`) fire from Jolt's own job-system
+worker threads, concurrently with the rest of this single-threaded engine, so
+`PhysicsWorld::Impl` doubles as a `JPH::ContactListener` that only queues events behind a
+`std::mutex` during `Step()`; `ConsumeContactEvents` drains the queue on the main thread right
+after `Step()` returns, the only point it's safe to touch from the caller's thread. On Exit,
+Jolt no longer has live contact geometry for the (possibly-destroyed) pair, so `point`/
+`normal` are the last values seen on that pair's most recent Enter/Stay, not live geometry.
+
+**`app/physics_glue.h` gained the resolution plumbing.** `BuildPhysicsWorld` now also fills an
+`outBodyToEntity` map (`BodyHandle`'s raw id -> owning entity index), built once per Play/Step
+session (no entity is created/destroyed mid-Play). `DispatchContactEvents` drains
+`ConsumeContactEvents` and resolves each event's two `BodyHandle`s back to entities via that
+map, firing both sides' scripts symmetrically (the reported normal flipped per side, so each
+side always sees the normal pointing away from itself). Called once per fixed tick in
+`editor_tick.cpp`, immediately after `PhysicsWorld::Step()`, gated on `runScripts` like
+`UpdateScripts` (no point draining events nothing will react to).
+
+**Verified** with a throwaway logging script plus forced Play-on-launch (no live input
+reaches this environment): confirmed correct Enter/Stay/Exit sequencing and contact geometry
+against the demo scene's falling physics bodies, then the throwaway script was fully removed
+before the shipping commit.
+
+## Fixed Timestep + Render Interpolation (Roadmap M1.1)
+
+Replaced `main.cpp`'s single variable-`dt` frame loop with an accumulator-driven fixed 60 Hz
+simulation tick, decoupled from the (still variable) render rate, with full "Fix Your
+Timestep!"-style render interpolation (the user's explicit choice over the simpler
+render-latest-tick alternative). Kept inline in `main.cpp` rather than extracted into its own
+module: a scoped decision, see `docs/architecture.md`'s "Where new systems plug in".
+
+**Mechanism:** `kFixedDt = 1/60` and a `double accumulator`. Each frame, `frameTime` is
+clamped to <= 0.25s before feeding the accumulator (a spiral-of-death guard: a window
+drag/resize genuinely stalls `glfwPollEvents` for its duration and would otherwise dump a
+huge time debt in at once). A `while (accumulator >= kFixedDt)` runs zero-or-more fixed
+steps, each calling `SnapshotSimState(scene)` (copies every transformed entity's `transform`
+into `prevSimTransform`) before advancing gameplay by `kFixedDt`. After the loop, `alpha =
+accumulator / kFixedDt` feeds `UpdateWorldTransforms(scene, alpha)` (default `alpha = 1.0`
+for callers outside the loop), which composes each entity's world matrix from
+`lerp(prevSimTransform.value_or(transform), transform, alpha)` via `LerpTransform`
+(component-wise on position/rotation/scale; a documented Euler/quat-lerp approximation, fine
+for small per-tick deltas). Camera navigation deliberately stays on the variable `dt`: it's
+the user driving the editor, not the simulation.
+
+**The motion-vector chain needed zero new bookkeeping.** `UpdateWorldTransforms` already
+snapshotted `prevWorldMatrix = worldMatrix` before recomputing; since `worldMatrix` is now
+always built from the interpolated pose, `prevWorldMatrix` automatically becomes "last
+*rendered* frame's interpolated world," so TAA/SSAO/SSR keep measuring motion between
+consecutive rendered frames exactly as before. `prevSimTransform` defaults to `nullopt` and
+reads as `value_or(transform)`, so a fresh/loaded/anchor entity interpolates with itself: no
+ghost on spawn or scene load.
+
+Verified: clean build, then a launch + screenshot showing crisp (non-smeared) silhouettes on
+the spinning cluster and a Cube rotation that advanced correctly over sustained runtime with
+no NaN/corruption/crash. Interpolation smoothness itself and the gizmo-drag "no ghost-glide"
+path aren't independently confirmed interactively (no live input desktop here); both follow
+from the mechanism above by direct code inspection (`prevSimTransform` only updates at
+fixed-tick boundaries, so an edit lands in `transform` immediately and is what the *next*
+tick interpolates from).
+
+## Play / Pause / Step Mode (Roadmap M1.2)
+
+An explicit `EditorMode { Editing, Playing, Paused }` on top of the fixed-timestep loop
+above: Editing (the default at launch) freezes the accumulator so nothing simulates, Playing
+is the fixed-timestep loop's normal behavior, Paused freezes mid-play without discarding
+progress. Step credits the accumulator with exactly one `kFixedDt` and lets the same while
+loop drain it: no separate single-step code path. A "Playback" panel (Play/Pause toggle,
+Step, Stop, a Mode label) docks as a thin strip at the top of the existing dockspace.
+
+**Play-mode isolation, the user's explicit choice:** Stop always restores `scene` from
+`sceneBackup`, a snapshot taken when Play starts, discarding whatever happened during Play
+(Unity/Godot/Unreal convention). Cheap because `Scene` is a plain copyable struct (a
+`vector<Entity>` plus an `int`; mesh/model/audio/body handles are owned elsewhere): `scene =
+sceneBackup` is the entire mechanism, no new serialization code. This is the safety net that
+makes M1.3's scripts and M2's physics/audio non-destructive to test.
+
+**Two bugs caught by tracing the interpolation math before writing any code:** `alpha` only
+means something while the accumulator is actively draining during Playing, so it's pinned to
+`1.0` whenever `mode != Playing` (else a gizmo edit made while paused would blend against a
+stale pre-edit tick). And a Stop-restore or a Step can teleport a pose in one rendered frame,
+which TAA/SSAO/SSR would read as large spurious motion, the same problem category as the
+temporal-ghosting work below: fixed by folding a one-frame `suppressNextFrameHistory` flag
+(later folded into `suppressTemporalHistory`, see below) into both Stop and Step.
+
+**Declined, on purpose:** a dedicated "play" input-context (the context stack already
+supports shadowing bindings this way, but there's no gameplay-specific input to put there
+until M1.3); locking scene-structural editing while Playing/Paused (snapshot/restore already
+makes that safe to discard).
+
+Verified: clean build, then a fresh-launch screenshot showing `Mode: EDITING` and the Cube at
+exactly 0/0/0 degrees (versus the fixed-timestep screenshot's long-running Cube at ~1268/2536
+degrees): direct confirmation nothing simulates until Play is pressed. Actually clicking
+Play/Pause/Step/Stop and watching the transitions isn't independently confirmed interactively
+(no live input desktop here); established by code reasoning instead.
+
+## Cascaded Shadow Maps (Roadmap M3)
+
+Directional shadows from the scene light onto every cel-shaded surface, via Diligent's own
+`ShadowMapManager` (`external/DiligentFX/Components`): cascade distribution, the shadow-map
+atlas, and cascade selection/PCF sampling (`Shaders/Common/public/Shadows.fxh`) are all
+Diligent's, not hand-rolled, per the guiding principle. 4 cascades, 2048² D32_FLOAT, PCF (not
+VSM/EVSM: cheap, no extra blur pass, matches the toon aesthetic, the user's explicit choice).
+Shadow darkens the *existing* band ramp rather than painting a separate flat color:
+`CelShade` gained a `shadow` factor multiplied into `NdotL` before quantization, so a
+shadowed pixel just lands on a darker rung of the same ladder N·L already uses.
+
+**Abstraction-layer additions** (`renderer.h`): `BeginShadowPass()` (returns the cascade
+count to loop over, 0 when `PostParams::shadows` is off), `BeginShadowCascade(i)`,
+`DrawMeshShadow`/`DrawModelShadow` (position-only, no material or motion history),
+`EndShadowPass()` (a no-op today; the hook a future VSM/EVSM `ConvertToFilterable` would land
+in). `main.cpp` runs these in a pre-pass, once per cascade, before `BeginFrame` (separate
+depth-only targets, no interaction with the main G-buffer), which required moving
+`SetPostParams`/`SetCamera`/`SetLight` earlier in the frame.
+
+**`iNumCascades = 0` is the "shadows off" sentinel**, not a new shader branch: `Shadows.fxh`'s
+own `FindCascade` treats it as "no cascade found," and `FilterShadowMap` short-circuits to
+`fLightAmount = 1.0` without ever touching the shadow map texture.
+
+**Two real, non-obvious bugs, worth remembering if any future `Components`-module Diligent
+header (ShadowMapManager, BoundBoxRenderer, EnvMapRenderer, VectorFieldRenderer) gets added
+here again:**
+1. **A cross-module `BasicStructures.fxh` namespace collision, only caught at link time.**
+   This file's own `namespace Diligent { namespace HLSL { #include ".../BasicStructures.fxh"
+   ... } }` wrapper (needed because `PostFXContext.hpp`/`Bloom.hpp`/etc. forward-declare
+   `Diligent::HLSL::CameraAttribs`) is not how `ShadowMapManager.hpp` includes the same file:
+   it does a bare, unnested `namespace Diligent { #include ".../BasicStructures.fxh" ... }`.
+   The header's normal include guard means whichever inclusion is textually first in this TU
+   wins; the other becomes a silent no-op. And since `ShadowMapManager.cpp` is a *separate*
+   translation unit (built into `DiligentFX.lib`) with its own independent copy of the same
+   collision, it always resolves to the bare `Diligent::ShadowMapAttribs` type regardless of
+   what this TU's own headers decide, so a `using`-directive bridge fixes lookup but not type
+   identity: calling into `ShadowMapManager` with the `HLSL`-wrapped type is a genuinely
+   different (if identically-named) C++ type, and fails at *link* time with an undefined
+   symbol, not a compile error. **Fix:** `#undef` the include guard macro
+   (`_BASIC_STRUCTURES_FXH_`) between the two inclusion points and force a second, genuinely
+   independent expansion at bare `Diligent::` scope, so this TU ends up with both
+   `Diligent::HLSL::CameraAttribs` (for the PostFXContext family) and
+   `Diligent::ShadowMapAttribs` (for ShadowMapManager) as distinct, correctly-typed structs,
+   and use the bare name whenever calling into `ShadowMapManager`. General lesson: a namespace
+   mismatch between a header and its own separately-compiled `.cpp` is invisible until link
+   time, and a `using`-directive only fixes lookup, never type identity.
+2. **Combined-sampler mode binds a texture's sampler on the view, not as an SRB variable**,
+   confirmed by a live Vulkan validation error, not by guessing from the header. The
+   "set-if-present" `GetStaticVariableByName(..., "g_ShadowMap_sampler")` pattern (the same one
+   used for every other combined-sampler texture here) compiles, links, and runs, silently
+   binding nothing: the call is a graceful no-op when the name isn't a separately-reflected
+   resource. The real signal only shows up in a redirected console log: `Failed to bind
+   sampler to sampler variable 'g_ShadowMap_sampler' ...: no sampler is set in texture view`,
+   followed by a Vulkan validation error every draw. **Fix:** `ITextureView::SetSampler()` on
+   the shadow map's SRV itself, once, right after both the sampler and `ShadowMapManager`
+   exist. General lesson: a PSO/SRB variable lookup returning null doesn't mean a resource
+   doesn't need binding; it can mean you're binding it through the wrong mechanism for that
+   resource's kind (combined-sampler textures bind through the view, not the SRB).
+
+**Not done / deliberately deferred:** per-cascade frustum culling of the shadow-casting draw
+loop (draws every entity into every cascade unconditionally); no cascade-boundary debug
+visualization (`GetCascadeColor` exists in `Shadows.fxh` if ever needed); the shadow bias/
+`fFilterWorldSize` is a single hand-picked `0.02`, untested against grazing-angle acne or
+peter-panning beyond what front-face culling already mitigates structurally.
+
+Verified: clean build with zero warnings/errors on the touched files; a redirected-stdout
+relaunch caught the sampler bug directly (thousands of repeated per-draw validation errors
+before the fix, a clean log after); two screenshots (before/after the sampler fix) both show a
+correctly-shaped soft-edged shadow, shifted between captures consistent with `Spin` having
+continued to animate the objects, confirming the shadow recomputes live each frame rather than
+being cached.
+
+## Temporal Ghosting Fixes (Post-Ship Hardening)
+
+A visible ghost/trail followed spinning and camera-moved objects for a stretch after the
+gizmo/temporal-post-effects work first shipped. It took seven rounds of debugging across
+multiple sessions to find every real cause (the full round-by-round misdiagnosis journey,
+worth keeping for the methodology lesson, is in **[ARCHIVE.md](ARCHIVE.md)**); this section
+is just the durable end state, current as of the last fix.
+
+**Four independent causes, each needing its own fix** (fixing one alone never fully resolved
+it, which is why this took multiple rounds):
+
+1. **Rotating outlines under-reported their own motion.** The inverted-hull outline's
+   `PrevClip` was built by extruding along *this frame's* normal and only varying
+   `WorldViewProj` between curr/prev: exact for pure translation, but the extrude direction
+   is itself rotation-dependent, so under continuous rotation this always slightly
+   under-reports motion. Fixed by adding `g_PrevNormalMatrix` to the shared cbuffer (grew
+   320→384 B): the inverse-transpose of the *previous* frame's world matrix, computed from
+   the `prevWorld`/`objPrevWorld` matrices `DrawMesh`/`DrawModel` already receive. Both
+   outline vertex shaders now redo the extrude for `PrevClip` using `g_PrevNormalMatrix`
+   instead of reusing the current frame's `inflated` position.
+2. **`PostFXContext` never had a real previous-frame depth buffer**, only the current frame
+   reused as a stand-in (`pPrevDepthBufferSRV = depthSRV`). That defeats depth-based
+   disocclusion entirely for every temporal effect (SSAO/TAA/SSR alike): the mechanism that's
+   supposed to catch a moving silhouette edge and distrust stale history there. Fixed with a
+   real `Impl::prevSceneDepth` texture, recreated alongside the other offscreen targets and
+   `CopyTexture`'d from `sceneDepth` at the end of `EndScene`. **Gotcha:** it needs the exact
+   same BindFlags as `sceneDepth` (`BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE`, even though
+   it's never bound as a DSV) or Vulkan validation trips on the SRV's depth→R32_FLOAT
+   reinterpretation (`VUID-VkImageViewCreateInfo-image-01762`/`-subresourceRange-09594`); the
+   two textures need matching creation flags for Diligent's Vulkan backend to set that up the
+   same way for both.
+3. **Camera motion was never reprojected**, only object motion. `RunPostFX` fed
+   `PostFXContext` the *same* camera-attribs instance as both curr and prev (no
+   `prevPostCamera` existed at all), so `ComputeReprojectedDepth.fx`'s curr→prev round-trip
+   was a no-op regardless of whether the camera actually moved. During genuine camera motion
+   (zoom/orbit/pan/fly) a static surface's camera-space depth legitimately changes
+   frame-to-frame, and the disocclusion test compared against the wrong baseline, blending in
+   stale AO/color across a frame where the framing genuinely changed. Fixed by adding
+   `Impl::prevPostCamera` (seeded to `postCamera` on frame 1, snapshotted right after
+   `postFX->Execute()` each frame), the same double-buffering pattern already used for
+   `prevSceneDepth`/`prevViewProj`, just never extended to the camera-attribs struct. Matches
+   `DiligentSamples/Tutorial27_PostProcessing`'s own reference pattern (a real double-buffered
+   `CameraAttribs[2]`, never aliased).
+4. **A rotating silhouette is a genuinely view-dependent contour**, which no per-vertex motion
+   vector, however correctly computed, can fully represent: there's always a small residual
+   error. DiligentFX's SSAO shader has a motion-magnitude-based safety net for exactly this
+   (`MotionFactor`, scaling down history trust when motion is large), but its tuning constants
+   are compiled-in `#define`s in the vendored shader source, unreachable from the app without
+   patching a submodule (off-limits per the style guide), and at Spin's default rate the
+   residual error is small enough to slip under that threshold, so history is trusted and a
+   small per-frame error compounds into a visible, persistent ghost. Since the shader-internal
+   thresholds are unreachable, `PostParams::suppressTemporalHistory` (renamed from
+   `activeInteraction`/`gizmoManipulating` through the debugging rounds) is the sanctioned
+   lever: `gizmoActive || ImGui::IsAnyItemActive() || spin`. While Spin is on (the default),
+   SSAO/TAA never accumulate at all: every frame is a fresh, non-temporal computation
+   (slightly noisier AO, no denoise), sidestepping the question entirely. The instant Spin and
+   any interaction stop, normal accumulation resumes on an already-static scene and converges
+   within a few frames. SSR has no `ResetAccumulation` field at all (unlike SSAO/TAA); its own
+   `TemporalRadianceStabilityFactor` was tuned down from the library default `1.0` to `0.7`
+   defensively (higher values are the most ghosting-prone end of its documented range).
+
+`ImGui::IsAnyItemActive()` (not just `ImGuizmo::IsUsing()`) was the key correction partway
+through: a plain Inspector-slider drag (no gizmo involved at all) reproduced the same trail,
+which proved the trigger couldn't be gizmo-specific.
+
 ## Verifying a Vulkan Build
 
 ### Link Fails: `permission denied` Writing `ToonEngine.exe`
@@ -1772,159 +2074,74 @@ present), the render is fine; just re-run the capture.
 
 ## ToonEngineOld: Carry-Over Reference (Roadmap: Renderer → Engine)
 
-`ToonEngineOld/` (untracked, **gitignored**, temporary, slated for removal once ported;
-`src` + `assets` only) is the old from-scratch **OpenGL 4.1** engine, kept as a porting reference. It's the inverse of the
-current tree: a real little **editor** (scene graph, inspector + gizmos, model loader,
-input, camera, serialization, shadows, grid, sprites) on the weaker renderer. The new
-engine has the strong Vulkan renderer but was a hardcoded demo, so the roadmap's next arc
-is porting that engine/editor layer *above the abstraction layer* onto Diligent.
+`ToonEngineOld/` (untracked, **gitignored**, temporary, slated for deletion once fully
+ported; `src` + `assets` only) is the old from-scratch **OpenGL 4.1** engine, kept as a
+porting reference. Its abstraction layer is low-level (`BindShader`/`SetUniform`/immediate
+binds/framebuffers) and does not map onto Diligent's PSO/SRB model, so its `renderer.cpp`
+and `main.cpp` are reference-only; the value is everything built above that layer. Most of
+that "above the layer" material has already shipped and is documented in its own section
+above (see each roadmap item's write-up): scene graph, editor camera, input system, gizmos,
+serialization, the file browser/thumbnails/themes, glTF loading, and cascaded shadow maps.
+The full original carry-over survey (per-system porting notes, plus the 2026-07-11 audit of
+which items Diligent already has vs. genuinely needs hand-rolling) is preserved in
+**[ARCHIVE.md](ARCHIVE.md)** for anyone tracing exactly what a shipped system started from.
 
-**Abstraction-layer note:** the old engine's abstraction layer is the same "opaque handles
-behind a backend-agnostic header" idea, but **low-level** (`BindShader`/`SetUniform`/
-immediate binds/framebuffers): it does NOT map onto Diligent's PSO/SRB model, so the old
-`renderer.cpp` is reference-only. The value is everything built above that old abstraction
-layer; our own abstraction layer grows instead (textured materials, a UV/bone vertex, a
-framebuffer path for shadows).
+**What's left to port (grid/sky, sprites, skeletal animation — roadmap M3), captured here
+so the folder can be deleted once they land without losing anything:**
 
-**Carry-over map** (per system):
-- **assets**: fonts (BaiJamjuree, OpenSans), 4 test models, icon: **copied** into
-  `assets/` (models are Git LFS). The GLSL shaders stay in `ToonEngineOld` as HLSL-port
-  references: esp. `toon.frag` (spec + rim + shadow ramp, richer than our current fill),
-  `grid.frag`, `shadow.*`.
-- **scene/scene.{h,cpp}**: entity **tree** (flat vector + parent index, root at 0, cached
-  world matrices, add/delete/reparent/duplicate, world-preserving reparent). High value;
-  port glm→Diligent math and old handles→our `MeshHandle`/`Material`.
-- **scene/model_loader**: cgltf (glTF) + ufbx (FBX) → meshes/materials/skeleton/anim.
-  **Decision: use DiligentTools' glTF loader instead** (native integration) → glTF/GLB
-  only, no FBX (`dragon.fbx` won't load via that path; `dragon.gltf` does). Keep the old
-  loader as the reference if FBX / skeleton parsing is ever wanted.
-- **ui/overlay**: inspector + `RenderSettings` (bands, spec, rim, shadow ramp, outline
-  incl. a screen-space-width flag, CSM, grid, sky, gizmo) + **ImGuizmo** transform gizmos.
-  ImGui logic ports (our abstraction layer already exposes ImGui); ImGuizmo must be vendored.
-- **scene/camera**: orbit/pan/zoom/fly/focus editor camera (replaces our turntable).
-- **core/input/**: keyboard/mouse/gamepad + action maps + rebinding + an ImGui capture
-  gate; GLFW-based, largely direct.
-- **core/animator + animation**: skeleton + keyframe clips; after skinned loading.
-- **ui/file_browser + themes + thumbnail_cache**: asset browser + 3 themes + texture/model
-  preview thumbnails; ImGui, mostly portable. Thumbnails should decode/upload through the
-  already-linked `Diligent-TextureLoader` (`CreateTextureFromFile`), not a new image lib.
-- **core/renderer (GL) + main.cpp**: reference only.
-
-**Materials will need textures:** the old `Material` is `baseColor + texture + normalMap`,
-and loaded models (helmet.glb) carry albedo/normal maps, so Phase A adds texture handles
-to the abstraction layer + a textured cel fill, and the toon `Vertex` gains UVs (bone weights later).
-
-### Diligent Overlap Check (Roadmap Fold-In, 2026-07-11)
-
-Before adding the input-system / asset-browser / fixed-timestep / shader-hot-reload items
-to CLAUDE.md's roadmap, checked each against the guiding principle (build *on* Diligent,
-don't reinvent it): against the actual vendored source (DiligentCore/Tools/FX only;
-DiligentSamples is **not** a submodule here) plus Diligent's own docs/blog.
-
-- **Input / camera controllers.** Genuinely nothing to build on: DiligentCore and
-  DiligentTools have no windowing or input abstraction at all. The only `*Camera*` hit in
-  either (grepped both trees) is `NativeApp/Android/ndk_helper/tapCamera.h`, Android-only.
-  `FirstPersonCamera` / `InputController` exist only in **DiligentSamples**, a separate
-  repo ToonEngine doesn't vendor, and Diligent's own docs confirm the engine "does not
-  define any platform-specific window abstraction"; DiligentSamples' own maze demo just
-  uses GLFW for windowing + input, same as us. So `core/input.{h,cpp}` and
-  `core/camera.{h,cpp}` staying hand-rolled isn't a guiding-principle violation: there's
-  no in-scope Diligent equivalent to defer to, so the ToonEngineOld port is genuinely new
-  engine-layer code, same as the abstraction layer's philosophy already treats scene.cpp/camera.cpp.
-- **Shader hot-reload.** Diligent already has this; don't hand-roll a file-watcher. The
-  interface is `Diligent::IRenderStateCache`, declared in
-  `DiligentCore/Graphics/GraphicsTools/interface/RenderStateCache.h`. Create it with
-  `EnableHotReload = true` (the default `RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT`
-  hash mode is required for this), route shader/PSO creation through its
-  `CreateShader()` / `CreateGraphicsPipelineState()` instead of the raw device calls,
-  then call `cache->Reload()` to recompile whatever source files changed. Confirmed via
-  Diligent's 2.5.3 release notes + `Tutorial26_StateCache`: `Reload()` is a manual trigger
-  (a UI button/hotkey), not something polled every frame. The implementation
-  (`RenderStateCacheImpl.cpp`) builds unconditionally into `Diligent-GraphicsTools`, which
-  `CMakeLists.txt` already links (for `MapHelper.hpp`); the only other requirement is
-  `Diligent-ArchiverInterface` for the `IArchiverFactory` the cache needs, and the Archiver
-  DLL already ships (see *Compile time* above). Zero new deps.
-- **Fixed timestep.** Not a Diligent concern either way:
-  `DiligentCore/Common/interface/Timer.hpp` is a bare `std::chrono` stopwatch (`Restart` /
-  `GetElapsedTime[f]`), not a fixed-timestep/accumulator solution: swapping `main.cpp`'s
-  `glfwGetTime()` for it would change nothing functionally. The accumulator + decoupled
-  sim-rate pattern is pure game-loop architecture, orthogonal to the graphics API either way.
-- **Asset thumbnails.** Reuse the texture path already on the abstraction layer: no new image
-  library needed. `Diligent-TextureLoader`'s `CreateTextureFromFile` (already linked, used
-  today for model textures) is the right entry point for generating/caching browser
-  thumbnails, per `ToonEngineOld/src/ui/thumbnail_cache.{h,cpp}`, a real implemented file
-  the original carry-over survey above had missed (now added to the file_browser bullet).
-
-### Port Gotchas for the Un-Shipped Systems (Capture Before Deletion, 2026-07-13)
-
-`ToonEngineOld`'s own `CLAUDE.md` has no salvage value beyond this file: it's a subset of
-the carry-over map above, and its two TODO lists (engine roadmap + ImGui) were already
-audited and dispositioned line-by-line in the entry above. What isn't fully captured
-anywhere else yet is the GL-specific-vs-portable split inside the source of the remaining
-un-shipped roadmap systems (grid+sky, sprites, skeletal animation). Recorded here so the
-folder can be deleted once those land without losing anything:
-
-- **Cascaded shadow maps.** Shipped via a different path than this file originally
-  anticipated: CSM landed the same day this section was written, built directly on
-  **Diligent's own `ShadowMapManager`** component (`external/DiligentFX/Components`) rather
-  than porting `ToonEngineOld`'s GL/glm cascade math: `ShadowMapManager` owns cascade
-  distribution and light-space matrix construction internally, so the GL `[-1,1]`-NDC-Z vs.
-  Diligent `[0,1]`-left-handed conversion problem this entry used to warn about never came
-  up; the guiding principle (build *on* Diligent, don't reinvent it) working as intended.
-  `ToonEngineOld`'s `shadow.vert`/`shadow.frag` and the `ComputeCascades`/`RenderShadowPass`
-  C++ in its `main.cpp` are no longer a required port source: kept only as a historical
-  note on the log-linear split scheme and PCF approach they used (4 cascades × 2048² either
-  way). See "The renderer abstraction layer" / the rendering pipeline in `docs/architecture.md` for how the
-  shipped version actually works.
-- **Grid pass.** `grid.frag` reconstructs a world-space ray from the inverse view-proj,
-  intersects it with the Y=0 plane, and draws two line scales (minor + major every 5th
-  line) via `abs(fract(coord - 0.5) - 0.5) / fwidth(coord)`, with distance fade. It writes
-  `gl_FragDepth` only where a grid line is actually visible, so the plane stays transparent
-  between lines and doesn't occlude scene geometry below Y=0 or corrupt an edge/SSAO pass
-  with bogus depth. Porting needs `gl_FragDepth` → `SV_Depth`; `fwidth`/`dFdx`/`dFdy` are
-  named identically in HLSL; the manual NDC depth reconstruction
-  (`(far+near - 2*near*far/hitT) / (far-near)`, then `*0.5+0.5`) is GL-convention and must
-  be rederived for Diligent's `[0,1]` the same way the CSM math does.
-- **`toon.frag` is a fidelity upgrade.** It cel-shades with up to 8
-  lights (directional + point with quadratic attenuation), a hard toon Blinn-Phong
-  specular (`smoothstep` over `pow(NdotH, shininess)`), a Fresnel rim term, derivative-based
-  normal mapping (TBN from `dFdx`/`dFdy`, no tangent attribute needed), and tints the
-  non-highlight cel bands when a fragment is in shadow. All pure math over the existing
-  `CelShade`/lighting inputs, a near-direct GLSL→HLSL port, and every one of its dozens of
-  `glUniform` calls collapses into the engine's existing shared `Constants` cbuffer.
-- **Skeletal animation.** `animator.cpp` (keyframe sampling + hierarchy evaluation) is
-  portable line-for-line modulo glm→Diligent math. Its two non-obvious correctness details
-  are worth keeping verbatim as reference: un-animated joints fall back to **bind-pose
-  local TRS** (not identity) so they don't collapse, and the joint hierarchy is walked
-  **topologically** (iterate until every joint's parent is resolved) because glTF does not
-  guarantee parent-before-child node order. The glTF *extraction* side of the old loader
+- **Grid pass.** `ToonEngineOld/src/*/grid.frag` reconstructs a world-space ray from the
+  inverse view-proj, intersects it with the Y=0 plane, and draws two line scales (minor +
+  major every 5th line) via `abs(fract(coord - 0.5) - 0.5) / fwidth(coord)`, with distance
+  fade. It writes `gl_FragDepth` only where a grid line is actually visible, so the plane
+  stays transparent between lines and doesn't occlude scene geometry below Y=0 or corrupt an
+  edge/SSAO pass with bogus depth. Porting needs `gl_FragDepth` → `SV_Depth`;
+  `fwidth`/`dFdx`/`dFdy` are named identically in HLSL; the manual NDC depth reconstruction
+  (`(far+near - 2*near*far/hitT) / (far-near)`, then `*0.5+0.5`) is GL-convention and must be
+  rederived for Diligent's `[0,1]`, the same way the shipped CSM math already was.
+- **Skeletal animation.** `ToonEngineOld/src/*/animator.cpp` (keyframe sampling + hierarchy
+  evaluation) is portable line-for-line modulo glm→Diligent math. Two non-obvious
+  correctness details worth keeping verbatim as reference: un-animated joints fall back to
+  **bind-pose local TRS** (not identity) so they don't collapse, and the joint hierarchy is
+  walked **topologically** (iterate until every joint's parent is resolved) because glTF does
+  not guarantee parent-before-child node order. The glTF *extraction* side of the old loader
   (cgltf) is superseded by DiligentTools' `GLTF::Model`, which parses skins/animations
-  itself, but the **ufbx FBX path has no current-engine equivalent at all** (DiligentTools
-  is glTF-only), so it's the only reference if FBX/skeleton import is ever wanted; only
-  `dragon.fbx` needs it, `dragon.gltf` already loads through the normal path.
-- **Sprites.** Named in the un-shipped list above but never actually written up until this
-  audit (2026-07-20); the design is a real per-entity component, not just the two shader
-  files. `ShadingMode::Sprite` (`scene.h`) carries `spriteTint` (vec4), `spriteUVRect`
+  itself, but the old **ufbx FBX path has no current-engine equivalent at all**, so it's the
+  only reference if FBX/skeleton import is ever wanted (only `dragon.fbx` needs it;
+  `dragon.gltf` already loads through the normal path).
+- **Sprites.** The design is a real per-entity component, not just the two shader files.
+  `ShadingMode::Sprite` (old `scene.h`) carries `spriteTint` (vec4), `spriteUVRect`
   (xy=offset, zw=scale, an atlas/sub-texture rect), and `spriteFlipX`/`spriteFlipY`, all
-  round-tripped through `serializer.cpp` and editable in `overlay.cpp`'s inspector.
-  Rendering is a **separate transparent pass** after the opaque toon pass (`main.cpp`'s
-  `RenderSprite`): one shared unit quad (`gSpriteQuad`, pos+uv, 6 vertices, built once) is
-  drawn per sprite entity via `sprite.vert`/`sprite.frag` (`uMVP`, `uTintColor`, `uUVRect`,
-  alpha `discard` below 0.01). Every sprite entity is collected into a list each frame and
-  **sorted back-to-front by view-space depth**, the dot product of (entity world position
-  minus camera position) against the camera's forward vector, not raw distance to camera,
-  so overlapping alpha-blended sprites composite correctly regardless of viewing angle.
-  Porting notes: the flip is applied by negating `uUVRect`'s offset/scale in C++ before
-  upload, not in the shader; the quad is one shared mesh reused per draw via `uMVP`, not one
-  mesh per sprite instance.
+  round-tripped through the old serializer and editable in the old inspector. Rendering is a
+  **separate transparent pass** after the opaque toon pass: one shared unit quad (pos+uv, 6
+  vertices, built once) drawn per sprite entity, alpha `discard` below 0.01. Every sprite
+  entity is collected into a list each frame and **sorted back-to-front by view-space
+  depth** (the dot product of (entity world position minus camera position) against the
+  camera's forward vector, not raw distance to camera), so overlapping alpha-blended sprites
+  composite correctly regardless of viewing angle. Porting notes: the flip is applied by
+  negating the UV rect's offset/scale in C++ before upload, not in the shader; the quad is
+  one shared mesh reused per draw via its own MVP, not one mesh per sprite instance.
+- **`toon.frag` is a fidelity upgrade**, not a required port: cel-shades with up to 8 lights
+  (directional + point with quadratic attenuation), a hard toon Blinn-Phong specular
+  (`smoothstep` over `pow(NdotH, shininess)`), a Fresnel rim term, derivative-based normal
+  mapping (TBN from `dFdx`/`dFdy`, no tangent attribute needed), and tints the non-highlight
+  cel bands when a fragment is in shadow. A near-direct GLSL→HLSL port if this fidelity is
+  ever wanted; every `glUniform` call collapses into the engine's existing `Constants`
+  cbuffer.
 - **Deletion trigger.** Once grid+sky, skeletal animation, and sprites have all shipped
-  (roadmap M3), `ToonEngineOld/` can be deleted wholesale: its CLAUDE.md and every
-  already-ported subsystem (scene, camera, input, serializer, file browser/thumbnails/themes,
-  glTF loading, cascaded shadow maps) carry zero further value once that happens. As of this
-  audit (2026-07-20), M3 has not shipped (no skeletal animation, grid+sky, or sprites in the
-  current engine yet), so the folder stays; this entry plus the four bullets above are now a
-  complete port-gotcha record, so no further ToonEngineOld audit is needed before deleting it
-  once M3 lands.
+  (roadmap M3), `ToonEngineOld/` can be deleted wholesale: nothing in it carries further
+  value at that point. As of 2026-07-20, M3 has not shipped, so the folder stays.
+
+**Shader hot-reload (roadmap item, not yet wired):** Diligent already provides this; don't
+hand-roll a file-watcher. The interface is `Diligent::IRenderStateCache`
+(`DiligentCore/Graphics/GraphicsTools/interface/RenderStateCache.h`). Create it with
+`EnableHotReload = true` (requires the default `RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT`
+hash mode), route shader/PSO creation through its `CreateShader()`/
+`CreateGraphicsPipelineState()` instead of the raw device calls, then call `cache->Reload()`
+to recompile whatever source files changed (a manual trigger, a UI button/hotkey, not
+polled every frame, per Diligent's `Tutorial26_StateCache`). `RenderStateCacheImpl.cpp`
+builds unconditionally into the already-linked `Diligent-GraphicsTools`; the only extra
+requirement is `Diligent-ArchiverInterface`, and the Archiver DLL already ships. Zero new
+deps.
 
 ## Architecture Decisions
 
@@ -1960,853 +2177,47 @@ full, with in-repo examples (`ColliderShape`'s switches, `Script`'s justified vi
 in docs/cpp-style-guide.md §7; enforced by the `tidy-cpp` skill's architecture-audit
 pass.
 
+
 ## History
 
-- **2026-07-06**: Pivoted from a from-scratch OpenGL 4.1 engine (see `main`
-  branch history) to Diligent Engine + Vulkan on the `diligent` branch.
-  Verified first light: window + Vulkan device + swap chain + clear loop,
-  running on an NVIDIA RTX 3080.
-- **2026-07-08**: Added the renderer's abstraction layer (`core/renderer.h/.cpp`); `main.cpp`
-  became Diligent-free. Added DiligentTools + Dear ImGui behind it;
-  fixed the C-language, ShowDemoWindow-link, and ImGui-ordering issues above;
-  disabled D3D11/D3D12/OpenGL to cut build time.
-- **2026-07-08**: Toon pipeline first light: banded (cel) fill +
-  inverted-hull outline on a spinning UV sphere, with live ImGui controls.
-  Added `core/math.h` (Diligent-free vectors), `core/primitives.{h,cpp}`
-  (UV-sphere generator), and `assets/shaders/` (HLSL). Extended the abstraction layer with
-  `CreateMesh` / `SetCamera` / `SetToonParams` / `DrawMesh`. Verified the render
-  via `PrintWindow` capture on the RTX 3080 (see *Toon pipeline* above for the
-  matrix/winding/outline conventions nailed down here).
-- **2026-07-09**: Toon pipeline refinements: multi-object scene (sphere + cube
-  + torus) with per-object `Material` (replaced global `SetToonParams`;
-  `DrawMesh` now takes a material, light is global via `SetLight`). Added
-  `MakeCube`/`MakeTorus` and the dual-normal outline (`Vertex::smoothNormal`)
-  so the cube's hard edges outline cleanly. Nailed the left-handed winding
-  gotcha (cube corners) above. Verified all three shapes on the RTX 3080.
-- **2026-07-09**: imgui docking (roadmap #5): see-through dock space, debug
-  panel docked left by default, driven from `main.cpp` and guarded on
-  `IMGUI_HAS_DOCK`. Required checking out the nested imgui submodule to upstream
-  ocornut/imgui's `docking` branch: the DiligentGraphics fork's docking branch
-  is ancient/incompatible. That checkout was manual and uncommitted (reverted by
-  any `git submodule update --recursive`): superseded 2026-07-12 by a dedicated
-  `external/imgui` submodule; see "Docking" above for the current mechanism.
-- **2026-07-09**: DiligentFX (roadmap #6, in progress): added the submodule
-  (API256018) + build wiring, and stood up the HDR pipeline: offscreen RGBA16F
-  scene target resolved to the back buffer by an exposure + ACES tone-map pass
-  (`Renderer::EndScene`, `tonemap.hlsl`). Foundation for DiligentFX bloom/SSAO
-  next. See "DiligentFX / HDR post-processing" above.
-- **2026-07-10**: Tooling: migrated the IDE from VS Code to **CLion**. Removed
-  `.vscode/` (tasks/launch/settings/c_cpp_properties) and added
-  **`docs/clion-setup.md`** (Visual Studio toolchain + CMake presets + debug). The
-  CLion VS toolchain sources the VS Developer environment automatically, so
-  `scripts/vsenv.ps1` is now only for command-line / CI builds. Trimmed `CLAUDE.md`
-  to a lean, forward-only roadmap: completed items live here in the archive.
-  (Later split into per-platform `docs/clion-setup-{windows,linux,macos}.md`.)
-- **2026-07-10**: **Bloom** (roadmap #1): wired DiligentFX's `Bloom` via
-  `PostFXContext` onto the HDR target. `Impl::RunBloom` in `EndScene` prepares +
-  executes PostFXContext (fed scene depth as curr/prev, a zero motion-vector target,
-  a zeroed camera, scaffolding it needs to reach `IsPSOsReady()` but Bloom never
-  reads) then Bloom over `hdrColor`; the tone-map then resolves Bloom's output, which
-  already holds scene+glow (so `tonemap.hlsl` is unchanged). `PostParams` + UI gained
-  bloom controls; default threshold is 0.6 (the LDR toon fill never exceeds ~0.9).
-  Also `DILIGENT_NO_RADIENT ON` (broke the full `cmake --build`) and a new include
-  dir for DiligentFX's C++-side `*Structures.fxh`. Built clean (clang-cl) and ran
-  with zero Diligent validation errors. See "Bloom" above.
-- **2026-07-10**: Bloom bugfixes + cleanup. (1) `g_HDRColor` MUTABLE→**DYNAMIC**:
-  the per-frame scene↔bloom re-`Set` was tripping `VerifyResourceBinding`; killed the
-  cache + `BindPostInput`. (2) **ImGui shutdown order**: `ImGui_ImplGlfw_Shutdown()`
-  before context destroy, else `abort()` on window close ("Forgot to shutdown Platform
-  backend?"); also built the ImGui PSO with depth = `TEX_FORMAT_UNKNOWN` (kills a
-  per-frame DSV-mismatch warning) and `WaitForIdle()` before teardown. Verified via a
-  close test (exit 0). (3) Added section dividers to `renderer.cpp`, plus
-  **`docs/style-guide.md`** (renamed `docs/cpp-style-guide.md` on 2026-07-11) and a
-  **`.claude/skills/tidy-cpp`** skill for future cleanups. See the Dear ImGui + Bloom
-  "Gotchas" above.
-- **2026-07-10**: **SSAO** (roadmap #1): DiligentFX `ScreenSpaceAmbientOcclusion` via
-  the shared `PostFXContext`, which now gets *real* inputs (unlike Bloom): a
-  world-space **normal G-buffer** (scene pass is now MRT; toon shaders write
-  `PSOutput` color+normal) and real **`CameraAttribs`** (`FillCameraAttribs`, handness
-  from the view determinant). Motion stays zero, so SSAO temporal accumulation is off
-  by default (would ghost the spinning scene). AO (visibility) composited in the
-  tone-map as `hdr *= lerp(1, ao*ao, strength)`; `g_AO` dynamic, 1x1-white default when
-  off. Added a **ground plane** (`MakePlane`) so contact shadows are visible; verified
-  the raw AO buffer (torus hole dark, bg white → correct orientation), ran clean, close
-  exits 0. `RunBloom` generalized to `RunPostFX`. See "SSAO" above.
-- **2026-07-10**: **Motion vectors** (unblocks SSAO temporal + DoF): the scene now
-  writes a real NDC velocity buffer (3rd MRT target) instead of a zero texture. Toon
-  shaders difference `currClip`/`prevClip`; `DrawMesh` gained a `prevTransform` and
-  `SetCamera` snapshots `prevViewProj`. SSAO temporal accumulation now **on by
-  default** (denoises without ghosting). Convention: `currNDC - prevNDC`, raw (the lib
-  applies the NDC->UV (0.5,-0.5) scale). Verified the motion buffer directly (static =
-  black, spinning = rotational red/green). See "Motion vectors" above.
-- **2026-07-10**: **Depth of field** (roadmap #1): DiligentFX `DepthOfField` via the
-  shared context, using the new motion vectors for temporal CoC smoothing. `RunPostFX`
-  became a color chain (scene → DoF → Bloom, returns `colorOut`); focus/aperture set
-  in `CameraAttribs` from `PostParams`. Off by default (strong look); tuned defaults
-  (focus 10.5, f/6). Verified: clean run, graceful close, visible depth blur (cube in
-  focus, bokeh elsewhere). See "Depth of field" above.
-- **2026-07-10**: **TAA** (roadmap #1): DiligentFX `TemporalAntiAliasing`, first in the
-  color chain. `SetCamera` jitters the projection (`GetJitteredProjMatrix`) when TAA is
-  on and records `f2Jitter`; `main.cpp` now sets post params before `SetCamera`. Off by
-  default (softens toon edges). Verified: clean run, graceful close, spinning objects
-  anti-alias without ghosting (motion+jitter correct). See "TAA" above.
-- **2026-07-10**: **SSR** (roadmap #1, the last DiligentFX effect): DiligentFX
-  `ScreenSpaceReflection`. Roughness packed into the normal buffer's `.w`
-  (`Material::roughness`, `RoughnessChannel = 3`); reflection radiance composited in
-  the tone-map (`g_SSR`, simplified, no PBR BRDF/env-map). `RunPostFX` now returns
-  `(colorOut, aoOut, ssrOut)`. Off by default; objects made lightly glossy (0.15) so
-  it's visible when enabled (a flat ground reflects the sky → misses). Verified via
-  the radiance buffer; clean run, graceful close. See "SSR" above. **All six DiligentFX
-  post effects (Bloom, SSAO, DoF, motion vectors, TAA, SSR) are now in.**
-- **2026-07-10**: **Non-uniform scale** (roadmap #1, toon pipeline extensions): added an
-  inverse-transpose **normal matrix** (`g_NormalMatrix`) so the fill shading and the
-  normal/roughness G-buffer stay correct under non-uniform `Transform::scale`, and reworked
-  the inverted-hull outline to extrude a uniform **world-space** width (reusing the WVP path
-  via the 3×3 transpose of the normal matrix = world⁻¹). One added cbuffer matrix
-  (256→320 B); both changes reduce algebraically to the old behavior at scale = 1, so the
-  existing scene is unchanged. Demo: the sphere is now a non-uniformly-scaled spinning
-  **ellipsoid** (`Object` gained a per-object `scale`). Built clean (clang-cl), ran with
-  zero validation errors, graceful close; verified the ellipsoid shading + uniform outline
-  via `PrintWindow`. See "Non-uniform scale" above.
-- **2026-07-10**: **Per-object outline tuning** (roadmap #1): stopped `main.cpp` stomping
-  each object's outline with a shared `style`: every `Object` now carries its own outline
-  color + width (sphere thin dark-red, cube bold near-black, torus dark-bronze), the draw
-  loop overlays only global band/ambient/gloss onto a per-draw material copy, and a global
-  `outlineScale` scales all widths together. UI reworked into a per-object "Objects" section
-  + a global "Outline width ×" multiplier (`Object` gained a `name`). App-only: the
-  Material/shader already carried per-object outlines. Built clean, verified three distinct
-  outlines via `PrintWindow`. See "Per-object outline tuning" above.
-- **2026-07-10**: **Roadmap redesign + ToonEngineOld carry-over.** With the renderer core
-  done, pivoted the roadmap from "more rendering" to the **engine/editor layer** (phases:
-  real assets → scene graph → editor UI → environment → animation/2D; instancing deferred),
-  porting `ToonEngineOld`'s systems onto the Vulkan abstraction layer. Surveyed the old engine (untracked
-  reference folder) and copied its portable assets (fonts, 4 test models, icon) into
-  `assets/`: models via **Git LFS** (`.gitattributes` tracks `assets/models/**`). Model
-  loading will use **DiligentTools' glTF loader** (glTF/GLB only; the old cgltf/ufbx loader
-  is the FBX reference). Next up: Phase A, textured materials + load/cel-shade a real
-  model. See "ToonEngineOld: carry-over reference" above. Also **codified the
-  build-on-Diligent principle** in CLAUDE.md (use Diligent's own implementations, loaders,
-  FX, ImGui; the abstraction layer only tames boilerplate + keeps the app/public API
-  backend-agnostic, never 1:1 abstraction) and generalized the abstraction-layer rule:
-  Diligent lives in the engine's
-  implementation TUs, not just `renderer.cpp`: only the app layer + public headers stay
-  Diligent-free.
-- **2026-07-10**: **glTF model loading** (Phase A / "real assets"): load + cel-shade real
-  models via DiligentTools' `GLTF::Model` (Diligent-first, no hand-rolled loader, no PBR
-  renderer). New abstraction-layer `ModelHandle` / `LoadModel` / `DrawModel`; `model_fill.hlsl` reuses the
-  toon CB + `CelShade` helper; `helmet.glb` renders textured + cel-shaded in the HDR/post
-  pipeline. Linked `Diligent-AssetLoader` + `Diligent-TextureLoader`; baked `TOON_MODELS_DIR`.
-  Four loader gotchas cost cycles (VertBufferBindFlags = BIND_NONE default; textures are
-  Texture2DArray; the buffer/texture getters need device+context; a dimension-mismatch
-  assertion HANGS and logs to buffered cout). See "glTF model loading" above. Verified on the
-  RTX 3080 via `PrintWindow` (clean run, graceful exit).
-- **2026-07-10**: **Model outline**: models get the inverted-hull silhouette too, via
-  `model_outline.hlsl` (extrude along the shading normal, no smooth normal) + a cull-FRONT
-  outline PSO; `DrawModel` draws outline→fill per primitive. The helmet now matches the toon
-  look. See "glTF model loading".
-- **2026-07-10**: **Scene graph** (Phase B): `core/scene.{h,cpp}`: an entity tree with
-  hierarchy-composed world matrices; the render loop walks the scene instead of a hardcoded
-  array. Design call: `scene.cpp` is a Diligent-using TU (composition via `float4x4`, no
-  reinvented 4x4 math) and `math.h` gained a plain `Mat4` (abstraction-layer vocabulary) with new `Mat4`
-  `DrawMesh`/`DrawModel` overloads; the `Transform` overloads delegate. Motion vectors now
-  come from the scene's double-buffered world matrices (no prev-angle bookkeeping). Demo: a
-  satellite parented to the cube orbits it. Editor-triggered mutations (reparent / duplicate
-  / decompose / selection) deferred to the editor step. Built clean, verified via
-  `PrintWindow`. See "Scene graph" above.
-- **2026-07-10**: **Editor camera + input** (Phase B, item 4): an orbit-around-pivot camera
-  (extends the LH turntable: `SetCamera` prepends `Translation(-pivot)`; did NOT port glm's
-  RH lookAt) + `core/camera.{h,cpp}` controls (orbit/pan/zoom/fly/focus; basis from the same
-  Diligent rotations as the view) + `core/input.{h,cpp}` (GLFW polling, scroll callback
-  chained by ImGui, capture gate from `io.WantCapture`). Right-drag orbit / mid-drag pan /
-  scroll zoom / WASD fly / F focus, suppressed over the UI. Action-map/rebinding deferred.
-  Built clean; static render verified via `PrintWindow` (drag feel is interactive-only). See
-  "Editor camera + input" above.
-- **2026-07-11**: **Gizmo snap + hotkeys** (roadmap A.1 follow-up, closing out the item that
-  shipped gizmos + world-preserving reparent): **W/E/R** switch move/rotate/scale, **X** toggles
-  local/world (edge-triggered `ImGui::IsKeyPressed`, gated on not-typing / not-flying), and
-  **snap** (checkbox or held Ctrl) feeds ImGuizmo's per-op `snap` param with editable
-  translate/rotate/scale step sizes. Resolved the "WASD is taken by the camera fly" deferral
-  by noticing the fly only runs while right-mouse is held. `main.cpp`-only (no
-  abstraction-layer/renderer/shader/input-layer change). See "Gizmo snap + hotkeys" above.
-- **2026-07-11**: **Dogfooding bugfixes** found immediately after shipping the above (all
-  pre-existing, from the original gizmo commit, not the snap/hotkey change itself). Also
-  discovered and documented, the hard way, that this dev environment has **no live input
-  desktop**: `SendInput` reports success and focus APIs agree, but nothing actually receives
-  synthetic keyboard/mouse, proven decisively with an isolated WinForms textbox test.
-  Interactive UI/gizmo verification is therefore not possible from Claude here; every fix
-  below was code-traced to an exact root cause and reported back by the user manually.
-  Written up for reuse in `.claude/skills/verify/SKILL.md`.
-  - **Round 1** (user confirmed hotkeys/snap work; found two more issues while testing):
-    gizmo rotate on a spinning entity silently did nothing (`if (spin)`-gated the per-frame
-    spin write, which had been stomping `rotationEuler` unconditionally); a faint trail
-    followed move-dragged objects (new `PostParams::gizmoManipulating` forces SSAO
-    `ResetAccumulation` during a drag).
-  - **Round 2** (user reported round 1 incomplete): the trail persisted for *rotate* drags
-    too, and re-enabling Spin after a manual edit snapped back to the old trajectory instead
-    of continuing from the new orientation. Real fixes: made spin **incremental**
-    (`rotationEuler += axis*rate*dt`, deleting the shared `spinAngle` clock entirely) so a
-    paused-then-gizmo-edited orientation is the new baseline it resumes from; extended the
-    same `gizmoManipulating` reset to **TAA's** `ResetAccumulation` too (previously never
-    set, always accumulating), on the reasoning that TAA hits the exact same no-real-
-    depth-history gap SSAO does, just for full color instead of AO alone. Not yet
-    re-confirmed by the user. Also flagged (not fixed, not a regression): the Helmet's
-    outline has visible gaps at hard edges: an already-documented limitation
-    (`model_outline.hlsl`'s own header comment) of extruding along the plain shading normal
-    for glTF models, which carry no smooth normal. See "Gizmo snap + hotkeys" above for the
-    full root-cause writeups.
-  - **Round 3** (user: round 2 still very present, "pretty much any interaction", including
-    dragging the **Outline-width slider**, no gizmo involved at all, shows a fading ghost of
-    the old width; rotate still keeps the silhouette visibly trailing). The outline-width
-    slider report was the key clue: it **proves** the trigger can't be gizmo-specific, since
-    `ImGuizmo::IsUsing()` is false for a plain Inspector drag: `gizmoManipulating` could
-    never have caught that case regardless of whether SSAO/TAA's reset was wired correctly.
-    Confirmed the exact mechanism by reading the outline shaders directly: both
-    `toon_outline.hlsl` and `model_outline.hlsl` build `CurrClip`/`PrevClip` from the *same*
-    (current-frame) extruded position, varying only the WorldViewProj, so if only outline
-    width changes (camera + object otherwise static), `g_WorldViewProj == g_PrevWorldViewProj`
-    and the reported motion is exactly zero even though the rendered shell visibly grew or
-    shrank. Renamed `PostParams::gizmoManipulating` → **`activeInteraction`**, now
-    `ImGuizmo::IsUsing() || ImGui::IsAnyItemActive()`: the latter is a real, general ImGui
-    query ("is any item active") that's true for ANY widget being dragged/typed/edited
-    anywhere in the UI, not just the gizmo. Key reasoning for *why* this alone should suffice
-    without also patching the outline shaders' motion-vector math: `ResetAccumulation` means
-    "ignore history and motion vectors entirely this frame", so a wrong per-frame motion
-    vector is irrelevant precisely during the frames it's wrong (the interactive ones), since
-    reprojection isn't happening on those frames at all; the *shader* fix was scoped out as
-    unnecessary rather than skipped for expediency. Also found and fixed a real gap: **SSR has
-    no `ResetAccumulation` field at all** (unlike SSAO/TAA) and its own
-    `TemporalRadianceStabilityFactor` defaults to `1.0`: the most ghosting-prone end of its
-    documented range, per SSR's own doc comment ("higher values ... more likely to exhibit
-    ghosting artefacts"). Since SSR can't be reset for an interaction's duration, tuned it down
-    to `0.7f` defensively (SSR is off by default; unknown whether the user had toggled it on,
-    but cheap and safe to harden regardless). Not yet re-confirmed. If the trail *still*
-    persists after this, the next diagnostic is decisive: disable SSAO + TAA + SSR entirely and
-    check whether rotating still trails: if it does, the cause isn't a temporal post-effect at
-    all (candidates: the already-known outline-gap issue reading as a "trail" on the geometrically
-    complex Helmet, or something in the base render neither of us has considered yet), and the
-    real double-buffered depth history (deferred twice now) should be built rather than patched
-    around again.
-  - **Round 4: the actual persistent root cause** (user: ghost is present from **startup**,
-    before any interaction at all, and doesn't clear on its own; toggling **"AO temporal
-    (motion-vector denoise)"** off makes it vanish, back on brings it right back; same for the
-    SSAO master toggle, "since denoise is a sub-feature of that"). This single report reframed
-    everything: it **can't** be interaction-driven (nothing is interacting at startup), so
-    every fix through Round 3 (`activeInteraction`-gated resets) was necessarily addressing a
-    different, smaller problem, not this one. The one thing always running from frame 1 by
-    default is **Spin**. Re-examined the Round-3-identified outline approximation with that in
-    mind: `toon_outline.hlsl`/`model_outline.hlsl` computed `PrevClip` by extruding along
-    *this frame's* rotation-derived normal (`g_NormalMatrix`) and only varying the
-    WorldViewProj between curr/prev: exact for pure translation, but the extrude direction
-    is itself rotation-dependent, so under continuous rotation this *always* slightly
-    under-reports motion, every single frame, forever (not a one-off transient, a permanent
-    steady-state error for as long as anything is spinning, which by default is always). That
-    fully explains every symptom: present at startup (spin starts immediately), never
-    self-clears (spin never stops), toggling `ssaoTemporal` off/on toggles it directly
-    (reset=1 makes the wrong motion vector irrelevant; reset=0 makes temporal blending,
-    and thus the error, resume immediately, not just once).
-    **Real fix, not another reset/mask**: added `g_PrevNormalMatrix` to the shared cbuffer
-    (grew 320→384 B): the inverse-transpose of the *previous* frame's world matrix,
-    computed in `DrawMesh`/`DrawModel` from the `prevWorld`/`objPrevWorld` matrices those
-    functions already receive (no abstraction-layer signature change needed: the data was already
-    threaded through, just not used for this). Both outline vertex shaders now redo the
-    extrude for `PrevClip` using `g_PrevNormalMatrix` instead of reusing `inflated`, so a
-    rotating shell's motion vector is now computed the same principled way as its position:
-    no more approximation. Verified: clean C++ build, and (the best check available without
-    live input here) launched the exe and confirmed a clean console log with no Diligent
-    validation errors: a cbuffer field mismatch fails loudly and immediately, so its absence
-    here means the C++/HLSL layouts genuinely agree, plus a normal-looking render (all five
-    objects, outlines, UI, steady 144 FPS). Not yet re-confirmed visually by the user.
-  - **Round 5: the real fix (finally built, not patched around)**: user confirmed the ghost
-    *still* appeared at startup even after Round 4's mathematically-correct outline fix. Two
-    targeted fixes (interaction resets, outline rotation math) both individually did what they
-    were supposed to, and neither fully solved it: the pattern pointed at the architectural
-    gap flagged (and deferred) since Round 1: `PostFXContext` had **never** had a real
-    previous-frame depth buffer, only the current frame reused as a stand-in
-    (`pPrevDepthBufferSRV = depthSRV`). That defeats depth-based disocclusion entirely for
-    every effect (SSAO, TAA, SSR alike): the exact mechanism that's supposed to catch a
-    moving silhouette edge and distrust stale history there, which no amount of motion-vector
-    accuracy can substitute for (a perfectly accurate motion vector still doesn't help if
-    nothing can independently confirm "does the depth here actually still match what I
-    remember"). Built the real thing: a new `Impl::prevSceneDepth` texture (D32_FLOAT, **same
-    full BindFlags as `sceneDepth`**: `BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE`, even
-    though it's never bound as a DSV; dropping DEPTH_STENCIL trips Vulkan validation errors
-    `VUID-VkImageViewCreateInfo-image-01762` / `-subresourceRange-09594` on the SRV's
-    depth→R32_FLOAT reinterpretation: the two textures need matching creation flags for
-    Diligent's Vulkan backend to set that up the same way for both), recreated alongside the
-    other offscreen targets (`CreateOffscreenTargets`, so resize is handled for free).
-    `EndScene` now `CopyTexture`s `sceneDepth` → `prevSceneDepth` at the very end, once
-    `RunPostFX` no longer needs the *old* `prevSceneDepth` (that call already used it
-    correctly as "previous" for this frame), the copy makes it ready to be genuinely
-    "previous" for *next* frame. `RunPostFX` then feeds `prevSceneDepth`'s SRV as
-    `pfx.pPrevDepthBufferSRV` instead of reusing `depthSRV`. Undefined content for exactly one
-    frame on startup/resize (same class of harmless blip as `prevViewProj` starting as
-    identity). Verified: clean build; first attempt (BindFlags = SHADER_RESOURCE only) hit the
-    two VUIDs above on launch, real validation errors, not benign, fixed by matching
-    `sceneDepth`'s BindFlags exactly; second attempt ran clean (no errors/warnings beyond
-    DiligentFX's own pre-existing benign ones), steady 144 FPS, normal-looking render, clean
-    exit. Not yet re-confirmed by the user: if this *still* doesn't fully resolve it, the
-    remaining candidates are the already-documented Helmet outline-gap issue reading as a
-    "trail" (unrelated to any of this, a genuinely different bug), or something in
-    DiligentFX's own SSAO/TAA implementation neither of us has considered yet.
-  - **Round 6: actually reading DiligentFX's algorithm (the real diagnosis)**: user
-    confirmed Round 5 didn't fix it either: the ghost specifically follows Spin, never
-    self-clears. Five rounds of increasingly-informed guessing from the *outside*
-    (attribute struct field names, doc comments) had each fixed something real but never
-    the actual cause, so this round stopped guessing and read the actual shader source:
-    `external/DiligentFX/Shaders/PostProcess/ScreenSpaceAmbientOcclusion/private/
-    SSAO_ComputeTemporalAccumulation.fx` + `.../public/
-    ScreenSpaceAmbientOcclusionStructures.fxh`. Two findings:
-    1. `ScreenSpaceAmbientOcclusionAttribs::TemporalStabilityFactor`: the one exposed
-       "tune the temporal aggressiveness" field, matching the README's documented API,
-       is declared in the struct but **never read by any SSAO shader**. Dead parameter;
-       not a lever we can use (confirmed by `grep -rl TemporalStabilityFactor` across
-       every `.fx` file: only the struct declaration matches).
-    2. The real algorithm (`ComputeTemporalAccumulationPS`) has a *correct*, real
-       depth-based disocclusion check (`IsCameraZSimilar`, which Round 5's real
-       `prevSceneDepth` now feeds properly) plus a **separate motion-magnitude-based
-       variance safety net**: it computes `MotionFactor` from the current pixel's motion
-       vector length, and scales down history trust when motion is large. All the actual
-       tuning constants (`SSAO_TEMPORAL_MIN/MAX_VARIANCE_GAMMA` = 0.5/2.5,
-       `SSAO_TEMPORAL_MOTION_VECTOR_DIFF_FACTOR` = 128, `SSAO_MAX_HISTORY_LENGTH` = 16)
-       are `#define`s compiled into the shader in `external/DiligentFX`, not exposed via
-       `ScreenSpaceAmbientOcclusionAttribs` at all, so unreachable from our side without
-       patching a vendored submodule (off-limits per the style guide).
-    **The actual root cause**: a rotating silhouette is a *view-dependent contour*: which
-    physical surface points satisfy "this is the silhouette" changes every frame as the
-    object turns: so no per-vertex motion vector, however correctly computed (Round 4's
-    fix included), can fully represent its true screen-space motion; there's always a
-    small residual error. At Spin's default rate (0.6 rad/sec, ~144 fps → a fraction of a
-    pixel of motion per frame) that residual error is small enough to slip under the
-    128-scaled motion threshold, so `MotionFactor` stays near 1.0 and the variance safety
-    net barely engages: meaning the system heavily trusts and accumulates the (slightly,
-    systematically wrong) reprojected silhouette AO across up to 16 frames of history,
-    compounding a small per-frame error into a visible, persistent ghost that never
-    resolves because the same error recurs every single frame for as long as anything is
-    continuously rotating (which, with Spin on by default, is always).
-    **Fix**: since the shader-internal thresholds are unreachable, and `ResetAccumulation`
-    is the one sanctioned lever DiligentFX exposes for "don't trust history this frame,"
-    renamed `PostParams::activeInteraction` → **`suppressTemporalHistory`** and folded in
-    a third trigger: `gizmoActive || ImGui::IsAnyItemActive() || spin`. While Spin is on,
-    SSAO/TAA never accumulate at all: every frame is a fresh, non-temporal computation
-    (slightly noisier AO, no temporal denoise), completely sidestepping the question of
-    whether the motion-based safety net engages correctly for slow rotation. The instant
-    Spin (and any interaction) stops, normal smooth accumulation resumes on an already-
-    static scene, converging cleanly within a few frames: matching the already-verified
-    "SSAO doesn't ghost on a static/orbiting-camera scene" behavior. Verified: clean
-    build, clean console log (no errors), steady ~144 FPS, AO contact shadows still
-    visible and correctly composited under all objects, clean exit. Not yet re-confirmed
-    by the user.
-- **2026-07-11**: **Tooling correction: `scripts/vsenv.ps1` should not exist.** A session
-  building a `tidy-md` doc-maintenance skill + LSP setup found CLAUDE.md, this file, and the
-  `verify` skill all describing `scripts/vsenv.ps1` as if it were present, confirmed it
-  wasn't (twice), and wrongly concluded the file was the bug, then recreated it. It wasn't:
-  the user had deliberately deleted it as vestigial from the pre-CLion VS Code
-  workflow (see the 2026-07-10 CLion-migration entry above) and explicitly did not want it
-  recreated. Corrected by deleting the file again and fixing every doc that referenced it
-  (CLAUDE.md, this file's "Build gotchas", the `verify` and `tidy-md` skills, `.clangd`,
-  `docs/clion-setup-windows.md`, `README.md`) to describe the VS-environment import as an
-  inline snippet or the stock "Developer PowerShell for VS 2022" shortcut instead of a repo
-  script. General lesson (folded into the `tidy-md` skill): a doc referencing a missing file
-  is stale in one of *two* directions: the file may need restoring, or the doc may need to
-  stop claiming it exists, check which before acting, don't assume the first.
-- **2026-07-11**: **Light entity component** (the light piece of roadmap A.1's
-  "light/sprite/animation entity components"): promoted the global `lightDir` + Debug-panel
-  slider to a `Sun` scene entity, aimed by rotation via a new `MakeLightTransform`/
-  `GetActiveLight` pair in `scene.cpp`, with editable color/intensity (`LightComponent`)
-  premultiplied into a new `g_LightColor` cbuffer field (384→400 B) that the two fill
-  shaders multiply in. Reproduces the old default direction and look exactly; single-light
-  scope (first entity found) by design. Sprite/animation entity components remain, deferred
-  to roadmap phase C. Verified via build + screenshot: a regression check, a blue-tinted
-  spot-check proving the shader path actually runs, and a clean console log. See "Light
-  entity component" above.
-- **2026-07-11**: **Roadmap audit: ToonEngineOld's own CLAUDE.md TODO lists.** Diffed
-  `ToonEngineOld/CLAUDE.md`'s "Engine Roadmap TODO" / "ImGui TODO" lists (the old engine's
-  own unshipped wishlist: distinct from the proven systems it actually built, which the
-  carry-over survey above already covers) against the current roadmap. Folded in four
-  concrete, verified gaps as new CLAUDE.md roadmap items: an explicit **input system**
-  bullet (already noted as deferred here, but never promoted to CLAUDE.md's forward
-  roadmap), an **asset browser panel** bullet (`ui/file_browser` + the previously-unlisted
-  `ui/thumbnail_cache`), a **fixed-timestep** game-loop bullet (`main.cpp` currently runs a
-  plain variable `dt`), and a **shader hot-reload** bullet wired explicitly to Diligent's
-  own `IRenderStateCache` rather than a hand-rolled file-watcher. Skipped the speculative
-  half of the old lists (audio, physics, particles, undo/redo, material editor, drag-drop
-  material/model workflows, render-stats/profiling panel, status bar, shortcuts overlay,
-  animation blending, morph targets): no code or design work backs any of them yet,
-  unlike the four folded in. See "Diligent overlap check" above for the per-item
-  guiding-principle verification (checked against the actual vendored source, since
-  DiligentSamples, where Diligent's own camera/input helpers actually live, isn't a
-  submodule here).
-- **2026-07-12**: **Scene serialization** (roadmap A.2, now shipped, see "Scene
-  serialization" above for the full writeup). `core/serializer.{h,cpp}`: `SaveScene`/
-  `LoadScene` to a line-based text `.scene` file covering the camera and every entity's
-  hierarchy, transform, material, and light. Required extending `Entity` with
-  `PrimitiveDesc primitive` + `std::string modelPath` so procedural meshes (which have no
-  source file, unlike a loaded model) can regenerate on load instead of just carrying a
-  live GPU handle that a fresh process can't reconstruct. Deliberately scoped to camera +
-  entities, not `PostParams`/style/theme/Spin, which are editor tuning, not scene content.
-  Verified with a temporary, reverted self-test (no live input here to click the actual
-  buttons, see the `verify` skill) that round-tripped the scripted default scene end to
-  end: 8/8 entities, correct hierarchy, valid regenerated mesh/model handles.
-- **2026-07-12**: **Window icon (taskbar fix)**: see "Window icon: the taskbar needs an
-  embedded resource" above for the full writeup. The user added `SetWindowIcon`
-  (`glfwSetWindowIcon` via `WM_SETICON`) separately; it fixed the title bar but not the
-  taskbar/Alt-Tab/shell, which GLFW's Win32 backend drives from a `GLFW_ICON`-named
-  resource embedded in the .exe, not runtime state. Added `src/icon.rc.in` +
-  `assets/icon.ico` (hand-built: a 22-byte ICO header prepended to the existing PNG's
-  bytes) + `CMakeLists.txt` wiring (`enable_language(RC)`, `configure_file`,
-  `target_sources`, all `WIN32`-guarded). Verified by screenshot: captured the taskbar
-  itself (`Shell_TrayWnd`, via ordinary `CopyFromScreen` since it isn't a Vulkan swap-chain
-  surface) and confirmed the real icon renders there now.
-- **2026-07-12**: **Durable docking fix** (closes the item CLAUDE.md's roadmap listed as
-  "fork DiligentTools, pin imgui to a `docking` commit", see "Docking" above for the
-  mechanism actually shipped, which is lighter than that). Added ToonEngine's own
-  `external/imgui` submodule (`branch = docking`, pinned to the same upstream ocornut/imgui
-  commit, `a23e9fb1b`, 1.92.9-WIP, the manual checkout used) and pointed
-  `DILIGENT_DEAR_IMGUI_PATH` at it in `CMakeLists.txt`, before
-  `add_subdirectory(external/DiligentTools)`. DiligentTools itself is untouched, not
-  forked: its `ThirdParty/CMakeLists.txt` only defaults that path `if (NOT
-  DILIGENT_DEAR_IMGUI_PATH)`, so the override wins and DiligentTools builds from its
-  pristine upstream state (its own vendored `ThirdParty/imgui` is initialized but unused).
-  Chosen over forking DiligentTools to avoid rebasing a fork every time DiligentTools is
-  bumped. Verified end-to-end: a fresh `cmake --preset windows-debug` +
-  `cmake --build --preset windows-debug` built clean (680 steps, the first CLI build under
-  this preset dir), a launch + `PrintWindow` screenshot showed the real DockBuilder split
-  layout (Scene Hierarchy left, Inspector + Debug right, scene visible through the
-  pass-through center, not floating windows), and re-running `git submodule update --init
-  --recursive` afterward left `external/imgui` pinned and `external/DiligentTools` clean:
-  the exact command that used to silently revert docking now leaves it intact.
-- **2026-07-12**: **Input system** (roadmap A.1, now shipped, see "Input system" above
-  for the full writeup). Ported `ToonEngineOld/src/core/input/` into `core/input/`: action
-  maps (FNV-1a hashed, keyboard/mouse/gamepad bindings, an axis type merging keyboard +
-  gamepad into one named value), an input-context stack, and JSON-bound rebinding
-  (`assets/input.json`, via the already-vendored `Diligent-JSON`, had to be linked
-  explicitly, since `Diligent-AssetLoader` links it `PRIVATE`). Replaces the minimal
-  polling-only `core/input.{h,cpp}`. Checked against the guiding principle first (nothing
-  in DiligentCore/Tools to build on; DiligentSamples' `InputController` isn't vendored:
-  already established in "Diligent overlap check"). `main.cpp`'s camera controls now split
-  cleanly between raw mouse-drag polling (orbit/pan/zoom, unchanged) and the new action map
-  (fly axes + focus, gated on `WantCaptureKeyboard` since the action queries bypass the
-  capture gate by design); gamepad right-stick orbit is a genuinely new capability. Found
-  and fixed a real build-system gotcha along the way: `cmake --build`'s implicit reconfigure
-  can silently under-apply a multi-call `CMakeLists.txt` edit: an explicit
-  `cmake --preset` resolved it (see "Build gotchas" above). Verified: clean build (663/663
-  steps), a generated `assets/input.json` matching the exact expected binding schema, a
-  clean launch/render/graceful-close via screenshot, and honestly-reported limits (no live
-  input desktop here to drive interactively, no confirmed physical gamepad to test the new
-  stick bindings against).
-- **2026-07-12**: **Round 7: the actual camera-motion root cause (SSAO/TAA/SSR ghosting on
-  zoom/orbit/pan, not just Spin).** A fresh session, asked to understand the renderer in depth
-  and fix SSAO "the Diligent way," found a bug none of Rounds 1-6 had touched: `RunPostFX` fed
-  `PostFXContext::RenderAttributes` the *same* `postCamera` instance as both `pCurrCamera` and
-  `pPrevCamera`: `Impl` had no `prevPostCamera` at all. Traced the exact mechanism by reading
-  DiligentFX's actual shaders (Round 6's own lesson: read the algorithm, don't guess from
-  struct field names): `ComputeReprojectedDepth.fx` unprojects the current depth through
-  `g_CurrCamera.mViewProjInv` then reprojects through `g_PrevCamera.mViewProj`, with curr==prev
-  this round-trips through the identical matrix and is a no-op *regardless of whether the
-  camera actually moved*. SSAO's `SSAO_ComputeTemporalAccumulation.fx` uses exactly that value
-  as `CurrCamZ` and compares it to the real previous frame's depth (correctly motion-vector-
-  compensated) via `IsCameraZSimilar`, a relative-depth-ratio disocclusion test. During genuine
-  camera motion (zoom/orbit/pan/fly) a static surface's camera-space depth legitimately changes
-  frame-to-frame *because the camera moved*: the reprojection step exists specifically to
-  cancel that out before comparing. With it disabled, the test compares depths that differ for
-  a benign reason, and for slow/moderate camera motion the ratio often still passes the
-  disocclusion threshold: so stale AO blends in across a frame where the framing genuinely
-  changed, exactly the "screen burn" reported on zoom. TAA and SSR pull the same camera CB via
-  `pPostFXContext->GetCameraAttribsCB()`, so this silently degraded all three temporal effects,
-  not just SSAO: camera motion was simply never in any of the six prior rounds' hypothesis
-  space (all of them looked at object/Spin motion vectors and `prevSceneDepth`, never at the
-  camera-attribs plumbing itself). Also re-traced `DuplicateEntity` (scene.cpp) specifically to
-  rule out a bad `prevWorldMatrix` init on a freshly duplicated entity: it's fine, the struct
-  copy carries a correct, static `prevWorldMatrix`/`worldMatrix` pair; "duplicate + move"
-  showing the same ghosting is almost certainly this same camera bug (nobody repositions a
-  duplicate without also orbiting/zooming to see it), not a second one.
-  **Fix**: added `Impl::prevPostCamera` (seeded to `postCamera` on frame 1, snapshotted right
-  after `postFX->Execute()` each frame): the same "copy current into history after this
-  frame's read of it" idiom the code already used for `prevSceneDepth` (`CopyTexture` at the
-  end of `EndScene`, Round 5) and `prevViewProj` (snapshotted in `SetCamera`), just never
-  extended to the camera-attribs struct. Matches Diligent's own reference pattern too
-  (`DiligentSamples/Tutorial27_PostProcessing` keeps a real double-buffered `CameraAttribs[2]`,
-  never aliases curr/prev). Left the `spin`-forced `suppressTemporalHistory` reset untouched:
-  that mitigates the separate, genuinely inherent Round 6 finding (rotating silhouettes are
-  view-dependent contours; DiligentFX's motion-safety-net constants are compiled-in `#define`s,
-  unreachable from the app), which this fix doesn't change.
-  **Verified**: clean `cmake --build --preset windows-debug` (0 warnings/errors touching
-  `renderer.cpp`; all warnings in the log are pre-existing, from vendored DiligentFX/
-  DiligentCore source). Hit one build-environment snag along the way worth folding into "Build
-  gotchas": a plain PowerShell tool session has no VS Developer environment loaded (unlike
-  CLion's VS toolchain, which does this automatically): a build attempted before importing it
-  failed on `'lib.exe' is not recognized...` (not a code error). Fixed by locating the VS 2022
-  install via `vswhere.exe` and dot-sourcing `Common7\Tools\Launch-VsDevShell.ps1 -Arch amd64
-  -HostArch amd64` **in the same shell invocation** as the build command (shell state/env vars
-  don't persist between separate tool calls here, so the import and the build must be chained
-  in one command). After that, a clean build: 153/153 link steps, `ToonEngine.exe` produced.
-  **Not yet visually re-confirmed by the user**: same honestly-reported limit as every prior
-  round (no live input desktop here, see the `verify` skill).
-- **2026-07-13**: **Asset browser panel shipped (roadmap A.1: the last engine/editor-layer
-  carry-over item).** Full writeup under "Asset browser" above. Headline points: added a
-  texture API to the abstraction layer (`LoadTexture`/`DestroyTexture`/`GetTextureImGuiID`/
-  `GetTextureSize`) since the current data-encapsulated `Renderer` had none, unlike the
-  free-function abstraction layer the old `ui/file_browser`/`thumbnail_cache` reference was
-  written against; caught two bugs
-  the GL reference would have carried over silently (`IsSRGB` must be `false` or thumbnails
-  render dark, and the reference's GL-bottom-origin UV flip must be dropped for Vulkan's
-  top-origin decode) by comparing a captured thumbnail against its source file, not by
-  inspection; and confirmed graceful shutdown genuinely exercises the new cleanup path via a
-  direct `WM_CLOSE` post (sidesteps the no-synthetic-input limitation, since it's a Win32
-  message post rather than `SendInput`). Hit the CMakeLists.txt reconfigure gotcha again
-  (new source + new define forced the VS-env-import-must-be-chained-with-the-build failure).
-  **Blocked:** click-to-preview, double-click-navigate, and double-click-to-load-scene all
-  need a manual check: no live input desktop, and no `.scene` file exists yet to test the
-  last one against.
-- **2026-07-13**: **ToonEngineOld triage, roadmap reframed around a playable game,
-  docs/architecture.md added.** Audited `ToonEngineOld` in full against this file's own
-  carry-over map: its `CLAUDE.md` had zero salvage value left (a subset of the carry-over
-  survey, its TODO lists already dispositioned on 2026-07-11), so the folder stays only for
-  the un-shipped systems' source (grid/sky, sprites, skeletal animation, cascaded shadow
-  maps turned out to already be shipped, see the entry right below this one), see "Port
-  gotchas for the un-shipped systems" above for what was captured before a later deletion.
-  Reworked `CLAUDE.md`'s roadmap: it was rendering-fidelity-and-infra-only and didn't answer
-  "what's needed to build a game," so it's now milestone-based and dependency-sequenced
-  (M1 simulation foundation: fixed timestep, play mode, entity behavior; M2 physics + audio;
-  M3 characters/fidelity: the ToonEngineOld ports; M4 scale/polish), also fixing a garbled
-  line from a prior edit. Trimmed CLAUDE.md's "Current state" prose to stay under its
-  200-line cap now that the deep version lives in the new `docs/architecture.md`: an
-  11-section onboarding doc (abstraction layer, source layout, frame loop, rendering pipeline, scene
-  model, editor layer, data flow/ownership, build/dependencies) built from a fresh full-repo
-  architecture pass. Repointed README's "full architecture writeup" line at the new doc, and
-  extended the `tidy-md` skill to actively maintain `architecture.md` (it was going to fall
-  into `docs/**`'s passive "touch only if stale" bucket, which would have let it drift silently
-  as the code changes rather than the roadmap/docs).
-- **2026-07-13**: **Cascaded shadow maps shipped** (was M3 roadmap item, listed as
-  "un-shipped" in the ToonEngineOld triage entry just above, that was written earlier the
-  same day; superseded by this). Directional shadows from the scene light onto every
-  cel-shaded surface, via Diligent's own `ShadowMapManager` (`external/DiligentFX/Components`):
-  cascade distribution, the shadow-map atlas, and cascade selection/PCF sampling
-  (`Shaders/Common/public/Shadows.fxh`) are all Diligent's, not hand-rolled, per the guiding
-  principle. 4 cascades, 2048² D32_FLOAT, PCF (not VSM/EVSM, cheap, no extra blur pass,
-  matches the toon aesthetic, the user's explicit choice). Shadow darkens the *existing* band
-  ramp rather than painting a separate flat color: `CelShade` gained a `shadow` factor
-  multiplied into `NdotL` before quantization, so a shadowed pixel just lands on a darker
-  rung of the same ladder N·L already uses (also the user's explicit choice, after two rounds
-  of ELI5, see the "shadow color" conversation if this needs revisiting later; the
-  alternative, clamping straight to the ambient floor color regardless of band, is a one-line
-  follow-up if the multiply-in look doesn't read well once tuned).
+Chronological ship log, kept short: every entry below has a full technical write-up in its
+own section above. The full round-by-round temporal-ghosting debugging saga (2026-07-11
+through 2026-07-12) is preserved verbatim in **[ARCHIVE.md](ARCHIVE.md)**; only its
+distilled conclusions live in "Temporal ghosting fixes" above. The original ToonEngineOld
+carry-over survey is likewise archived; see "ToonEngineOld: carry-over reference" above for
+what's still active.
 
-  **Abstraction-layer additions** (`renderer.h`): `BeginShadowPass()` (returns the cascade count to loop
-  over, 0 when `PostParams::shadows` is off), `BeginShadowCascade(i)`, `DrawMeshShadow`/
-  `DrawModelShadow` (position-only, no material, the shadow map carries no color or motion
-  history of its own), `EndShadowPass()` (a no-op today; the one hook a future VSM/EVSM
-  mode's `ConvertToFilterable` would land in). `main.cpp` calls these in a pre-pass, once per
-  cascade, walking the same `scene.entities` as the main draw loop, positioned *before*
-  `BeginFrame` (separate depth-only render targets, no interaction with the main G-buffer):
-  which required moving `SetPostParams`/`SetCamera`/`SetLight` earlier in the frame too, since
-  the shadow pass needs the camera + light already set.
-
-  **`iNumCascades = 0` is the "shadows off" sentinel**, not a new shader branch: `Shadows.fxh`'s
-  own `FindCascade` treats it as "no cascade found," and `FilterShadowMap` short-circuits to
-  `fLightAmount = 1.0` without ever touching the shadow map texture. `BeginShadowPass` sets
-  it explicitly when `PostParams::shadows` is off, which also correctly blanks a stale-or-
-  never-rendered shadow map on the very first frame or right after the toggle flips off: no
-  separate "is this pixel shadowed at all" uniform needed.
-
-  **Two real, non-obvious bugs, both worth remembering if any future `Components`-module
-  Diligent header (ShadowMapManager, BoundBoxRenderer, EnvMapRenderer, VectorFieldRenderer,
-  same `namespace Diligent { #include BasicStructures.fxh }` pattern per a `grep`) gets added
-  here again:**
-  1. **A cross-module `BasicStructures.fxh` namespace collision, only caught at *link* time.**
-     This file's own `namespace Diligent { namespace HLSL { #include ".../BasicStructures.fxh"
-     ... } }` wrapper (needed because `PostFXContext.hpp`/`Bloom.hpp`/etc. all forward-declare
-     `Diligent::HLSL::CameraAttribs`) is NOT how `ShadowMapManager.hpp` itself includes the
-     same file: it does a *bare*, unnested `namespace Diligent { #include
-     "Shaders/Common/public/BasicStructures.fxh" ... class ShadowMapManager { ...
-     ShadowMapAttribs& ...}; }`. `BasicStructures.fxh` has a normal `#ifndef`/`#define` include
-     guard, which the C preprocessor enforces *before* C++ ever sees namespaces, so whichever
-     of the two inclusions is textually first in this translation unit wins, and the other
-     becomes a silent no-op. Putting `#include "ShadowMapManager.hpp"` before this file's own
-     `HLSL`-wrapped inclusion (the natural place, alongside the other DiligentFX effect
-     headers) made `ShadowMapManager.hpp`'s bare version win, which *compiled fine* (its own
-     class body found `ShadowMapAttribs` at plain `Diligent::` scope) but silently left
-     `Diligent::HLSL::CameraAttribs`/`ShadowMapAttribs` undefined, surfacing as "field has
-     incomplete type" on the *unrelated*, long-working `postCamera` field once the compiler
-     actually needed the complete type. Re-ordering so this file's `HLSL`-wrapped block runs
-     first, then bridging with `using namespace HLSL;` so `ShadowMapManager.hpp`'s own
-     unqualified references could still find it, fixed the *compile*, but not the *link*:
-     `ShadowMapManager.cpp` is a **separate translation unit** (compiled independently, as
-     part of building `DiligentFX.lib`), and its own copy of this exact same collision
-     resolves the *same* way every time, in isolation: always bare `Diligent::ShadowMapAttribs`,
-     since nothing in *its* TU ever wraps the include in `HLSL`. A `using`-directive bridge in
-     *this* file doesn't change what type `Diligent::HLSL::ShadowMapAttribs` and
-     `Diligent::ShadowMapAttribs` mangle to: they're genuinely different C++ types referring
-     to independently-compiled struct layouts, so calling `DistributeCascades` with the
-     `HLSL`-wrapped one produced `lld-link: error: undefined symbol` (the mangled name our TU
-     asked for doesn't exist; the library only has the bare-namespace one). **Real fix:**
-     `#undef` the include guard macro (`_BASIC_STRUCTURES_FXH_`) between the two placements
-     and force a second, genuinely independent expansion of the header at bare `Diligent::`
-     scope: so this TU ends up with *both* `Diligent::HLSL::CameraAttribs` (for the
-     PostFXContext family, matching how *their* separately-compiled `.cpp` files resolve it)
-     *and* `Diligent::ShadowMapAttribs` (for ShadowMapManager, matching how *its* separately-
-     compiled `.cpp` resolves it) as two distinct, correctly-typed structs, then used bare
-     `ShadowMapAttribs` (not `HLSL::ShadowMapAttribs`) in every place this file's own code
-     calls into `ShadowMapManager`. The general lesson: a namespace mismatch between a header
-     and its own separately-compiled `.cpp` is invisible until link time, and a `using`-
-     directive only fixes *lookup*, never *type identity*: cross-TU calls need the *actual*
-     matching type, not just a same-named alias.
-  2. **Combined-sampler mode binds a texture's sampler on the *view*, not as an SRB variable,
-     confirmed by a live Vulkan validation error, not by guessing from the header.** Every
-     shader in this file sets `UseCombinedTextureSamplers = true`; the existing `g_Albedo`/
-     `g_HDRColor` precedent bakes their samplers via `ImmutableSamplerDesc` at PSO-creation
-     time. Tried the same "set if present" `GetStaticVariableByName(..., "g_ShadowMap_sampler")`
-     pattern already used for `Constants`/`ShadowAttribsCB`/`g_ShadowMap`: it compiled, linked,
-     and ran, silently binding nothing (the call is a graceful no-op when the name isn't a
-     separately-reflected resource, exactly as intended for the *outline* PSOs that don't
-     reference shadows at all: so nothing here raised a red flag until the app actually ran).
-     The real signal was in a redirected console log: `Diligent Engine: ERROR: Failed to bind
-     sampler to sampler variable 'g_ShadowMap_sampler' assigned to separate image
-     'g_ShadowMap': no sampler is set in texture view 'Default SRV of texture 'Shadow map
-     SRV''`, followed by `VUID-vkCmdDrawIndexed-None-08114` every draw. **Fix:**
-     `ITextureView::SetSampler()` on the shadow map's SRV itself, once, in `CreateShadowMap`
-     right after both the sampler and the `ShadowMapManager` exist (`TextureView.h`: "the view
-     will keep a strong reference to the sampler", no lifetime concern from the one-line call).
-     Removed the now-confirmed-dead `g_ShadowMap_sampler` SRB-variable-binding attempts and its
-     `ShaderResourceVariableDesc` entry in `modelPSO`'s explicit layout. General lesson: a
-     PSO/SRB variable lookup returning null is not evidence a resource doesn't need binding:
-     it can just as easily mean you're binding it through the wrong mechanism for this
-     resource's *kind* (combined-sampler textures go through the view, not the SRB).
-
-  **Verified:** clean `cmake --build --preset windows-debug` (0 warnings/errors touching any
-  file this change touched); a redirected-stdout relaunch caught bug 2 directly (14,674 lines
-  of repeated per-draw validation errors before the fix, 172 clean startup lines and zero
-  `error`/`ERROR`/`VUID` matches after); two `PrintWindow` screenshots (before and after the
-  sampler fix) both show a real, correctly-shaped soft-edged shadow cast by the sphere/cube/
-  helmet cluster onto the ground plane, shifted between the two captures in a way consistent
-  with `Spin` having continued to animate the objects in between, i.e. the shadow is
-  genuinely recomputed live each frame, not a frozen/cached artifact. Steady ~144 FPS, no
-  visual corruption elsewhere in the scene (SSAO contact shadows, SSR reflections, and the
-  rest of the post chain all still read correctly alongside the new shadow term). **Not yet
-  visually re-confirmed by the user**: same standing limitation as every other change in this
-  file (no live input desktop here; see the `verify` skill), though shadow correctness here
-  doesn't depend on interactive input the way the SSAO temporal work did, so a static
-  screenshot is comparatively strong evidence for this particular feature.
-
-  **Not done / deliberately deferred:** per-cascade frustum culling of the shadow-casting draw
-  loop (draws every entity into every cascade unconditionally, fine for this scene's object
-  count, a real cost at scale); no cascade-boundary debug visualization
-  (`GetCascadeColor` exists in `Shadows.fxh` if this is ever needed); bias/`fFilterWorldSize`
-  (currently a single hand-picked `0.02`) untested against grazing-angle acne or peter-panning
-  beyond what the front-face-culled shadow pass already mitigates structurally.
-  `docs/architecture.md` (added the same day, after this shipped) already documents the
-  shadow pre-pass in full: see its "Shadow map creation runs first" and "The shadow
-  pre-pass" sections.
-- **2026-07-13**: **Fixed-timestep sim loop shipped** (M1.1, first item of the M1 roadmap
-  milestone added earlier the same day). Replaced `main.cpp`'s single variable-`dt` frame loop
-  with an accumulator-driven fixed 60 Hz simulation tick, decoupled from the (still variable)
-  render rate, with full "Fix Your Timestep!"-style render interpolation, the user's explicit
-  choice over the simpler render-latest-tick alternative, and over extracting a new
-  `core/sim_clock` module (kept inline in `main.cpp`; a scoped decision, see
-  docs/architecture.md's "Where new systems plug in").
-
-  **Mechanism:** `main.cpp` gained `kFixedDt = 1/60` and a `double accumulator`. Each frame,
-  `frameTime` (the old `dt`) is clamped to <= 0.25s before feeding the accumulator: a
-  spiral-of-death guard, since a window drag/resize genuinely stalls `glfwPollEvents` for its
-  duration (a well-known Win32 message-pump behavior, not newly tested here) and would otherwise
-  dump a huge time debt in at once. A `while (accumulator >= kFixedDt)` then runs zero-or-more
-  fixed steps, each calling the new `SnapshotSimState(scene)` (copies every transformed entity's
-  `transform` into a new `prevSimTransform` field) before advancing the spin animation by
-  `kFixedDt` instead of `dt`; the spin advance is the existing stand-in for a future per-entity
-  `Update` hook (M1.3), now living inside the fixed step rather than the render frame. After the
-  loop, `alpha = accumulator / kFixedDt` (the leftover fraction into the next, not-yet-run tick)
-  feeds a new `UpdateWorldTransforms(scene, alpha)` overload (default `alpha = 1.0`, so callers
-  outside the loop are unaffected); it composes each entity's world matrix from
-  `lerp(prevSimTransform.value_or(transform), transform, alpha)` instead of the raw current
-  transform, via a new `LerpTransform` (component-wise on position/rotationEuler/scale, a
-  documented Euler-lerp approximation fine for small per-tick deltas; quaternions are the upgrade
-  if a fast spin ever visibly wobbles). Camera navigation (orbit/pan/zoom/fly, gamepad)
-  deliberately stays on the old variable `dt`: it's the user driving the editor, not the
-  simulation, and should feel exactly as smooth as the display, not snap to the sim tick.
-
-  **The motion-vector chain needed zero new bookkeeping.** `UpdateWorldTransforms` already
-  snapshotted `prevWorldMatrix = worldMatrix` before recomputing; since `worldMatrix` is now
-  always built from the interpolated pose, `prevWorldMatrix` automatically becomes "last
-  *rendered* frame's interpolated world," so TAA/SSAO/SSR keep measuring motion between
-  consecutive rendered frames exactly as before. This was the strongest argument for choosing
-  full interpolation once it was clear doing so wouldn't touch the ghosting-prone temporal
-  machinery (see "Motion vectors" and the SSAO-temporal work above for why that machinery is
-  worth being careful around). `prevSimTransform` defaults to `nullopt`, and
-  `UpdateWorldTransforms` reads `value_or(transform)`, so a fresh/loaded/anchor entity
-  interpolates `transform` with itself: no ghost on spawn or scene load.
-
-  **Verified:** clean `cmake --build --preset windows-debug` (only pre-existing
-  `-Wunsafe-buffer-usage` warnings from vendored Diligent headers and pre-existing lines
-  elsewhere in `scene.cpp`; none on the new code). Launch + `PrintWindow` screenshot (3840×2054,
-  the same 150%-DPI framebuffer size documented above under "Screenshotting the window") showed
-  the full scene correctly cel-shaded, outlined, and shadowed at 143.9 FPS, with crisp
-  (non-smeared) silhouettes on the spinning sphere/cube/torus/helmet cluster: the visual
-  regression check a broken motion-vector chain would have failed. The running instance's Cube
-  rotation reached ~1268°/2536° across the ~60-90s it stayed alive through two capture attempts
-  (a pixel-sampling bug in the capture script burned the first attempt's four retries before a
-  fix), i.e. thousands of fixed steps ticked correctly with no NaN/corruption/crash over
-  sustained real runtime. Closed gracefully via `CloseMainWindow()` (a `WM_CLOSE` post, not
-  `SendInput`, which sidesteps the no-synthetic-input limitation the same way the asset-browser
-  verification did).
-
-  **Not verified live (documented, not silently dropped: no live input desktop here, see the
-  `verify` skill):** interpolation smoothness over time, which a static screenshot structurally
-  cannot show; and the gizmo-drag "no ghost-glide" path, established by code reasoning
-  (`prevSimTransform` only updates at fixed-tick boundaries, so an edit lands in `transform`
-  immediately and is picked up as `prevSim` on the next tick) rather than a live drag. The
-  `spin`-off regression case (scene must render pixel-identical to pre-change) is likewise a
-  code-reasoning proof, not a live toggle: with `spin` off, `SnapshotSimState` still runs every
-  tick but nothing changes `transform`, so `prevSimTransform == transform` always and
-  `lerp(x, x, alpha) == x` regardless of `alpha`, which mathematically forces a match to the
-  non-interpolated render.
-- **2026-07-13**: **Play / Pause / Step mode shipped** (M1.2, second item of the M1
-  milestone; M1.3's entity behavior system is the one remaining item). Introduced an explicit
-  `EditorMode { Editing, Playing, Paused }` on top of M1.1's fixed-timestep loop: Editing (the
-  new default at launch) freezes the accumulator so nothing simulates, Playing is M1.1's
-  existing behavior, and Paused freezes mid-play without discarding progress. Step credits the
-  accumulator with exactly one `kFixedDt` and lets the same while loop drain it, so no separate
-  single-step code path was needed. A new "Playback" panel (Play/Pause toggle, Step, Stop, a
-  Mode status label) docks as a thin strip at the top of the existing dockspace via one more
-  `DockBuilderSplitNode`, not a new positioning mechanism.
-
-  **Play-mode isolation, the user's explicit choice:** Stop always restores `scene` from
-  `sceneBackup`, a snapshot taken when Play starts, discarding whatever happened during Play
-  (Unity/Godot/Unreal convention). Free to build today because `Scene` is a plain copyable
-  struct (a `vector<Entity>` plus an `int`, no manual resource ownership; mesh/model are
-  handles owned by `Renderer`): `sceneBackup = scene` and `scene = sceneBackup` are the entire
-  mechanism, no new serialization code. Chosen as the safety net that makes testing M1.3/M2
-  gameplay and physics non-destructive later, not just an M1.2-scoped convenience.
-
-  **Two bugs caught by tracing the interpolation math before writing any code, not found by
-  testing:** first, `alpha` (M1.1's render-interpolation fraction) only means something while
-  the accumulator is actively draining during Playing; left at a stale fractional value outside
-  Playing, a gizmo edit made while paused would render as a wrong blend between the stale
-  pre-edit tick and the new edited pose. Fixed by pinning `alpha = 1.0` whenever `mode !=
-  Playing`. Second, a Stop-restore can teleport a pose in one frame (spun to 90 degrees during
-  Play, back to 0 on Stop); TAA/SSAO/SSR would read that as a large spurious motion, the same
-  problem category as the spin/ghosting bug documented above. A Step has the same character for
-  a smaller reason: it renders the post-step pose immediately, with no smoothing-in. Fixed by
-  folding a one-frame `suppressNextFrameHistory` flag into the existing `suppressTemporalHistory`
-  computation, set by both Stop and Step.
-
-  **Declined, on purpose:** pushing a new "play" context onto `core/input/action_map.h`'s
-  existing context stack, built explicitly to let a future play/edit mode shadow bindings (see
-  its own header comment). There is no gameplay-specific input to put in it until M1.3's entity
-  behavior system exists; the hook stays available for whoever adds the first real gameplay
-  action. Also declined: locking scene-structural editing (gizmo, Add/Delete/Reparent) while
-  Playing/Paused, since snapshot/restore already makes editing during Play safe to discard.
-  Pure UI polish to consider later, not core to the item.
-
-  **Coexistence with a concurrent, independent session's work.** While this shipped, a separate
-  Claude Code session was concurrently building (uncommitted, in the same working tree) a
-  File/Edit/Tools/View/Help main menu bar, scene modals, and native title-bar theming in the
-  same region of `main.cpp`; not this session's work, and not detailed further here. The
-  Playback panel's design accounted for it directly: verified against the vendored
-  `external/imgui/imgui.cpp` (`DockSpaceOverViewport`, around line 20860) that it builds its
-  host window from `viewport->WorkPos`/`WorkSize`, which Dear ImGui already shrinks around any
-  `BeginMainMenuBar()` submitted earlier the same frame. Docking Playback into the existing
-  dockspace therefore composes below a main menu bar automatically, with no coordinate math and
-  no dependency on that other session's exact implementation. Confirmed in the verification
-  screenshot below: the two bars stack cleanly with no overlap.
-
-  **Verified:** clean `cmake --build --preset windows-debug` (a link-step `permission denied`
-  error on the first attempt was a locked `ToonEngine.exe` held by a concurrently-running
-  process, not mine, not killed, simply waited out; unrelated to code correctness). Launch +
-  `PrintWindow` screenshot at 3840x2054 showed the Playback panel docked correctly below the
-  concurrent session's menu bar, `Mode: EDITING`, and the concrete regression-check evidence:
-  the Cube's Inspector-displayed rotation at exactly 0.000/0.000/0.000 on a fresh launch,
-  versus the M1.1 screenshot's same long-running Cube having accumulated to roughly 1268/2536
-  degrees. That is a direct, visible confirmation that nothing simulates until Play is
-  pressed, not an inference. Gracefully closed via `CloseMainWindow()`.
-
-  **Not verified live (same standing limitation as M1.1, no live input desktop here, see the
-  `verify` skill):** actually clicking Play/Pause/Step/Stop and observing the transitions.
-  Established by code reasoning (traced above), not a live click-through.
-- **2026-07-13**: **Entity behavior system shipped** (M1.3, the last M1 item). Native
-  scripts (`core/script.h`, Cherno/Hazel's `NativeScriptComponent` shape, EnTT deferred),
-  `SpinScript` replacing the hardcoded spin block and the `spinners` side-list entirely, an
-  explicit deep-cloning `Entity` copy constructor (the load-bearing consequence of
-  `ScriptComponent` holding a `unique_ptr`), and `.scene` file persistence for scripts. See
-  "Entity behavior system (roadmap M1.3)" above for the full design, the mid-implementation
-  deviation from the original plan (dropped a planned stream/file serializer split once the
-  `Entity` copy ctor made it unnecessary and avoided a GPU-resource leak it would have
-  caused), and the verification evidence (a real rotation delta matching the spin axis
-  exactly, plus a temporarily-instrumented copy-ctor/save-load test). CLAUDE.md's roadmap
-  pruning, its source-layout update, and `docs/architecture.md`'s corresponding update are
-  deliberately left for a follow-up `tidy-md` pass, not done in this session.
-- **2026-07-16**: **Physics + collision shipped** (M2.1). A quaternion `Transform.rotation`
-  (replacing Euler, Phase A); a `core/physics.h`/`.cpp` abstraction layer twin to the
-  renderer's, wrapping **Jolt Physics** behind an opaque `BodyHandle` + data-encapsulated
-  `PhysicsWorld` (Phase B); independent
-  `ColliderComponent`/`RigidBodyComponent` entity fields, Box/Sphere/Capsule ×
-  Static/Dynamic/Kinematic (Phase C); Play-time world construction and fixed-tick
-  stepping/read-back, with a falling-primitives demo scene (Phase D); an Inspector "Physics"
-  UI, reworked mid-phase after a direct correction into fully independent Light/Collider/
-  Rigid Body/Scripts sections with real Add/Remove buttons, not the merged checkbox design
-  first attempted (Phase E); and a collider debug wireframe overlay, which caught two real
-  runtime bugs (an unbound pixel-shader constant, a forward-reference build error) plus one
-  overlay-vs-physics accuracy bug during verification, all fixed before shipping (Phase F).
-  See "Physics + collision (roadmap M2.1)" above for the full design, the Phase E correction
-  in the user's own words, and every bug's root cause; see "Build gotchas" above for the
-  three Jolt-specific CMake/compile gotchas hit along the way. Docs sync (this section, the
-  History entry, CLAUDE.md, `docs/architecture.md`, README.md) folded into the same `tidy-md`
-  pass rather than deferred, unlike M1.3's.
-- **2026-07-16**: **`src/` reorganized**: `core/`'s 16 flat files split into subsystem
-  folders (`core/rendering/`, `core/scene/`, `core/physics/`, `core/camera/`; `core/math.h`
-  and `core/input/` stayed put), and `main.cpp`'s ~1600-line `main()` (which had accumulated
-  the whole editor's init/tick/render/UI-panel logic) extracted into `src/app/` (an
-  `EditorState` struct plus `editor_init/tick/render.{h,cpp}`, `physics_glue.{h,cpp}`, and
-  `scene_ops.{h,cpp}` free functions) and `src/ui/panels/` (one file per ImGui panel, each a
-  free function taking `EditorState&`). `main.cpp` is now ~90 lines of pure init/loop glue,
-  with no Diligent header and no direct `ImGui::` calls. `EditorState` is a plain struct, not
-  a class, for the same reason `Scene` is (see "Architecture decisions" -> "Data-oriented
-  discipline" above): nothing here hides a third-party dependency, so a class would have
-  bought nothing but ceremony. Verified via a clean rebuild and a live-window screenshot
-  (every panel plus the demo scene still rendering correctly). CLAUDE.md's Source layout and
-  `docs/architecture.md` were updated to match in the same pass. Comment content in the
-  moved/new files was carried over largely as-is; a separate later pass is intended to
-  rewrite comments so they explain the code without leaning on this session's own history.
-- **2026-07-20**: **Audio shipped (roadmap M2.2).** Full writeup under "Audio" above.
-  Headline points: `core/audio/audio.{h,cpp}` is a third PIMPL seam (`SoundHandle`,
-  `AudioEngine`) twinning `Renderer`/`PhysicsWorld`, built on the new **miniaudio** submodule;
-  a listener driven from the interpolated editor-camera pose each rendered frame (not the
-  fixed sim tick, since audio is presentation, like rendering, not simulation); a new
-  `AudioSource` entity component plus `BuildAudioWorld` glue mirroring `BuildPhysicsWorld`;
-  and Playback/Properties/Settings panel UI (Play/Pause/Stop, per-source Preview, master
-  volume/mute). Fixed a real bug along the way: `Entity`'s copy constructor's explicit
-  member-init list had never been extended for `audioSource`, silently dropping the
-  component on every scene copy. Docs synced in the same pass: this entry plus the "Audio"
-  technical section above, CLAUDE.md's roadmap (M2 item 1 removed), README's Highlights.
-- **2026-07-20**: **Mouse-pick via raycast shipped** (M2.3, `docs/roadmap.md`'s former item
-  8): geometric click-to-select (`app/picking.{h,cpp}`'s `PickEntity`/`DoMousePicking`),
-  deliberately not wired to `PhysicsWorld::Raycast` (Jolt bodies only exist while Playing, and
-  only collider-bearing entities would be hittable; editor selection needs both). New
-  `Renderer::ScreenPointToRay`/`GetMeshBounds`/`GetModelBounds`; collider-less entities
-  (lights, empty anchors) get a fixed-size pick box, visualized via a `DrawWireframe` marker.
-  Verified by build, API-signature checks against the vendored ImGui/ImGuizmo/Diligent
-  headers, and a temporary instrumented run (removed before commit) confirming the unproject
-  math and nearest-hit resolution against live camera/scene state; no synthetic input reaches
-  this environment's windows, so a live click couldn't be driven directly. Full design
-  write-up intentionally deferred to `docs/roadmap.md`'s shipped-item promotion (next entry),
-  which migrates it in when the item formally moves to "Shipped."
-- **2026-07-20**: **Roadmap-skill reorg, user-directed.** `docs/roadmap.md`'s shipped-item
-  promotion (verify against real code, migrate detail into MEMORY.md, move the item into
-  "Shipped," renumber, recompute the progress line, recolor the mermaid diagram) moved from
-  `tidy-md` to a new "Promote Anything That's Actually Shipped" step in `update-roadmap`; see
-  that skill's own file for the full mechanic and its new shipped-node mermaid convention
-  (rename the node's `N`-id to an `S`-id matching its Shipped position, move it into a shared
-  `classDef shipped` reusing `v01`'s green, but leave it inside its own thematic milestone
-  subgraph rather than relocating it, since that grouping is chronological, not a
-  shipped/unshipped signal). `tidy-md`'s `docs/roadmap.md` section narrowed to prose/
-  staleness checks only, the same treatment as `docs/architecture.md`; `plan-roadmap`'s two
-  stale `tidy-md` cross-references were updated to `update-roadmap` in the same pass. Same
-  session: a fresh `update-roadmap` triage pass added two Steam-release-gap items
-  (Steamworks SDK bootstrap; controller-navigable UI + Steam Deck on-screen keyboard) and
-  four wording amendments (frustum culling widened to name the main pass too, an
-  instancing/PSO-batching note, a settings-menu borderless/per-device note, a
-  crash-reporter third-party-SDK note), all confirmed via `AskUserQuestion` before writing.
-  A following `tidy-md` pass fixed a pre-existing stray `#` typo in the roadmap mermaid's
-  `N10` label (both `docs/roadmap.md` and README's duplicate copy), synced `docs/
-  architecture.md`'s `Renderer` class listing and Source Layout to the mouse-pick additions
-  above, and re-synced README's own copy of the roadmap mermaid diagram, which had drifted
-  out of step with `docs/roadmap.md`'s structure.
+- **2026-07-06**: pivoted from a from-scratch OpenGL 4.1 engine to Diligent Engine + Vulkan;
+  first light (window, Vulkan device, swap chain, clear loop).
+- **2026-07-08**: renderer abstraction layer (`main.cpp` Diligent-free); DiligentTools +
+  Dear ImGui behind it; D3D11/D3D12/OpenGL disabled. Toon pipeline first light (banded cel
+  fill + inverted-hull outline, spinning UV sphere). See "Toon pipeline".
+- **2026-07-09**: multi-object scene + per-object `Material`; dual-normal outline for hard
+  edges; ImGui docking (the original manual submodule checkout, later superseded, see
+  "Docking"); DiligentFX added + the HDR/ACES tone-map pipeline stood up. See "Toon
+  pipeline", "DiligentFX / HDR post-processing".
+- **2026-07-10**: all six DiligentFX post effects shipped in one day (Bloom, SSAO, motion
+  vectors, depth of field, TAA, SSR); non-uniform scale (inverse-transpose normal matrix +
+  world-space outline width) and per-object outline tuning; CLion migration
+  (`scripts/vsenv.ps1` removed, VS env import inlined instead); roadmap redesign around the
+  ToonEngineOld carry-over; glTF model loading + model outline; scene graph; editor camera +
+  input. See each feature's own section above.
+- **2026-07-11**: gizmo snap + hotkeys; the temporal-ghosting debugging saga begins (rounds
+  1-6 this day; see "Temporal ghosting fixes" for the resolved state, ARCHIVE.md for the
+  full journey); `scripts/vsenv.ps1` mistakenly recreated, then corrected for good (see
+  "Build gotchas"); light entity component; ToonEngineOld TODO-list audit folded 4 items
+  (input system, asset browser, fixed timestep, shader hot-reload) into the roadmap.
+- **2026-07-12**: scene serialization; window icon taskbar fix; the durable `external/imgui`
+  submodule fix for docking (see "Docking"); input system (action maps + JSON rebinding);
+  ghosting round 7 (camera-motion reprojection, the last of the four causes, see "Temporal
+  ghosting fixes").
+- **2026-07-13**: asset browser panel (closes the last engine/editor carry-over item);
+  ToonEngineOld triage + roadmap reframed around milestones (M1-M4) + `docs/architecture.md`
+  added; cascaded shadow maps; fixed-timestep sim loop (M1.1); Play/Pause/Step mode (M1.2);
+  entity behavior system (M1.3, closing out M1).
+- **2026-07-16**: physics + collision (M2.1); `src/` reorganized into subsystem folders
+  (`core/rendering/`, `core/scene/`, `core/physics/`, `core/camera/`), `main.cpp`'s ~1600
+  lines extracted into `app/` + `ui/panels/` (down to ~90 lines of init/loop glue).
+- **2026-07-20**: audio (M2.2); mouse-pick via raycast (M2.3); roadmap-skill reorg (shipped-
+  item promotion moved from `tidy-md` to `update-roadmap`) plus two Steam-release-gap roadmap
+  items (Steamworks bootstrap, controller-navigable UI).

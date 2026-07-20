@@ -7,7 +7,7 @@ behind already-shipped systems, see [MEMORY.md](../MEMORY.md); for the project's
 principle (build on Diligent, don't reinvent it), see [CLAUDE.md](../CLAUDE.md).
 
 ```
-Shipped  ███████░░░░░░░░░░░░░░░░░░  7 / 25 items
+Shipped  █████████░░░░░░░░░░░░░░░░  9 / 25 items
 ```
 
 ```mermaid
@@ -31,10 +31,10 @@ flowchart LR
 
     subgraph V03["v0.3: Interaction"]
         direction TB
-        N8["Mouse-pick via raycast"]
-        N9["Contact events to scripts"]
+        S8["Mouse-pick via raycast"]
+        S9["Contact events to scripts"]
         N10["Shader hot-reload"]
-        N8 --> N9 --> N10
+        S8 --> S9 --> N10
     end
 
     subgraph V04["v0.4: Characters &amp; World"]
@@ -81,10 +81,12 @@ flowchart LR
     classDef v05 fill:#F4C542,stroke:#c99e28,color:#2B2100;
     classDef v10 fill:#4FA8D8,stroke:#2f7fac,color:#00202E;
     classDef v11 fill:#8A7CFF,stroke:#6357cc,color:#160B3E;
+    classDef shipped fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
 
     class S1,S2,S3,S4 v01
     class S5,S6,S7 v02
-    class N8,N9,N10 v03
+    class S8,S9 shipped
+    class N10 v03
     class N11,N12,N13 v04
     class N14,N15,N16,N17 v05
     class N18,N19,N20,N21,N22 v10
@@ -107,18 +109,15 @@ flowchart LR
 6. **Physics**: Jolt rigid bodies, Box/Sphere/Capsule colliders, raycasts, a collider debug
    wireframe.
 7. **Audio**: positional 3D SFX and music (miniaudio), an `AudioSource` entity component.
+8. **Mouse-pick**: geometric ray-vs-bounds click-to-select in the viewport, not the physics
+   raycast (which only exists while Playing), with a fallback pick box for collider-less
+   entities.
+9. **Contact events to scripts**: `Script::OnCollisionEnter`/`OnCollisionStay`/
+   `OnCollisionExit` hooks driven by a Jolt contact listener, so gameplay scripts react to
+   physical contact instead of only polling transforms.
 
 ## What's Next, Most to Least Important
 
-8. **Mouse-pick via raycast.** Wire the already-shipped `PhysicsWorld::Raycast` to
-   click-to-select in the editor viewport. Ranked first because the hard part, the raycast
-   itself, already exists; this is a small, self-contained wiring task with an immediate,
-   visible payoff.
-9. **Contact events to scripts.** An `OnCollision`-style `Script` hook driven by a Jolt
-   contact listener, so gameplay scripts can react to physical contact instead of only
-   polling transforms. Same tier as mouse-pick for the same reason: no new subsystem, just
-   wiring an existing one (physics) to another existing one (scripts). Several later items
-   (particles on impact, sprite hit-reactions) will eventually want this to exist first.
 10. **Shader hot-reload.** Diligent already provides the mechanism
     (`IRenderStateCache`, `EnableHotReload` + `Reload()`, reachable through the linked
     `Diligent-GraphicsTools`, confirmed against Diligent's 2.5.3 release notes and
@@ -232,8 +231,10 @@ Two items from the most recent `update-roadmap` pass cleared the research bar bu
 ## How This List Is Maintained
 
 - `update-roadmap` researches what to add and where to rank it (architectural health, gaps
-  blocking a Steam release, performance) and proposes changes to this file.
+  blocking a Steam release, performance), proposes changes to this file, and promotes an
+  item that's actually shipped: migrates its design/rationale into MEMORY.md, moves it into
+  "Shipped," and renumbers the list so it still reads start to finish with no gaps.
 - `plan-roadmap` takes the top not-yet-shipped item, or one the user names directly, and
   designs it in depth before implementation starts.
-- `tidy-md` moves an item's design/rationale into MEMORY.md and marks it shipped here once
-  it lands, renumbering the list so it still reads start to finish with no gaps.
+- `tidy-md` keeps this file's prose and cross-references accurate and current, the same
+  treatment as `docs/architecture.md`, but doesn't touch the ranked-list content itself.

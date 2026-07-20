@@ -1,6 +1,6 @@
 ---
 name: update-roadmap
-description: Research what to prioritize next on ToonEngine's roadmap across three lenses (architectural health, gaps blocking a Steam release, performance), promote anything that's actually shipped into docs/roadmap.md's Shipped section (including its mermaid diagram's shipped-status coloring), and update docs/roadmap.md + CLAUDE.md's roadmap pointer with the result. Code/architecture research is grounded in docs/cpp-style-guide.md; the roadmap prose it writes follows docs/md-style-guide.md. Use when the user asks to update, refresh, reprioritize, or groom the roadmap, mark an item shipped, or "what should we work on next" in the open-ended sense. Not for planning one already-chosen item, that's `plan-roadmap`.
+description: Research what to prioritize next on ToonEngine's roadmap across three lenses (architectural health, gaps blocking a Steam release, performance), promote anything that's actually shipped into docs/roadmap.md's Shipped section (including its mermaid diagram's shipped-status coloring), and update docs/roadmap.md + CLAUDE.md's roadmap pointer with the result. README.md carries its own duplicate copy of the roadmap mermaid diagram; this skill keeps it byte-for-byte structurally in sync with docs/roadmap.md's every time either changes, not `tidy-md`. Code/architecture research is grounded in docs/cpp-style-guide.md; the roadmap prose it writes follows docs/md-style-guide.md. Use when the user asks to update, refresh, reprioritize, or groom the roadmap, mark an item shipped, or "what should we work on next" in the open-ended sense. Not for planning one already-chosen item, that's `plan-roadmap`.
 ---
 
 # update-roadmap: Research and Reprioritize ToonEngine's Roadmap
@@ -67,7 +67,9 @@ reasons about the real not-yet-shipped list:
    chronological/thematic, not a shipped/unshipped signal) but reads as done at a glance. If
    every node in a milestone subgraph ends up shipped, that subgraph's own `classDef` can
    adopt the same shipped-green treatment wholesale, matching how `V01`/`V02` are already
-   colored solid green.
+   colored solid green. **Apply this exact same rename/recolor to README.md's own copy of the
+   diagram in the same step** (see "Keep README's Diagram in Sync" below) — never leave the
+   two diagrams to drift apart, even for one turn.
 5. Update CLAUDE.md's `## Roadmap` pointer paragraph only if it no longer accurately describes
    the list's structure; re-check the 200-line cap.
 
@@ -75,6 +77,19 @@ This is a factual correction, not a design decision, so it doesn't wait for the
 `AskUserQuestion` gate later in this skill: do it directly, then continue. It absorbs what
 used to be `tidy-md`'s job for `docs/roadmap.md` specifically; `tidy-md` still owns everything
 else about keeping markdown accurate, this file's own prose included.
+
+## Keep README's Diagram in Sync
+
+`README.md`'s `## Roadmap` section carries its own full copy of the mermaid diagram, not a
+link to `docs/roadmap.md`'s. Treat the two diagrams as one logical artifact with two physical
+copies: **any edit to `docs/roadmap.md`'s diagram (a promotion's rename/recolor, a new
+candidate's node, a renumbering) gets mirrored into README's copy in the same pass**, never
+deferred to a later `tidy-md` run. This is this skill's job specifically, not `tidy-md`'s,
+because only `update-roadmap` knows the exact structural delta being made; a later pass
+trying to reverse-engineer "what changed" from a diff is exactly how the two drifted apart
+before. Verify after every diagram edit: `grep -oE '[SN][0-9]+' docs/roadmap.md README.md`
+should report the identical id set (same ids, same S/N split) in both files, and every
+`classDef`/`class` line should match structurally (colors, groupings) between the two.
 
 ## Research the Three Lenses, in Parallel
 
@@ -147,7 +162,11 @@ Only after the user has picked:
 1. Update `docs/roadmap.md`: insert each chosen item at its confirmed rank in the single
    "What's Next" sequence, renumbering everything below it so the list still reads as one
    unbroken sequence from most to least important, with the reasoning paragraph the synthesis
-   step already drafted. Recompute the progress line at the top of the file.
+   step already drafted. Recompute the progress line at the top of the file. Add the new
+   item(s) to the mermaid diagram too (a new node in the right milestone subgraph, renumbering
+   every `N`-id after it), and mirror that same diagram edit into README.md's copy in the same
+   step (see "Keep README's Diagram in Sync" above) — a new candidate is exactly as much a
+   sync point as a shipped-item promotion is.
 2. Update CLAUDE.md's `## Roadmap` section only if it no longer accurately describes the
    list; it stays a short pointer, not a second copy of the detail. Re-check the 200-line cap
    after editing.
@@ -159,4 +178,5 @@ Only after the user has picked:
 No engine code changes. No implementation planning for a chosen item in ELI5 depth (that's
 `plan-roadmap`, a separate, later ask). No adding a candidate the user didn't actually pick,
 no matter how well-supported the research. No general markdown prose/staleness fixes outside
-`docs/roadmap.md`/CLAUDE.md's roadmap pointer (that's `tidy-md`'s job).
+`docs/roadmap.md`/CLAUDE.md's roadmap pointer/README's roadmap mermaid diagram (everything
+else in README, and the rest of markdown, is `tidy-md`'s job).

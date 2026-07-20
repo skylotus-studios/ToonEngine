@@ -1,6 +1,6 @@
 ---
 name: tidy-md
-description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/roadmap.md, docs/**) accurate and current. Keeps CLAUDE.md under its hard 200-line cap, keeps README.md a portfolio-quality feature showcase (including a new highlight when a shipped item earns one), and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Moving a shipped item into docs/roadmap.md's Shipped section, including its mermaid diagram's shipped-status coloring, is `update-roadmap`'s job, not this skill's. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships (for the README/architecture side effects, not the roadmap-list bookkeeping itself).
+description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/roadmap.md, docs/**) accurate and current. Keeps CLAUDE.md under its hard 200-line cap, keeps README.md a portfolio-quality feature showcase (including a new highlight when a shipped item earns one), and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Moving a shipped item into docs/roadmap.md's Shipped section, and keeping README's duplicate roadmap mermaid diagram in sync with docs/roadmap.md's, are both `update-roadmap`'s job, not this skill's. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships (for the README/architecture side effects, not the roadmap-list bookkeeping itself).
 ---
 
 # tidy-md: Keep ToonEngine's Markdown Docs Accurate, Current, and Right-Sized
@@ -69,6 +69,12 @@ When a roadmap item ships and graduates out of `docs/roadmap.md` (below), check 
 significant enough to be its own README highlight (a new rendering technique, a new editor
 capability; not an internal refactor or a bugfix). Add it if so. Keep the section scannable
 rather than exhaustive: a dense bullet list of real capabilities beats a changelog.
+
+README's `## Roadmap` section carries its own full copy of the roadmap mermaid diagram (not a
+link). Keeping that copy structurally in sync with `docs/roadmap.md`'s own diagram is
+`update-roadmap`'s job, not this skill's — it owns every edit to either diagram in the same
+step it makes it. Don't touch README's diagram here even if it looks out of step; that's a
+sign `update-roadmap` needs a follow-up run, not something for this pass to patch around.
 
 Refresh the hero screenshot only when the actual on-screen look has changed enough that the
 old one is misleading (a new visual feature, a UI layout change), not for every minor tweak.
