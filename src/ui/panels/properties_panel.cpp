@@ -155,8 +155,8 @@ namespace toon {
                             std::snprintf(clipBuf, sizeof(clipBuf), "%s", e.audioSource->clip.c_str());
                             if (ImGui::InputText("Clip", clipBuf, sizeof(clipBuf))) { e.audioSource->clip = clipBuf; }
                             ImGui::SameLine();
-                            const bool previewingThis =
-                                (state.previewHandle != SoundHandle::Invalid) && (state.previewEntityIdx == scene.selected);
+                            const bool previewingThis = (state.previewHandle != SoundHandle::Invalid) &&
+                                                        (state.previewEntityIdx == scene.selected);
                             if (ImGui::Button(previewingThis ? "Stop Preview" : "Preview")) {
                                 if (state.previewHandle != SoundHandle::Invalid) {
                                     state.audio.Stop(state.previewHandle);

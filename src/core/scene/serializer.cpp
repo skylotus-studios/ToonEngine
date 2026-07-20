@@ -74,8 +74,8 @@ namespace toon {
         void WriteAudioSource(std::ofstream &f, const AudioSource &a) {
             char buf[320];
             std::snprintf(buf, sizeof(buf), "  audio %s %.6f %.6f %d %d %d %d %.6f\n",
-                          a.clip.empty() ? "-" : a.clip.c_str(), a.volume, a.pitch, a.loop ? 1 : 0,
-                          a.autoplay ? 1 : 0, a.spatial ? 1 : 0, a.stream ? 1 : 0, a.maxDistance);
+                          a.clip.empty() ? "-" : a.clip.c_str(), a.volume, a.pitch, a.loop ? 1 : 0, a.autoplay ? 1 : 0,
+                          a.spatial ? 1 : 0, a.stream ? 1 : 0, a.maxDistance);
             f << buf;
         }
 
@@ -332,8 +332,7 @@ namespace toon {
                 AudioSource a;
                 std::string clip;
                 int loopInt = 0, autoplayInt = 0, spatialInt = 0, streamInt = 0;
-                ss >> clip >> a.volume >> a.pitch >> loopInt >> autoplayInt >> spatialInt >> streamInt >>
-                    a.maxDistance;
+                ss >> clip >> a.volume >> a.pitch >> loopInt >> autoplayInt >> spatialInt >> streamInt >> a.maxDistance;
                 a.clip = (clip == "-") ? std::string() : clip;
                 a.loop = loopInt != 0;
                 a.autoplay = autoplayInt != 0;

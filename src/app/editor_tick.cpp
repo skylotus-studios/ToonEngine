@@ -124,8 +124,8 @@ namespace toon {
         if (state.mode == EditorMode::Playing) {
             for (const Entity &e : state.scene.entities) {
                 if (e.audioSource && e.audioSource->spatial && e.audioSource->handle != SoundHandle::Invalid) {
-                    state.audio.SetPosition(e.audioSource->handle, {e.worldMatrix.m[12], e.worldMatrix.m[13],
-                                                                     e.worldMatrix.m[14]});
+                    state.audio.SetPosition(e.audioSource->handle,
+                                            {e.worldMatrix.m[12], e.worldMatrix.m[13], e.worldMatrix.m[14]});
                 }
             }
         }

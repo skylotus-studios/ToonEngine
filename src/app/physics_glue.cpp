@@ -40,7 +40,8 @@ namespace toon {
         return collider.extents;
     }
 
-    void BuildPhysicsWorld(PhysicsWorld &physicsWorld, Scene &scene, std::unordered_map<uint32_t, int> &outBodyToEntity) {
+    void BuildPhysicsWorld(PhysicsWorld &physicsWorld, Scene &scene,
+                           std::unordered_map<uint32_t, int> &outBodyToEntity) {
         physicsWorld.Clear();
         outBodyToEntity.clear();
         for (int i = 0; i < static_cast<int>(scene.entities.size()); ++i) {
@@ -68,9 +69,7 @@ namespace toon {
             desc.rotation = e.transform->rotation;
 
             e.body->handle = physicsWorld.CreateBody(desc);
-            if (e.body->handle != BodyHandle::Invalid) {
-                outBodyToEntity[static_cast<uint32_t>(e.body->handle)] = i;
-            }
+            if (e.body->handle != BodyHandle::Invalid) { outBodyToEntity[static_cast<uint32_t>(e.body->handle)] = i; }
         }
     }
 

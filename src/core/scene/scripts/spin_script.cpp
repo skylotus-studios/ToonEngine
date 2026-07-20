@@ -1,5 +1,5 @@
 //============================================================================
-//  core/scene/scripts/spin_script.cpp
+//  core/scene/scripts/spin_script.cpp — SpinScript's OnUpdate/Save/Load and self-registration.
 //============================================================================
 #include "core/scene/scripts/spin_script.h"
 

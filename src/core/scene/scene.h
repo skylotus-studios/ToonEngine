@@ -63,8 +63,8 @@ namespace toon {
         float pitch = 1.0f;
         bool loop = false;
         bool autoplay = true;
-        bool spatial = true;    // false = plays the same everywhere (ambience/music/UI)
-        bool stream = false;    // true = decode from disk as it plays (long music tracks)
+        bool spatial = true;       // false = plays the same everywhere (ambience/music/UI)
+        bool stream = false;       // true = decode from disk as it plays (long music tracks)
         float maxDistance = 25.0f; // spatial only — see SoundDesc
         SoundHandle handle = SoundHandle::Invalid;
     };

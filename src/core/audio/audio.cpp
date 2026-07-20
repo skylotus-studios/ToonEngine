@@ -138,7 +138,9 @@ namespace toon {
     void AudioEngine::Shutdown() {
         if (!m_impl->initialized) { return; }
 
-        for (auto &[handle, sound] : m_impl->handled) { ma_sound_uninit(&sound); }
+        for (auto &[handle, sound] : m_impl->handled) {
+            ma_sound_uninit(&sound);
+        }
         m_impl->handled.clear();
 
         for (auto &voice : m_impl->oneShotVoices) {
@@ -216,15 +218,21 @@ namespace toon {
     }
 
     void AudioEngine::PauseAll() {
-        for (auto &[handle, sound] : m_impl->handled) { ma_sound_stop(&sound); }
+        for (auto &[handle, sound] : m_impl->handled) {
+            ma_sound_stop(&sound);
+        }
     }
 
     void AudioEngine::ResumeAll() {
-        for (auto &[handle, sound] : m_impl->handled) { ma_sound_start(&sound); }
+        for (auto &[handle, sound] : m_impl->handled) {
+            ma_sound_start(&sound);
+        }
     }
 
     void AudioEngine::StopAll() {
-        for (auto &[handle, sound] : m_impl->handled) { ma_sound_uninit(&sound); }
+        for (auto &[handle, sound] : m_impl->handled) {
+            ma_sound_uninit(&sound);
+        }
         m_impl->handled.clear();
     }
 
