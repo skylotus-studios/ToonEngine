@@ -11,6 +11,7 @@
 #include "core/scene/scene.h"
 
 #include <string>
+#include <unordered_map>
 
 namespace toon {
 
@@ -34,6 +35,20 @@ namespace toon {
     // its world pose: a real hierarchy fold (parent's world * local) is deliberately out of
     // scope for M2.1 -- a collider on a nested entity is seeded once here but never
     // correctly re-synced.
-    void BuildPhysicsWorld(PhysicsWorld &physicsWorld, Scene &scene);
+    //
+    // outBodyToEntity: cleared, then filled with each new body's BodyHandle (as its raw id) ->
+    // owning entity index, for DispatchContactEvents below to resolve a contact's BodyHandles
+    // back to entities. Safe to build once per Play/Step session and reuse for its whole
+    // duration -- no entity is created or destroyed mid-Play today (see Script::OnDestroy's
+    // own comment).
+    void BuildPhysicsWorld(PhysicsWorld &physicsWorld, Scene &scene, std::unordered_map<uint32_t, int> &outBodyToEntity);
+
+    // Drain this tick's contact events (PhysicsWorld::ConsumeContactEvents) and dispatch
+    // Script::OnCollisionEnter/Stay/Exit to both entities involved, resolved via
+    // `bodyToEntity` (BuildPhysicsWorld's out-param above). Call once per fixed tick, right
+    // after PhysicsWorld::Step() -- see core/scene/script.h's OnCollision* comment for the
+    // self/other/point/normal convention.
+    void DispatchContactEvents(PhysicsWorld &physicsWorld, Scene &scene,
+                                const std::unordered_map<uint32_t, int> &bodyToEntity);
 
 } // namespace toon

@@ -46,7 +46,7 @@ namespace toon {
                     state.mode = EditorMode::Playing;
                     state.accumulator = 0.0;
                     CreateScripts(state.scene); // fire OnCreate once, entering this Play session
-                    BuildPhysicsWorld(state.physicsWorld, state.scene); // seed bodies from collider-bearing entities
+                    BuildPhysicsWorld(state.physicsWorld, state.scene, state.bodyToEntity); // seed bodies from collider-bearing entities
                     BuildAudioWorld(state.audio, state.scene); // start autoplay emitters
                 } else if (state.mode == EditorMode::Playing) {
                     state.mode = EditorMode::Paused;
@@ -65,7 +65,7 @@ namespace toon {
                     state.mode = EditorMode::Paused; // step lands paused, not playing
                     state.accumulator = 0.0;
                     CreateScripts(state.scene); // fire OnCreate once, entering this Play session
-                    BuildPhysicsWorld(state.physicsWorld, state.scene); // seed bodies from collider-bearing entities
+                    BuildPhysicsWorld(state.physicsWorld, state.scene, state.bodyToEntity); // seed bodies from collider-bearing entities
                     BuildAudioWorld(state.audio, state.scene); // start autoplay emitters
                     state.audio.PauseAll(); // step lands paused -- freeze right after starting
                 }
@@ -78,6 +78,7 @@ namespace toon {
             if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, btnW))) {
                 stopPreview();
                 state.physicsWorld.Clear();      // release this session's bodies before the scene reverts
+                state.bodyToEntity.clear();      // this session's contact-event lookup, same reason
                 state.audio.StopAll();           // release this session's sounds before the scene reverts
                 state.scene = state.sceneBackup; // discard everything Play did -- see the panel comment above
                 state.mode = EditorMode::Editing;

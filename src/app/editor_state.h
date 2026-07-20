@@ -21,6 +21,7 @@
 #include "ImGuizmo.h"
 
 #include <string>
+#include <unordered_map>
 
 struct GLFWwindow;
 
@@ -36,6 +37,10 @@ namespace toon {
 
         Renderer renderer;
         PhysicsWorld physicsWorld;
+        // BodyHandle (raw id) -> owning entity index, for this Play/Step session's contact
+        // events (app/physics_glue.h's DispatchContactEvents). Filled by BuildPhysicsWorld,
+        // cleared alongside physicsWorld.Clear() on Stop (see playback_panel.cpp).
+        std::unordered_map<uint32_t, int> bodyToEntity;
         AudioEngine audio;
         Scene scene;
         // Snapshot taken when Play starts, wholesale-restored on Stop (see playback_panel.cpp).

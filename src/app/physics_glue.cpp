@@ -40,9 +40,11 @@ namespace toon {
         return collider.extents;
     }
 
-    void BuildPhysicsWorld(PhysicsWorld &physicsWorld, Scene &scene) {
+    void BuildPhysicsWorld(PhysicsWorld &physicsWorld, Scene &scene, std::unordered_map<uint32_t, int> &outBodyToEntity) {
         physicsWorld.Clear();
-        for (Entity &e : scene.entities) {
+        outBodyToEntity.clear();
+        for (int i = 0; i < static_cast<int>(scene.entities.size()); ++i) {
+            Entity &e = scene.entities[i];
             if (!e.collider || !e.transform) { continue; }
 
             // A bare collider (no authored RigidBodyComponent) is an implicit static
@@ -66,6 +68,50 @@ namespace toon {
             desc.rotation = e.transform->rotation;
 
             e.body->handle = physicsWorld.CreateBody(desc);
+            if (e.body->handle != BodyHandle::Invalid) {
+                outBodyToEntity[static_cast<uint32_t>(e.body->handle)] = i;
+            }
+        }
+    }
+
+    namespace {
+
+        // Calls every ScriptComponent's OnCollision* on entity `selfIdx`, reporting `otherIdx`
+        // as the other side and `normal` as given -- DispatchContactEvents below calls this
+        // once per side of a contact, flipping `normal` for the second call.
+        void FireCollisionScripts(Scene &scene, int selfIdx, int otherIdx, ContactPhase phase, const Vec3 &point,
+                                  const Vec3 &normal) {
+            Entity &self = scene.entities[selfIdx];
+            for (ScriptComponent &sc : self.scripts) {
+                if (!sc.instance) { continue; }
+                switch (phase) {
+                    case ContactPhase::Enter:
+                        sc.instance->OnCollisionEnter(self, scene, otherIdx, point, normal);
+                        break;
+                    case ContactPhase::Stay:
+                        sc.instance->OnCollisionStay(self, scene, otherIdx, point, normal);
+                        break;
+                    case ContactPhase::Exit:
+                        sc.instance->OnCollisionExit(self, scene, otherIdx, point, normal);
+                        break;
+                }
+            }
+        }
+
+    } // namespace
+
+    void DispatchContactEvents(PhysicsWorld &physicsWorld, Scene &scene,
+                               const std::unordered_map<uint32_t, int> &bodyToEntity) {
+        for (const ContactEvent &ev : physicsWorld.ConsumeContactEvents()) {
+            const auto itA = bodyToEntity.find(static_cast<uint32_t>(ev.a));
+            const auto itB = bodyToEntity.find(static_cast<uint32_t>(ev.b));
+            // Silently skip an unresolved side (e.g. a body destroyed between the event firing
+            // and this drain) rather than dispatching a half-formed event -- an edge case
+            // Jolt's own OnContactRemoved docs call out as possible.
+            if (itA == bodyToEntity.end() || itB == bodyToEntity.end()) { continue; }
+
+            FireCollisionScripts(scene, itA->second, itB->second, ev.phase, ev.point, ev.normal);
+            FireCollisionScripts(scene, itB->second, itA->second, ev.phase, ev.point, ev.normal * -1.0f);
         }
     }
 

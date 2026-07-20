@@ -20,6 +20,7 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/ContactListener.h> // OnContactAdded/Persisted/Removed -- see PhysicsWorld::Impl
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -34,6 +35,8 @@ JPH_SUPPRESS_WARNINGS
 
 #include <cmath>
 #include <cstdio>
+#include <map>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -136,7 +139,12 @@ JPH::EMotionType ToJoltMotionType(BodyType type) {
 // HelloWorld's main()) because PhysicsSystem::Init only takes a reference to them and
 // requires them to outlive the PhysicsSystem (see its own doc comment) — Impl's lifetime
 // already matches that requirement.
-struct PhysicsWorld::Impl {
+//
+// Also IS-A JPH::ContactListener (registered via SetContactListener in Init), rather than a
+// separate class, since it already owns everything a listener needs to resolve/queue events
+// (`bodies`) and there is exactly one listener per world -- a second class here would only add
+// an indirection.
+struct PhysicsWorld::Impl : public JPH::ContactListener {
     JPH::TempAllocatorImpl *tempAllocator = nullptr;
     JPH::JobSystemThreadPool *jobSystem = nullptr;
     BroadPhaseLayerInterfaceImpl broadPhaseLayerInterface;
@@ -147,6 +155,92 @@ struct PhysicsWorld::Impl {
     // BodyHandle (this seam's opaque id) -> the real JPH::BodyID it names.
     std::unordered_map<uint32_t, JPH::BodyID> bodies;
     uint32_t nextHandle = 1; // 0 is BodyHandle::Invalid
+
+    // --- Contact events (ContactEvent, physics.h) -----------------------------------------
+    // The JPH::ContactListener overrides below are called by Jolt from its own job-system
+    // worker threads, DURING physicsSystem.Update (see ContactListener.h's class comment) --
+    // never from this engine's usual single (main) thread. contactMutex guards pendingEvents
+    // and lastContactGeometry from that concurrent access; ConsumeContactEvents (called on the
+    // main thread, only after Update has returned and every worker is done) is the only
+    // reader, so nothing here needs to be thread-safe beyond the mutex itself.
+    std::mutex contactMutex;
+    std::vector<ContactEvent> pendingEvents;
+
+    struct ContactGeom {
+        Vec3 point;
+        Vec3 normal;
+    };
+    // Last point/normal seen for a still-touching sub-shape pair, keyed the same way Jolt's own
+    // ContactListenerImpl sample does (Samples/Utils/ContactListenerImpl.h). OnContactRemoved's
+    // own doc comment says the bodies may already be destroyed by the time it fires, so an Exit
+    // event reports whatever Enter/Stay last recorded for that pair instead of live geometry.
+    std::map<JPH::SubShapeIDPair, ContactGeom> lastContactGeometry;
+
+    // Resolve a JPH::BodyID back to this seam's opaque handle -- same linear-scan-over-`bodies`
+    // approach Raycast already uses below, fine at today's body counts. Safe to call from a
+    // worker thread with no extra locking: the only writers of `bodies` (CreateBody/DestroyBody)
+    // run on the main thread, which is blocked inside physicsSystem.Update() for this callback's
+    // entire lifetime, so there is no concurrent writer to race against.
+    BodyHandle ResolveHandle(JPH::BodyID id) const {
+        for (const auto &[h, bodyId] : bodies) {
+            if (bodyId == id) { return static_cast<BodyHandle>(h); }
+        }
+        return BodyHandle::Invalid;
+    }
+
+    // Shared body of OnContactAdded/OnContactPersisted: both report the same manifold shape,
+    // differing only in the ContactPhase they queue.
+    void RecordContact(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
+                       ContactPhase phase) {
+        const JPH::SubShapeIDPair key(body1.GetID(), manifold.mSubShapeID1, body2.GetID(), manifold.mSubShapeID2);
+        // Index 0: a manifold always has at least one contact point (that's what makes it a
+        // manifold); this seam reports one representative point/normal per pair, not the full set.
+        const Vec3 point = ToVec3(manifold.GetWorldSpaceContactPointOn1(0));
+        // "direction along which to move body 2 out of collision" (ContactManifold's own
+        // comment) -- i.e. away from body1, which is exactly physics.h's documented `a`->`b`
+        // convention once body1/body2 below are assigned to a/b.
+        const Vec3 normal = ToVec3(manifold.mWorldSpaceNormal);
+
+        const std::lock_guard<std::mutex> lock(contactMutex);
+        lastContactGeometry[key] = {point, normal};
+        ContactEvent ev;
+        ev.a = ResolveHandle(body1.GetID());
+        ev.b = ResolveHandle(body2.GetID());
+        ev.phase = phase;
+        ev.point = point;
+        ev.normal = normal;
+        pendingEvents.push_back(ev);
+    }
+
+    void OnContactAdded(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold,
+                        JPH::ContactSettings &ioSettings) override {
+        RecordContact(inBody1, inBody2, inManifold, ContactPhase::Enter);
+    }
+
+    void OnContactPersisted(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold,
+                            JPH::ContactSettings &ioSettings) override {
+        RecordContact(inBody1, inBody2, inManifold, ContactPhase::Stay);
+    }
+
+    // No Body available here at all (see this override's declaration in ContactListener.h) --
+    // only a SubShapeIDPair naming the two BodyIDs, so Exit falls back to the last point/normal
+    // RecordContact cached for this pair above.
+    void OnContactRemoved(const JPH::SubShapeIDPair &inSubShapePair) override {
+        const std::lock_guard<std::mutex> lock(contactMutex);
+        ContactGeom geom{}; // zeroed if this pair was never actually recorded (shouldn't happen)
+        const auto it = lastContactGeometry.find(inSubShapePair);
+        if (it != lastContactGeometry.end()) {
+            geom = it->second;
+            lastContactGeometry.erase(it);
+        }
+        ContactEvent ev;
+        ev.a = ResolveHandle(inSubShapePair.GetBody1ID());
+        ev.b = ResolveHandle(inSubShapePair.GetBody2ID());
+        ev.phase = ContactPhase::Exit;
+        ev.point = geom.point;
+        ev.normal = geom.normal;
+        pendingEvents.push_back(ev);
+    }
 };
 
 PhysicsWorld::PhysicsWorld() : m_impl(new Impl()) {}
@@ -175,6 +269,9 @@ bool PhysicsWorld::Init() {
     m_impl->physicsSystem.Init(kMaxBodies, kNumBodyMutexes, kMaxBodyPairs, kMaxContactConstraints,
                                m_impl->broadPhaseLayerInterface, m_impl->objectVsBroadPhaseLayerFilter,
                                m_impl->objectLayerPairFilter);
+    // Impl IS-A JPH::ContactListener (see its own comment) -- Jolt only supports one listener
+    // per PhysicsSystem, which matches this seam's one-PhysicsWorld-per-Impl shape exactly.
+    m_impl->physicsSystem.SetContactListener(m_impl);
     return true;
 }
 
@@ -313,6 +410,13 @@ bool PhysicsWorld::Raycast(const Vec3 &origin, const Vec3 &direction, RaycastHit
     outHit.normal = ToVec3(normal);
     outHit.distance = hit.mFraction * Length(direction);
     return true;
+}
+
+std::vector<ContactEvent> PhysicsWorld::ConsumeContactEvents() {
+    const std::lock_guard<std::mutex> lock(m_impl->contactMutex);
+    std::vector<ContactEvent> events;
+    events.swap(m_impl->pendingEvents); // pendingEvents left empty, ready for the next tick
+    return events;
 }
 
 // Pure geometry -- no Jolt dependency, despite living in this Jolt-only file (see the

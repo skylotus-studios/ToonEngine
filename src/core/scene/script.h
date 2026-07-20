@@ -11,6 +11,8 @@
 //  actually demands it; this stays a thin, Diligent-free layer over the existing
 //  entity vector.
 //============================================================================
+#include "core/math.h" // Vec3 -- OnCollision*'s point/normal params
+
 #include <functional>
 #include <istream>
 #include <memory>
@@ -39,6 +41,20 @@ namespace toon {
         // Declared for API symmetry (matches Unity/Hazel naming); not wired to fire in
         // M1.3 — there's no mid-Play entity spawn/destroy yet for it to signal.
         virtual void OnDestroy(Entity &self, Scene &scene) {}
+
+        // Physics contact hooks (roadmap #9), driven by a Jolt ContactListener
+        // (core/physics/physics.h's ContactEvent) via app/physics_glue.h's
+        // DispatchContactEvents. `other` is an entity INDEX, not a reference -- matching
+        // Entity::parent/Scene::selected/ReparentEntity's own idx convention, never a raw
+        // Entity& alias into the entities vector (see Scene's own "never call [structural
+        // mutators] mid-iteration" caution). `point`/`normal` are world-space; `normal` points
+        // away from `self`, toward `other` (Unity's own convention) -- DispatchContactEvents
+        // flips physics.h's a->b normal as needed per side. Enter fires once when contact
+        // starts, Stay every tick it continues, Exit once it ends (Exit's point/normal are the
+        // last ones seen, not live geometry -- see ContactEvent's own comment for why).
+        virtual void OnCollisionEnter(Entity &self, Scene &scene, int other, const Vec3 &point, const Vec3 &normal) {}
+        virtual void OnCollisionStay(Entity &self, Scene &scene, int other, const Vec3 &point, const Vec3 &normal) {}
+        virtual void OnCollisionExit(Entity &self, Scene &scene, int other, const Vec3 &point, const Vec3 &normal) {}
 
         // Read/write THIS script's own fields only (never the entity's transform, which
         // the entity-level serializer already owns), as space-separated tokens appended

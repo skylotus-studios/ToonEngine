@@ -54,6 +54,27 @@ struct RaycastHit {
     float      distance = 0.0f;
 };
 
+// Enter: the tick two bodies started touching. Stay: they're still touching this tick (fires
+// every tick while resting against each other). Exit: they stopped touching. Named to match
+// Unity's OnCollisionEnter/Stay/Exit, the same naming precedent this codebase already follows
+// for ScriptComponent/NativeScriptComponent.
+enum class ContactPhase { Enter, Stay, Exit };
+
+// One contact between two bodies, queued during PhysicsWorld::Step and drained by
+// ConsumeContactEvents. `point`/`normal` describe one representative contact position on the
+// touching surface (a real contact can have several; this seam reports just one, enough for a
+// script deciding where/which way to react). `normal` points from `a`'s side toward `b`'s
+// side. On Exit, Jolt no longer has live contact geometry to report (the bodies may already be
+// gone), so `point`/`normal` are the last values seen for this pair on its most recent
+// Enter/Stay.
+struct ContactEvent {
+    BodyHandle    a = BodyHandle::Invalid;
+    BodyHandle    b = BodyHandle::Invalid;
+    ContactPhase  phase = ContactPhase::Enter;
+    Vec3          point;
+    Vec3          normal;
+};
+
 // --- PhysicsWorld --------------------------------------------------------------
 // PIMPL, the same rationale as Renderer (core/renderer.h): Jolt already provides its own
 // internal dispatch, so a second virtual-dispatch layer here would buy nothing — see
@@ -102,6 +123,12 @@ public:
     // now so a future mouse-pick/gameplay raycast has no new plumbing to add; nothing
     // calls it yet (see CLAUDE.md's roadmap — mouse-pick is explicitly deferred).
     bool Raycast(const Vec3 &origin, const Vec3 &direction, RaycastHit &outHit) const;
+
+    // Drain every contact event queued since the last call (Enter/Stay on every touching pair,
+    // Exit on every pair that stopped touching). Call once per fixed tick, right after Step():
+    // events are collected on Jolt's own physics worker threads during Step (see physics.cpp),
+    // and only safe to read from the caller's thread once Step has returned. Clears the queue.
+    std::vector<ContactEvent> ConsumeContactEvents();
 
 private:
     struct Impl; // defined in physics.cpp — hides all Jolt types

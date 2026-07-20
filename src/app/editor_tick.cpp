@@ -4,6 +4,7 @@
 #include "app/editor_tick.h"
 
 #include "app/editor_state.h"
+#include "app/physics_glue.h" // DispatchContactEvents
 #include "core/audio/audio.h"
 #include "core/camera/camera.h"
 #include "core/input/action_map.h"
@@ -84,6 +85,12 @@ namespace toon {
                         SetEntityWorldMatrix(state.scene, i, world);
                     }
                 }
+
+                // Contact events (roadmap #9): dispatched after the write-back above, so a
+                // script's OnCollision* sees this tick's already-updated post-physics
+                // transforms, not last tick's. Gated on runScripts like UpdateScripts above --
+                // no point draining events nothing will react to.
+                if (state.runScripts) { DispatchContactEvents(state.physicsWorld, state.scene, state.bodyToEntity); }
 
                 state.accumulator -= kFixedDt;
             }
