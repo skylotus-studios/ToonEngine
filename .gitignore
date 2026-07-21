@@ -37,7 +37,7 @@ Thumbs.db
 /CLAUDE.md
 /MEMORY.md
 /ARCHIVE.md
-/.claude/
+/.claude
 /.clang-format
 /.clangd
 /docs/cpp-style-guide.md
@@ -49,4 +49,4 @@ Thumbs.db
 
 # Local reference copy of the old OpenGL engine (porting/carry-over source only —
 # not part of the build; keeps its own duplicate of the LFS models). Stays local.
-/ToonEngineOld/
+/ToonEngineOld
