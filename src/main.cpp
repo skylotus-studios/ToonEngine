@@ -28,9 +28,16 @@
 
 #include <cstdio>
 #include <filesystem> // .scene extension check, routing an asset-browser double-click through LoadSceneInto
+#include <iostream>
 #include <string>
 
 int main() {
+    // Diligent buffers its own logging through std::cout; a hang or a silent early-return
+    // init failure can otherwise lose whatever it already printed (see MEMORY.md's glTF
+    // loading gotchas). Unbuffered is negligible cost for a windowed editor's own startup
+    // logging.
+    std::cout.setf(std::ios::unitbuf);
+
     if (!glfwInit()) {
         std::fprintf(stderr, "GLFW init failed\n");
         return 1;

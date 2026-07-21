@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "core/math.h" // toon::Vec3/Quat (plain, Diligent-free)
 
@@ -105,6 +106,20 @@ namespace toon {
         Vec3 position = {0.0f, 0.0f, 0.0f};
         Quat rotation;
         Vec3 scale = {1.0f, 1.0f, 1.0f};
+    };
+
+    // Which of a skinned model's animations to sample, and when, for one DrawModel/
+    // DrawModelShadow call. `clipIndex` indexes the model's own animation list (see
+    // GetModelAnimationCount/Name); -1 plays no animation (bind pose). `time`/`prevTime`
+    // are seconds into the clip, this frame and last -- both are needed because motion
+    // vectors on an animated character depend on the bone motion, not just the object's
+    // own world-matrix motion (see Renderer::DrawModel). A null AnimationState* (the
+    // default at every call site) means "not animated": DrawModel/DrawModelShadow fall
+    // back to the model's ordinary (possibly unskinned) draw path unchanged.
+    struct AnimationState {
+        int32_t clipIndex = -1;
+        float time = 0.0f;
+        float prevTime = 0.0f;
     };
 
     // HDR resolve / tone-mapping controls. The scene renders to an offscreen HDR
@@ -259,23 +274,40 @@ namespace toon {
         uint32_t BeginShadowPass();
         void BeginShadowCascade(uint32_t cascadeIndex);
         void DrawMeshShadow(MeshHandle mesh, const Mat4 &world);
-        void DrawModelShadow(ModelHandle model, const Mat4 &world);
+        void DrawModelShadow(ModelHandle model, const Mat4 &world, const AnimationState *anim = nullptr);
         void EndShadowPass();
 
         // --- Scene: glTF models -------------------------------------------------
         // Load a glTF/GLB model via DiligentTools' loader (Diligent::GLTF::Model owns the
-        // GPU buffers + textures). Returns ModelHandle::Invalid on failure.
+        // GPU buffers + textures). Returns ModelHandle::Invalid on failure. Every model is
+        // loaded requesting the same vertex attributes (position/normal/uv, plus joints/
+        // weights in a second buffer slot); a file with no skin simply leaves that second
+        // buffer unread by its (unskinned) draw path -- see ModelHasSkin.
         ModelHandle LoadModel(const char *path);
 
-        // Draw a loaded model cel-shaded (textured fill; no inverted-hull outline yet).
-        // `style` supplies the shared look (bands / ambient / roughness) and its
-        // `baseColor` is a global tint over each primitive's glTF base color (default white
-        // = untinted). Motion vectors come from transform vs prevTransform, like DrawMesh.
+        // True if the loaded model has at least one skin (glTF's rigging data) -- i.e. it's
+        // eligible to be drawn animated. Gates the Properties panel's "Add Animation" button.
+        bool ModelHasSkin(ModelHandle model) const;
+
+        // A model's own animation clip list, for a UI picker (e.g. Properties panel). Index
+        // is what AnimationState::clipIndex selects. False/0/"" for an invalid handle or an
+        // out-of-range index.
+        uint32_t GetModelAnimationCount(ModelHandle model) const;
+        std::string GetModelAnimationName(ModelHandle model, uint32_t index) const;
+        float GetModelAnimationDuration(ModelHandle model, uint32_t index) const;
+
+        // Draw a loaded model cel-shaded (textured fill; inverted-hull outline for a skinned
+        // model too, once animated -- see AnimationState). `style` supplies the shared look
+        // (bands / ambient / roughness) and its `baseColor` is a global tint over each
+        // primitive's glTF base color (default white = untinted). Motion vectors come from
+        // transform vs prevTransform (object motion) and, when `anim` is non-null, from the
+        // bone motion between anim->time and anim->prevTime too.
         void DrawModel(ModelHandle model, const Transform &transform, const Transform &prevTransform,
-                       const Material &style);
+                       const Material &style, const AnimationState *anim = nullptr);
 
         // Draw a loaded model with a pre-composed world matrix (see DrawMesh's Mat4 overload).
-        void DrawModel(ModelHandle model, const Mat4 &world, const Mat4 &prevWorld, const Material &style);
+        void DrawModel(ModelHandle model, const Mat4 &world, const Mat4 &prevWorld, const Material &style,
+                       const AnimationState *anim = nullptr);
 
         // --- Textures (editor UI: asset thumbnails/previews) --------------------
         // Not part of the toon draw path (materials don't carry textures yet); this exists
@@ -321,11 +353,18 @@ namespace toon {
         // header stays Diligent-free.
         bool CreateToonPipeline();                                    // toon fill/outline PSOs + shared CB
         bool CreateModelPipeline();                                   // glTF model cel-fill PSO (+ albedo)
+        bool CreateSkinnedModelPipeline();                            // animated glTF model fill/outline PSOs
         bool CreatePostPipeline();                                    // HDR tone-map resolve PSO
         bool CreatePostFX();                                          // PostFXContext + Bloom + SSAO effects
         bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + normal + depth + motion
         bool CreateShadowMap();                                       // ShadowMapManager + depth-only PSOs
         bool CreateWireframePipeline();                               // debug line-list PSO (DrawWireframe)
+
+        // Roadmap #11 (skeletal animation): grow the shared skinning joints buffer (never
+        // shrink it) to hold at least `neededElements` bone matrices, re-pointing every
+        // skinned draw's g_Joints binding at the new buffer when it actually grows. Called
+        // from DrawModel/DrawModelShadow before a skinned draw's own joint-matrix upload.
+        void EnsureJointsBufferCapacity(uint32_t neededElements);
 
         struct Impl; // defined in renderer.cpp; hides all Diligent types
         Impl *m_impl = nullptr;

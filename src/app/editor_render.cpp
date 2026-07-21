@@ -27,7 +27,16 @@ namespace toon {
                 if (e.mesh != MeshHandle::Invalid) {
                     renderer.DrawMeshShadow(e.mesh, e.worldMatrix);
                 } else if (e.model != ModelHandle::Invalid) {
-                    renderer.DrawModelShadow(e.model, e.worldMatrix);
+                    // Roadmap #11: an animated entity's shadow follows its animated pose, not
+                    // a static bind-pose one -- see Renderer::DrawModelShadow's AnimationState
+                    // param. Omitted (nullptr) for an unanimated model, the pre-#11 path
+                    // unchanged, so a static model never pays for a second ComputeTransforms.
+                    if (e.animation) {
+                        const AnimationState anim{e.animation->clipIndex, e.animation->time, e.animation->prevTime};
+                        renderer.DrawModelShadow(e.model, e.worldMatrix, &anim);
+                    } else {
+                        renderer.DrawModelShadow(e.model, e.worldMatrix);
+                    }
                 }
             }
         }
@@ -52,6 +61,11 @@ namespace toon {
             m.outlineWidth = e.material.outlineWidth * state.outlineScale;
             if (isMesh) {
                 renderer.DrawMesh(e.mesh, e.worldMatrix, e.prevWorldMatrix, m);
+            } else if (e.animation) {
+                // Roadmap #11: see the shadow pre-pass loop above for why this is
+                // conditional rather than always constructing an AnimationState.
+                const AnimationState anim{e.animation->clipIndex, e.animation->time, e.animation->prevTime};
+                renderer.DrawModel(e.model, e.worldMatrix, e.prevWorldMatrix, m, &anim);
             } else {
                 renderer.DrawModel(e.model, e.worldMatrix, e.prevWorldMatrix, m);
             }

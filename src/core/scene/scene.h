@@ -69,6 +69,25 @@ namespace toon {
         SoundHandle handle = SoundHandle::Invalid;
     };
 
+    // An animation clip playing on an entity's (skinned) model (roadmap #11: skeletal
+    // animation). `clipIndex` indexes the model's own animation list (Renderer::
+    // GetModelAnimationCount/Name); -1 = no clip selected, draws bind pose. Unlike
+    // AudioSource/RigidBodyComponent above, this holds no runtime handle: the bone-matrix
+    // palette is recomputed straight from the model + `time` at draw time (Renderer::DrawModel/
+    // DrawModelShadow's AnimationState param), so there's nothing to build fresh when a Play
+    // session starts and nothing to leave stale when one stops -- Stop's existing scene-backup
+    // revert (see "Play/Pause/Step" in docs/architecture.md) already covers this component for
+    // free, the same way it covers `transform`.
+    struct AnimationComponent {
+        int32_t clipIndex = -1;
+        float time = 0.0f;
+        // Previous fixed sim tick's `time`, for motion vectors (see Renderer::AnimationState);
+        // snapshotted by SnapshotSimState, the same treatment prevSimTransform gets below.
+        float prevTime = 0.0f;
+        bool playing = true;
+        bool looping = true;
+    };
+
     // One node in the scene. It renders either a procedural primitive (`mesh` set) or a loaded
     // glTF model (`model` set); `material` is the primitive's material, or the model's
     // style/tint. `transform == nullopt` marks a pure grouping/anchor node (the root) that
@@ -107,6 +126,11 @@ namespace toon {
 
         // Audio (M2.2): a positional or non-positional sound emitter; see AudioSource above.
         std::optional<AudioSource> audioSource;
+
+        // Skeletal animation (roadmap #11): which clip of `model`'s own animation list is
+        // playing, and when; see AnimationComponent above. Only meaningful when `model` is
+        // set and Renderer::ModelHasSkin(model) is true.
+        std::optional<AnimationComponent> animation;
 
         // Attached native scripts (core/scene/script.h): per-tick gameplay hooks (M1.3). A
         // std::unique_ptr member makes ScriptComponent, and therefore Entity, NOT implicitly

@@ -12,6 +12,9 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace toon {
 
     void TickEditor(EditorState &state) {
@@ -61,6 +64,27 @@ namespace toon {
                 // is the new baseline it continues from on resume, instead of snapping back to
                 // where an absolute clock-based formula would say it "should" be.
                 if (state.runScripts) { UpdateScripts(state.scene, static_cast<float>(kFixedDt)); }
+
+                // Skeletal animation (roadmap #11): advance every playing clip by this tick.
+                // Gated only on runFixedStepsThisFrame (Playing/Step), the same as physics
+                // below and unlike scripts -- no separate "run animations" toggle, matching
+                // physics's own precedent ("nothing in the roadmap called for one"), since
+                // this has no gameplay-logic implications to gate on runScripts for. Looping
+                // wraps at the clip's own duration (Renderer::GetModelAnimationDuration);
+                // a non-looping clip clamps to its end instead of replaying from zero.
+                for (Entity &e : state.scene.entities) {
+                    if (!e.animation || !e.animation->playing || e.animation->clipIndex < 0) { continue; }
+                    e.animation->time += static_cast<float>(kFixedDt);
+                    const float duration = state.renderer.GetModelAnimationDuration(
+                        e.model, static_cast<uint32_t>(e.animation->clipIndex));
+                    if (duration > 0.0f) {
+                        if (e.animation->looping) {
+                            e.animation->time = std::fmod(e.animation->time, duration);
+                        } else {
+                            e.animation->time = std::min(e.animation->time, duration);
+                        }
+                    }
+                }
 
                 // Physics (M2.1): push this tick's static/kinematic transforms into Jolt (so a
                 // gizmo-dragged wall, say, is reflected before the step that would otherwise

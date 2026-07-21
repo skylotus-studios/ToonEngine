@@ -114,7 +114,9 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <memory>
+#include <string>
 #include <vector>
 
 // Absolute path to the HLSL sources, baked in by CMake so the shader stream
@@ -309,6 +311,14 @@ namespace toon {
         float4 color;
     };
 
+    // GPU mirror of {model_fill,model_outline}_skinned.hlsl's SkinConstants cbuffer
+    // (roadmap #11: skeletal animation). Padded to 16 bytes (a uniform buffer's minimum
+    // alignment) even though only the first field is used.
+    struct SkinConstants {
+        uint32_t jointCount;
+        uint32_t pad[3];
+    };
+
 #ifdef TOON_SHADER_HOT_RELOAD
     // Fires on efsw's own watch thread (see Renderer::Impl::shaderWatcher below), so it does
     // the absolute minimum: flip a flag. `dirty` outlives the listener (it's an Impl member;
@@ -395,6 +405,32 @@ namespace toon {
         RefCntAutoPtr<IShaderResourceBinding> modelSRB;
         RefCntAutoPtr<IPipelineState> modelOutlinePSO; // inverted-hull outline
         RefCntAutoPtr<IShaderResourceBinding> modelOutlineSRB;
+
+        // Roadmap #11 (skeletal animation): animated-model counterparts of the two PSOs
+        // above, plus the shadow one below -- separate PSOs/shaders (not a runtime branch
+        // in the static ones) because their vertex layout genuinely differs (JOINTS_0/
+        // WEIGHTS_0 in a second buffer slot; see ModelVertexAttribs), the same "different
+        // vertex shape needs its own PSO" reason the procedural-vs-model shadow PSOs are
+        // already split. Chosen per node (GLTF::Node::pSkin != nullptr), not per model, so
+        // a model mixing skinned and unskinned meshes still draws each node correctly.
+        RefCntAutoPtr<IPipelineState> modelSkinnedPSO;
+        RefCntAutoPtr<IShaderResourceBinding> modelSkinnedSRB;
+        RefCntAutoPtr<IPipelineState> modelOutlineSkinnedPSO;
+        RefCntAutoPtr<IShaderResourceBinding> modelOutlineSkinnedSRB;
+
+        // Per-draw scalar telling the skinned VS/PS how many joints one frame's worth of
+        // jointsBuffer holds (fill/outline only -- the previous frame's palette starts
+        // right after, at jointsBuffer[jointCount + i]; the shadow pass has no motion
+        // vectors, so it never needs this). Same MapHelper-per-draw idiom as `constants`.
+        RefCntAutoPtr<IBuffer> skinConstants;
+
+        // Growable scratch palette for whichever skinned draw is in flight: a structured
+        // buffer (not a fixed-size uniform array) so no joint-count ceiling is baked into
+        // the skinned shaders. Grown (never shrunk) on demand by EnsureJointsBufferCapacity;
+        // jointsBufferCapacity tracks its current size in float4x4 elements.
+        RefCntAutoPtr<IBuffer> jointsBuffer;
+        Uint32 jointsBufferCapacity = 0;
+
         std::vector<std::unique_ptr<GLTF::Model>> models;
         // Local-space bounds (model-space, RootTransform = identity), index-matched with
         // `models` (one push_back site, LoadModel, keeps them in sync). Same mouse-pick use as
@@ -464,6 +500,12 @@ namespace toon {
         RefCntAutoPtr<IShaderResourceBinding> shadowSRB;
         RefCntAutoPtr<IPipelineState> modelShadowPSO; // depth-only, glTF model layout
         RefCntAutoPtr<IShaderResourceBinding> modelShadowSRB;
+        // Roadmap #11 (skeletal animation): depth-only, animated glTF model layout (adds
+        // JOINTS_0/WEIGHTS_0, buffer 1 -- see ModelVertexAttribs); skins position so a
+        // moving character's shadow follows its animated silhouette. See Impl::modelSkinnedPSO
+        // above for why this is a separate PSO rather than a branch in modelShadowPSO's shader.
+        RefCntAutoPtr<IPipelineState> modelShadowSkinnedPSO;
+        RefCntAutoPtr<IShaderResourceBinding> modelShadowSkinnedSRB;
         RefCntAutoPtr<ISampler> shadowSampler; // comparison sampler for g_ShadowMap_sampler
         Uint32 currentShadowCascade = 0;       // set by BeginShadowCascade, read by DrawMeshShadow/DrawModelShadow
 
@@ -752,18 +794,68 @@ namespace toon {
         return shader;
     }
 
-    // Vertex attributes we ask the glTF loader to produce: POSITION / NORMAL / TEXCOORD_0,
-    // all interleaved into buffer 0. The model PSO's input layout is built from this SAME
-    // array (VertexAttributesToInputLayout), so the loader's buffer and the shader agree on
-    // ATTRIB0/1/2. (No smooth normal; models get the fill pass only, no inverted hull.)
+    // Vertex attributes we ask the glTF loader to produce, for EVERY model load, skinned or
+    // not: POSITION/NORMAL/TEXCOORD_0 interleaved into buffer 0 (unchanged since before
+    // roadmap #11 -- this is what keeps an unskinned model's existing draw path byte-for-byte
+    // identical), plus JOINTS_0/WEIGHTS_0 interleaved into buffer 1 (matching DiligentTools'
+    // own DefaultVertexAttributes' choice of buffer slot for these two). A file with no skin
+    // at all just leaves buffer 1 unread -- only the skinned PSOs' input layout references it
+    // (see CreateSkinnedModelPipeline); the static PSOs' layout still only references buffer
+    // 0, so binding buffer 1 alongside it (DrawModel's existing GetVertexBufferCount loop
+    // already binds however many buffers exist, unchanged) is simply ignored.
+    //
+    // A primitive with no JOINTS_0/WEIGHTS_0 of its own (any primitive in an unskinned model,
+    // or a stray unskinned primitive inside an otherwise-skinned one) gets the DEFAULT weight
+    // below instead of the loader's usual zero-fill: (1,0,0,0) always fully follows whatever
+    // matrix ends up at the per-draw joint palette's slot 0. All-zero weights would instead
+    // collapse the vertex to the origin (a zero matrix), since nothing in the skin blend would
+    // sum to identity.
     static const GLTF::VertexAttributeDesc *ModelVertexAttribs(size_t &count) {
+        static constexpr float4 kDefaultJointWeight{1.0f, 0.0f, 0.0f, 0.0f};
         static const GLTF::VertexAttributeDesc kAttribs[] = {
             {GLTF::PositionAttributeName, 0, VT_FLOAT32, 3},
             {GLTF::NormalAttributeName, 0, VT_FLOAT32, 3},
             {GLTF::Texcoord0AttributeName, 0, VT_FLOAT32, 2},
+            {GLTF::JointsAttributeName, 1, VT_FLOAT32, 4},
+            {GLTF::WeightsAttributeName, 1, VT_FLOAT32, 4, &kDefaultJointWeight},
         };
         count = sizeof(kAttribs) / sizeof(kAttribs[0]);
         return kAttribs;
+    }
+
+    // Roadmap #11 (skeletal animation): grows m_impl->jointsBuffer (never shrinks it) to
+    // hold at least `neededElements` float4x4 matrices, re-pointing every skinned SRB's
+    // g_Joints variable at the new buffer's SRV when it actually grows (rare -- only the
+    // first draw of a session's largest skin, or a later one that beats it). Called once
+    // per skinned draw, before that draw's own MAP_WRITE+MAP_FLAG_DISCARD upload. A member
+    // function, not a free one like CreateToonShader above: it needs m_impl access, and
+    // Impl is private to Renderer.
+    void Renderer::EnsureJointsBufferCapacity(uint32_t neededElements) {
+        if (neededElements <= m_impl->jointsBufferCapacity) { return; }
+
+        BufferDesc bd;
+        bd.Name = "skinning joints buffer";
+        bd.Usage = USAGE_DYNAMIC;
+        bd.BindFlags = BIND_SHADER_RESOURCE;
+        bd.CPUAccessFlags = CPU_ACCESS_WRITE;
+        bd.Mode = BUFFER_MODE_STRUCTURED;
+        bd.ElementByteStride = sizeof(float4x4);
+        bd.Size = Uint64{neededElements} * sizeof(float4x4);
+        m_impl->jointsBuffer.Release();
+        m_impl->device->CreateBuffer(bd, nullptr, &m_impl->jointsBuffer);
+        m_impl->jointsBufferCapacity = m_impl->jointsBuffer ? neededElements : 0;
+        if (!m_impl->jointsBuffer) { return; }
+
+        IBufferView *jointsSRV = m_impl->jointsBuffer->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE);
+        IShaderResourceBinding *skinnedSRBs[] = {m_impl->modelSkinnedSRB, m_impl->modelOutlineSkinnedSRB,
+                                                 m_impl->modelShadowSkinnedSRB};
+        for (IShaderResourceBinding *srb : skinnedSRBs) {
+            // Every skinned SRB already exists by the time any draw can call this (they're
+            // created during Init, before the render loop starts) -- null-checked anyway,
+            // matching this file's usual "set if present" defensiveness elsewhere.
+            if (!srb) { continue; }
+            if (auto *v = srb->GetVariableByName(SHADER_TYPE_VERTEX, "g_Joints")) { v->Set(jointsSRV); }
+        }
     }
 
     // --- Construction & device / swap-chain bring-up ----------------------------
@@ -858,6 +950,11 @@ namespace toon {
 
         if (!CreateModelPipeline()) {
             std::fprintf(stderr, "Renderer: failed to create model pipeline\n");
+            return false;
+        }
+
+        if (!CreateSkinnedModelPipeline()) {
+            std::fprintf(stderr, "Renderer: failed to create skinned model pipeline\n");
             return false;
         }
 
@@ -1116,13 +1213,79 @@ namespace toon {
             if (!m_impl->modelShadowSRB) { return false; }
         }
 
+        // Roadmap #11 (skeletal animation): animated-model shadow PSO. Same idea as the
+        // static one above, but reads JOINTS_0/WEIGHTS_0 from buffer 1 (see
+        // ModelVertexAttribs) and skins position before the light-space transform
+        // (model_shadow_depth_skinned.hlsl) -- so an animated character's shadow follows its
+        // animated silhouette instead of a static bind-pose one. No motion vectors in a
+        // depth-only pass, so unlike the fill/outline skinned PSOs this one has no
+        // SkinConstants CB: its shader always reads g_Joints from offset 0.
+        {
+            // PACK_MATRIX_ROW_MAJOR: joints_common.hlsli's g_Joints needs it (see that file's
+            // own comment); this shader has no other row-major-ambiguous declaration, but the
+            // flag is still required for g_Joints alone.
+            auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "model shadow skinned VS",
+                                       "model_shadow_depth_skinned.hlsl", "VSMain",
+                                       SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
+            if (!vs) { return false; }
+
+            LayoutElement skinnedModelLayout[] = {
+                LayoutElement{0, 0, 3, VT_FLOAT32, False}, // ATTRIB0 position (buffer 0)
+                LayoutElement{1, 0, 3, VT_FLOAT32, False}, // ATTRIB1 normal (buffer 0)
+                LayoutElement{2, 0, 2, VT_FLOAT32, False}, // ATTRIB2 uv (buffer 0)
+                LayoutElement{3, 1, 4, VT_FLOAT32, False}, // ATTRIB3 joints (buffer 1)
+                LayoutElement{4, 1, 4, VT_FLOAT32, False}, // ATTRIB4 weights (buffer 1)
+            };
+
+            GraphicsPipelineStateCreateInfo ci;
+            ci.PSODesc.Name = "model shadow skinned PSO";
+            ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+            GraphicsPipelineDesc &gp = ci.GraphicsPipeline;
+            gp.NumRenderTargets = 0;
+            gp.DSVFormat = kSceneDepthFormat;
+            gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            gp.RasterizerDesc.CullMode = CULL_MODE_FRONT;
+            gp.RasterizerDesc.FrontCounterClockwise = False; // model winding (matches its outline PSO)
+            gp.DepthStencilDesc.DepthEnable = True;
+            gp.DepthStencilDesc.DepthWriteEnable = True;
+            gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+            gp.InputLayout.LayoutElements = skinnedModelLayout;
+            gp.InputLayout.NumElements = sizeof(skinnedModelLayout) / sizeof(skinnedModelLayout[0]);
+
+            ci.pVS = vs;
+            ci.pPS = nullptr;
+            ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
+            // g_Joints must be DYNAMIC, not (the default) STATIC: its underlying buffer
+            // doesn't exist yet at PSO-creation time (EnsureJointsBufferCapacity creates it
+            // lazily, on the first skinned draw) and can be recreated later on growth, and a
+            // STATIC variable can only ever be set BEFORE CreateShaderResourceBinding (see
+            // this function's own comment above on ShadowConstants). Same "changes over the
+            // renderer's lifetime" reasoning as g_HDRColor/g_AO elsewhere in this file.
+            ShaderResourceVariableDesc skinnedShadowVars[] = {
+                {SHADER_TYPE_VERTEX, "g_Joints", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            };
+            ci.PSODesc.ResourceLayout.Variables = skinnedShadowVars;
+            ci.PSODesc.ResourceLayout.NumVariables = sizeof(skinnedShadowVars) / sizeof(skinnedShadowVars[0]);
+
+            cache->CreateGraphicsPipelineState(ci, &m_impl->modelShadowSkinnedPSO);
+            if (!m_impl->modelShadowSkinnedPSO) { return false; }
+            if (auto *v =
+                    m_impl->modelShadowSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "ShadowConstants")) {
+                v->Set(m_impl->shadowDrawConstants);
+            }
+            m_impl->modelShadowSkinnedPSO->CreateShaderResourceBinding(&m_impl->modelShadowSkinnedSRB, true);
+            if (!m_impl->modelShadowSkinnedSRB) { return false; }
+        }
+
         // A touch-up over the struct defaults DistributeCascades doesn't set: a small nonzero
         // world-space PCF filter so the shadow edge isn't a hard single-tap-aliased line (the
         // library default, fFilterWorldSize = 0, means no kernel spread at all). Persists
         // across frames -- DistributeCascades only ever writes cascade geometry.
         m_impl->shadowMapAttribs.fFilterWorldSize = 0.02f;
 
-        return m_impl->shadowPSO && m_impl->shadowSRB && m_impl->modelShadowPSO && m_impl->modelShadowSRB;
+        return m_impl->shadowPSO && m_impl->shadowSRB && m_impl->modelShadowPSO && m_impl->modelShadowSRB &&
+               m_impl->modelShadowSkinnedPSO && m_impl->modelShadowSkinnedSRB;
     }
 
     bool Renderer::CreatePostPipeline() {
@@ -1573,6 +1736,185 @@ namespace toon {
         return m_impl->modelOutlineSRB != nullptr;
     }
 
+    // Roadmap #11 (skeletal animation): animated-model counterpart of CreateModelPipeline,
+    // for models with at least one glTF skin (see Renderer::ModelHasSkin). A separate pair
+    // of PSOs, not a runtime branch added to the static ones -- their vertex layout genuinely
+    // differs (JOINTS_0/WEIGHTS_0 in a second buffer slot), the same reason the shadow pass
+    // already keeps separate procedural-vs-model PSOs. DrawModel/DrawModelShadow pick these
+    // per node (GLTF::Node::pSkin != nullptr), falling back to the static PSOs otherwise, so
+    // an unskinned model's draw path is entirely unaffected by this function's existence.
+    bool Renderer::CreateSkinnedModelPipeline() {
+        IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this, not `device`
+        IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
+
+        // Small per-draw scalar (how many joints this draw's palette holds, for the fill/
+        // outline shaders' current-vs-previous offset math -- see SkinConstants's own
+        // comment). Same MapHelper-remapped-per-draw idiom as every other CB here.
+        {
+            BufferDesc cbDesc;
+            cbDesc.Name = "skin constants";
+            cbDesc.Size = sizeof(SkinConstants);
+            cbDesc.Usage = USAGE_DYNAMIC;
+            cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
+            cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            device->CreateBuffer(cbDesc, nullptr, &m_impl->skinConstants);
+            if (!m_impl->skinConstants) { return false; }
+        }
+
+        // Buffer 0: pos/normal/uv, byte-identical to modelLayout in CreateModelPipeline
+        // (pos@0/normal@12/uv@24, stride 32). Buffer 1: JOINTS_0/WEIGHTS_0 interleaved
+        // (joints@0/weights@16, stride 32) -- matches the loader's own packing for the
+        // ModelVertexAttribs entries requesting buffer slot 1.
+        LayoutElement skinnedLayout[] = {
+            LayoutElement{0, 0, 3, VT_FLOAT32, False}, // ATTRIB0 position (buffer 0)
+            LayoutElement{1, 0, 3, VT_FLOAT32, False}, // ATTRIB1 normal (buffer 0)
+            LayoutElement{2, 0, 2, VT_FLOAT32, False}, // ATTRIB2 uv (buffer 0)
+            LayoutElement{3, 1, 4, VT_FLOAT32, False}, // ATTRIB3 joints (buffer 1)
+            LayoutElement{4, 1, 4, VT_FLOAT32, False}, // ATTRIB4 weights (buffer 1)
+        };
+
+        // --- Fill pass PSO ---
+        // PACK_MATRIX_ROW_MAJOR: model_fill_skinned.hlsl also references DiligentFX's
+        // ShadowMapAttribs/CascadeAttribs (via ComputeShadowFactor) -- see CreateToonShader's
+        // comment.
+        auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "model fill skinned VS", "model_fill_skinned.hlsl",
+                                   "VSMain", SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
+        auto ps = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "model fill skinned PS", "model_fill_skinned.hlsl",
+                                   "PSMain", SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
+        if (!vs || !ps) { return false; }
+
+        GraphicsPipelineStateCreateInfo ci;
+        ci.PSODesc.Name = "model fill skinned PSO";
+        ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+        GraphicsPipelineDesc &gp = ci.GraphicsPipeline;
+        gp.NumRenderTargets = 3;
+        gp.RTVFormats[0] = kHDRFormat;
+        gp.RTVFormats[1] = kNormalFormat;
+        gp.RTVFormats[2] = kMotionFormat;
+        gp.DSVFormat = kSceneDepthFormat;
+        gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        gp.RasterizerDesc.CullMode = CULL_MODE_BACK;
+        gp.RasterizerDesc.FrontCounterClockwise = False; // model winding, same as CreateModelPipeline
+        gp.DepthStencilDesc.DepthEnable = True;
+        gp.DepthStencilDesc.DepthWriteEnable = True;
+        gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+        gp.InputLayout.LayoutElements = skinnedLayout;
+        gp.InputLayout.NumElements = sizeof(skinnedLayout) / sizeof(skinnedLayout[0]);
+
+        ci.pVS = vs;
+        ci.pPS = ps;
+
+        // Same shape as CreateModelPipeline's `vars`, plus SkinConstants (STATIC: bound once
+        // below, remapped via MapHelper per draw thereafter, like Constants) and g_Joints
+        // (DYNAMIC: its buffer doesn't exist yet at PSO-creation time and can be recreated
+        // later on growth -- see EnsureJointsBufferCapacity's own comment).
+        ShaderResourceVariableDesc vars[] = {
+            {SHADER_TYPE_VERTEX, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_Albedo", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+            {SHADER_TYPE_PIXEL, "ShadowAttribsCB", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_ShadowMap", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_VERTEX, "SkinConstants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_VERTEX, "g_Joints", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+        };
+        ci.PSODesc.ResourceLayout.Variables = vars;
+        ci.PSODesc.ResourceLayout.NumVariables = sizeof(vars) / sizeof(vars[0]);
+
+        SamplerDesc linWrap;
+        linWrap.MinFilter = FILTER_TYPE_LINEAR;
+        linWrap.MagFilter = FILTER_TYPE_LINEAR;
+        linWrap.MipFilter = FILTER_TYPE_LINEAR;
+        linWrap.AddressU = TEXTURE_ADDRESS_WRAP;
+        linWrap.AddressV = TEXTURE_ADDRESS_WRAP;
+        linWrap.AddressW = TEXTURE_ADDRESS_WRAP;
+        ImmutableSamplerDesc immSamplers[] = {
+            {SHADER_TYPE_PIXEL, "g_Albedo", linWrap},
+        };
+        ci.PSODesc.ResourceLayout.ImmutableSamplers = immSamplers;
+        ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
+
+        cache->CreateGraphicsPipelineState(ci, &m_impl->modelSkinnedPSO);
+        if (!m_impl->modelSkinnedPSO) { return false; }
+        if (auto *v = m_impl->modelSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) {
+            v->Set(m_impl->constants);
+        }
+        if (auto *p = m_impl->modelSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "Constants")) {
+            p->Set(m_impl->constants);
+        }
+        if (auto *v = m_impl->modelSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "ShadowAttribsCB")) {
+            v->Set(m_impl->shadowAttribsCB);
+        }
+        if (auto *v = m_impl->modelSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "g_ShadowMap")) {
+            v->Set(m_impl->shadowMap.GetSRV());
+        }
+        if (auto *v = m_impl->modelSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SkinConstants")) {
+            v->Set(m_impl->skinConstants);
+        }
+        m_impl->modelSkinnedPSO->CreateShaderResourceBinding(&m_impl->modelSkinnedSRB, true);
+        if (!m_impl->modelSkinnedSRB) { return false; }
+
+        // --- Outline pass PSO (inverted hull) --- same skinned vertex layout; cull FRONT to
+        // keep the enlarged back-facing shell; Constants + SkinConstants + g_Joints only (no
+        // albedo texture, matching CreateModelPipeline's own unskinned outline PSO).
+        // PACK_MATRIX_ROW_MAJOR: joints_common.hlsli's g_Joints needs it (see that file's own
+        // comment) -- unlike model_fill_skinned.hlsl, this shader doesn't ALSO need it for
+        // ShadowMapAttribs/CascadeAttribs (this pass never calls ComputeShadowFactor), but the
+        // flag is still required for g_Joints alone.
+        auto ovs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "model outline skinned VS",
+                                    "model_outline_skinned.hlsl", "VSMain", SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
+        auto ops = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "model outline skinned PS",
+                                    "model_outline_skinned.hlsl", "PSMain", SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
+        if (!ovs || !ops) { return false; }
+
+        GraphicsPipelineStateCreateInfo oci;
+        oci.PSODesc.Name = "model outline skinned PSO";
+        oci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+        GraphicsPipelineDesc &ogp = oci.GraphicsPipeline;
+        ogp.NumRenderTargets = 3;
+        ogp.RTVFormats[0] = kHDRFormat;
+        ogp.RTVFormats[1] = kNormalFormat;
+        ogp.RTVFormats[2] = kMotionFormat;
+        ogp.DSVFormat = kSceneDepthFormat;
+        ogp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        ogp.RasterizerDesc.CullMode = CULL_MODE_FRONT;
+        ogp.RasterizerDesc.FrontCounterClockwise = False;
+        ogp.DepthStencilDesc.DepthEnable = True;
+        ogp.DepthStencilDesc.DepthWriteEnable = True;
+        ogp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+        ogp.InputLayout.LayoutElements = skinnedLayout;
+        ogp.InputLayout.NumElements = sizeof(skinnedLayout) / sizeof(skinnedLayout[0]);
+
+        oci.pVS = ovs;
+        oci.pPS = ops;
+
+        ShaderResourceVariableDesc ovars[] = {
+            {SHADER_TYPE_VERTEX, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_VERTEX, "SkinConstants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_VERTEX, "g_Joints", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+        };
+        oci.PSODesc.ResourceLayout.Variables = ovars;
+        oci.PSODesc.ResourceLayout.NumVariables = sizeof(ovars) / sizeof(ovars[0]);
+
+        cache->CreateGraphicsPipelineState(oci, &m_impl->modelOutlineSkinnedPSO);
+        if (!m_impl->modelOutlineSkinnedPSO) { return false; }
+        if (auto *v = m_impl->modelOutlineSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) {
+            v->Set(m_impl->constants);
+        }
+        if (auto *p = m_impl->modelOutlineSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "Constants")) {
+            p->Set(m_impl->constants);
+        }
+        if (auto *v =
+                m_impl->modelOutlineSkinnedPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SkinConstants")) {
+            v->Set(m_impl->skinConstants);
+        }
+        m_impl->modelOutlineSkinnedPSO->CreateShaderResourceBinding(&m_impl->modelOutlineSkinnedSRB, true);
+        return m_impl->modelOutlineSkinnedSRB != nullptr;
+    }
+
     // --- Teardown ---------------------------------------------------------------
 
     void Renderer::Shutdown() {
@@ -1985,8 +2327,14 @@ namespace toon {
     }
 
     // Same idea as DrawModel, stripped to depth-only: walk the model's nodes, transform each
-    // into the currently-bound cascade's light-space clip position, no material/albedo.
-    void Renderer::DrawModelShadow(ModelHandle handle, const Mat4 &worldM) {
+    // into the currently-bound cascade's light-space clip position, no material/albedo. A
+    // null `anim` (the default) draws bind pose through the static PSO, byte-for-byte the
+    // pre-roadmap-#11 path; a non-null one samples the given clip/time via ComputeTransforms
+    // and routes any node with a skin (GLTF::Node::pSkin != nullptr) through the skinned PSO
+    // instead, so an animated character's shadow follows its animated silhouette. No motion
+    // vectors in a depth-only pass, so only the current pose is sampled (unlike DrawModel,
+    // which also needs the previous one).
+    void Renderer::DrawModelShadow(ModelHandle handle, const Mat4 &worldM, const AnimationState *anim) {
         const uint32_t idx = static_cast<uint32_t>(handle);
         if (idx == 0 || idx > m_impl->models.size()) { return; }
         GLTF::Model &model = *m_impl->models[idx - 1];
@@ -1997,7 +2345,11 @@ namespace toon {
         const float4x4 &lightProj = m_impl->shadowMap.GetCascadeTransform(m_impl->currentShadowCascade).WorldToLightProjSpace;
 
         GLTF::ModelTransforms xforms;
-        model.ComputeTransforms(sceneId, xforms);
+        if (anim != nullptr) {
+            model.ComputeTransforms(sceneId, xforms, float4x4::Identity(), anim->clipIndex, anim->time);
+        } else {
+            model.ComputeTransforms(sceneId, xforms);
+        }
 
         IBuffer *vbs[8] = {};
         const Uint32 numVBs = static_cast<Uint32>(model.GetVertexBufferCount());
@@ -2012,12 +2364,21 @@ namespace toon {
         const Uint32 baseIndex = model.GetFirstIndexLocation();
         const Uint32 baseVertex = model.GetBaseVertex();
 
-        m_impl->context->SetPipelineState(m_impl->modelShadowPSO);
-
         const GLTF::Scene &scene = model.Scenes[sceneId];
         for (const GLTF::Node *node : scene.LinearNodes) {
             if (node->pMesh == nullptr) { continue; }
             const float4x4 world = xforms.NodeGlobalMatrices[node->Index] * objWorld;
+
+            // Chosen per node, not per model: a model mixing skinned and unskinned meshes
+            // still draws each node through the PSO that matches its own vertex data.
+            const bool skinned = node->pSkin != nullptr;
+            if (skinned) {
+                const auto &joints = xforms.Skins[node->SkinTransformsIndex].JointMatrices;
+                const Uint32 jointCount = static_cast<Uint32>(joints.size());
+                EnsureJointsBufferCapacity(jointCount);
+                MapHelper<float4x4> jb(m_impl->context, m_impl->jointsBuffer, MAP_WRITE, MAP_FLAG_DISCARD);
+                std::memcpy(static_cast<float4x4 *>(jb), joints.data(), jointCount * sizeof(float4x4));
+            }
 
             {
                 MapHelper<float4x4> cb(m_impl->context, m_impl->shadowDrawConstants, MAP_WRITE, MAP_FLAG_DISCARD);
@@ -2026,7 +2387,10 @@ namespace toon {
             // Re-commit after every remap: a fresh Map/Discard may hand back a different
             // underlying GPU allocation, which the SRB needs to be told about again before
             // the next draw -- same idiom DrawMesh/DrawModel already use per primitive.
-            m_impl->context->CommitShaderResources(m_impl->modelShadowSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+            IPipelineState *pso = skinned ? m_impl->modelShadowSkinnedPSO : m_impl->modelShadowPSO;
+            IShaderResourceBinding *srb = skinned ? m_impl->modelShadowSkinnedSRB : m_impl->modelShadowSRB;
+            m_impl->context->SetPipelineState(pso);
+            m_impl->context->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
             for (const GLTF::Primitive &prim : node->pMesh->Primitives) {
                 if (prim.VertexCount == 0 && prim.IndexCount == 0) { continue; }
@@ -2183,9 +2547,10 @@ namespace toon {
         ci.NumVertexAttributes = static_cast<Uint32>(attribCount);
         ci.IndexType = VT_UINT32;
         // The loader defaults vertex buffers to BIND_NONE (only the index buffer defaults to
-        // BIND_INDEX_BUFFER); without this the VB can't be bound/drawn. We pack everything into
-        // buffer 0, so flag slot 0.
+        // BIND_INDEX_BUFFER); without this a VB can't be bound/drawn. Two buffer slots now
+        // (see ModelVertexAttribs): 0 for pos/normal/uv, 1 for JOINTS_0/WEIGHTS_0.
         ci.VertBufferBindFlags[0] = BIND_VERTEX_BUFFER;
+        ci.VertBufferBindFlags[1] = BIND_VERTEX_BUFFER;
 
         // The loader parses + uploads GPU buffers/textures in its constructor; it throws on a
         // bad/missing file, so guard the load.
@@ -2210,11 +2575,49 @@ namespace toon {
         return static_cast<ModelHandle>(m_impl->models.size()); // 1-based; 0 = Invalid
     }
 
+    // Roadmap #11 (skeletal animation): whether the file LoadModel loaded actually rigged
+    // anything. A direct read of GLTF::Model::Skins (already kept alive in m_impl->models),
+    // not a cached flag -- one vector-empty check per call is cheap enough not to bother.
+    bool Renderer::ModelHasSkin(ModelHandle handle) const {
+        const uint32_t idx = static_cast<uint32_t>(handle);
+        if (idx == 0 || idx > m_impl->models.size()) { return false; }
+        return !m_impl->models[idx - 1]->Skins.empty();
+    }
+
+    uint32_t Renderer::GetModelAnimationCount(ModelHandle handle) const {
+        const uint32_t idx = static_cast<uint32_t>(handle);
+        if (idx == 0 || idx > m_impl->models.size()) { return 0; }
+        return static_cast<uint32_t>(m_impl->models[idx - 1]->Animations.size());
+    }
+
+    std::string Renderer::GetModelAnimationName(ModelHandle handle, uint32_t index) const {
+        const uint32_t idx = static_cast<uint32_t>(handle);
+        if (idx == 0 || idx > m_impl->models.size()) { return {}; }
+        const auto &animations = m_impl->models[idx - 1]->Animations;
+        if (index >= animations.size()) { return {}; }
+        return animations[index].Name;
+    }
+
+    // Animations[i].Start/End are the clip's own playable range in seconds (glTF sampler
+    // input times -- not necessarily zero-based, though in practice they always are); the
+    // duration is their difference, not End alone.
+    float Renderer::GetModelAnimationDuration(ModelHandle handle, uint32_t index) const {
+        const uint32_t idx = static_cast<uint32_t>(handle);
+        if (idx == 0 || idx > m_impl->models.size()) { return 0.0f; }
+        const auto &animations = m_impl->models[idx - 1]->Animations;
+        if (index >= animations.size()) { return 0.0f; }
+        return animations[index].End - animations[index].Start;
+    }
+
     // Walks every mesh-bearing node in the model's default scene, composing each node's
     // local transform under the object's world matrix, and draws its primitives
     // outline-then-fill (same two-pass order as DrawMesh) with the shared style and each
-    // primitive's own albedo texture.
-    void Renderer::DrawModel(ModelHandle handle, const Mat4 &worldM, const Mat4 &prevWorldM, const Material &style) {
+    // primitive's own albedo texture. A null `anim` (the default) draws bind pose through the
+    // static PSOs, byte-for-byte the pre-roadmap-#11 path; a non-null one samples the given
+    // clip/time and routes any node with a skin through the skinned PSOs instead (see
+    // Impl::modelSkinnedPSO's own comment for why they're separate PSOs, not a shader branch).
+    void Renderer::DrawModel(ModelHandle handle, const Mat4 &worldM, const Mat4 &prevWorldM, const Material &style,
+                             const AnimationState *anim) {
         const uint32_t idx = static_cast<uint32_t>(handle);
         if (idx == 0 || idx > m_impl->models.size()) { return; }
         GLTF::Model &model = *m_impl->models[idx - 1];
@@ -2226,8 +2629,20 @@ namespace toon {
         const float4x4 objWorld = ToFloat4x4(worldM);
         const float4x4 objPrevWorld = ToFloat4x4(prevWorldM);
 
+        // Roadmap #11 (skeletal animation): a non-null `anim` samples the given clip/time (and,
+        // separately, last frame's time) via ComputeTransforms -- the same function this call
+        // already made for the bind-pose-only path, just fed a real animation index/time
+        // instead of the -1/0 defaults. Two full calls, not one: motion vectors on an animated
+        // node need its PREVIOUS pose, not just this frame's, and ComputeTransforms has no
+        // incremental mode -- it always resolves the whole scene from scratch.
         GLTF::ModelTransforms xforms;
-        model.ComputeTransforms(sceneId, xforms);
+        GLTF::ModelTransforms prevXforms;
+        if (anim != nullptr) {
+            model.ComputeTransforms(sceneId, xforms, float4x4::Identity(), anim->clipIndex, anim->time);
+            model.ComputeTransforms(sceneId, prevXforms, float4x4::Identity(), anim->clipIndex, anim->prevTime);
+        } else {
+            model.ComputeTransforms(sceneId, xforms);
+        }
 
         // Bind the model's shared vertex + index buffers once; every primitive sub-ranges them.
         IBuffer *vbs[8] = {};
@@ -2272,9 +2687,35 @@ namespace toon {
             if (node->pMesh == nullptr) { continue; }
             const float4x4 nodeGlobal = xforms.NodeGlobalMatrices[node->Index];
             const float4x4 world = nodeGlobal * objWorld;
-            const float4x4 prevWorld = nodeGlobal * objPrevWorld; // static model: node xform is constant
+            // A static (anim == nullptr) node's local transform is constant, so its only
+            // motion comes from the object's own world matrix (the original behavior, reusing
+            // nodeGlobal for both). An animated node's local transform changes every frame
+            // too -- prevXforms is what actually captures that; reusing nodeGlobal for it
+            // would under-report an animated character's motion the same way reusing a
+            // single frame's normal matrix would (see g_PrevNormalMatrix's own reasoning).
+            const float4x4 prevNodeGlobal = (anim != nullptr) ? prevXforms.NodeGlobalMatrices[node->Index] : nodeGlobal;
+            const float4x4 prevWorld = prevNodeGlobal * objPrevWorld;
             const float4x4 normalMat = world.Inverse().Transpose();
             const float4x4 prevNormalMat = prevWorld.Inverse().Transpose(); // see g_PrevNormalMatrix
+
+            // Chosen per node, not per model: a model mixing skinned and unskinned meshes
+            // still draws each node through the PSO that matches its own vertex data.
+            const bool skinned = node->pSkin != nullptr;
+            if (skinned) {
+                const auto &currJoints = xforms.Skins[node->SkinTransformsIndex].JointMatrices;
+                const auto &prevJoints =
+                    (anim != nullptr) ? prevXforms.Skins[node->SkinTransformsIndex].JointMatrices : currJoints;
+                const Uint32 jointCount = static_cast<Uint32>(currJoints.size());
+                EnsureJointsBufferCapacity(2 * jointCount); // current + previous, back to back
+                {
+                    MapHelper<float4x4> jb(m_impl->context, m_impl->jointsBuffer, MAP_WRITE, MAP_FLAG_DISCARD);
+                    float4x4 *dst = static_cast<float4x4 *>(jb);
+                    std::memcpy(dst, currJoints.data(), jointCount * sizeof(float4x4));
+                    std::memcpy(dst + jointCount, prevJoints.data(), jointCount * sizeof(float4x4));
+                }
+                MapHelper<SkinConstants> sc(m_impl->context, m_impl->skinConstants, MAP_WRITE, MAP_FLAG_DISCARD);
+                sc->jointCount = jointCount;
+            }
 
             for (const GLTF::Primitive &prim : node->pMesh->Primitives) {
                 if (prim.VertexCount == 0 && prim.IndexCount == 0) { continue; }
@@ -2306,25 +2747,31 @@ namespace toon {
                         albedoSRV = tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
                     }
                 }
-                if (auto *v = m_impl->modelSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_Albedo")) { v->Set(albedoSRV); }
+
+                IPipelineState *outlinePSO = skinned ? m_impl->modelOutlineSkinnedPSO : m_impl->modelOutlinePSO;
+                IShaderResourceBinding *outlineSRB = skinned ? m_impl->modelOutlineSkinnedSRB : m_impl->modelOutlineSRB;
+                IPipelineState *fillPSO = skinned ? m_impl->modelSkinnedPSO : m_impl->modelPSO;
+                IShaderResourceBinding *fillSRB = skinned ? m_impl->modelSkinnedSRB : m_impl->modelSRB;
+
+                if (auto *v = fillSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_Albedo")) { v->Set(albedoSRV); }
 
                 // Outline first (enlarged back-facing shell), then the textured fill on top:
                 // the fill's nearer depth overwrites the shell everywhere but the silhouette rim.
-                m_impl->context->SetPipelineState(m_impl->modelOutlinePSO);
-                m_impl->context->CommitShaderResources(m_impl->modelOutlineSRB,
-                                                       RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+                m_impl->context->SetPipelineState(outlinePSO);
+                m_impl->context->CommitShaderResources(outlineSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
                 issueDraw(prim);
 
-                m_impl->context->SetPipelineState(m_impl->modelPSO);
-                m_impl->context->CommitShaderResources(m_impl->modelSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+                m_impl->context->SetPipelineState(fillPSO);
+                m_impl->context->CommitShaderResources(fillSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
                 issueDraw(prim);
             }
         }
     }
 
     // Convenience: a single model instance's placement (no scene parent).
-    void Renderer::DrawModel(ModelHandle handle, const Transform &t, const Transform &prevT, const Material &style) {
-        DrawModel(handle, ToMat4(WorldFromTransform(t)), ToMat4(WorldFromTransform(prevT)), style);
+    void Renderer::DrawModel(ModelHandle handle, const Transform &t, const Transform &prevT, const Material &style,
+                             const AnimationState *anim) {
+        DrawModel(handle, ToMat4(WorldFromTransform(t)), ToMat4(WorldFromTransform(prevT)), style, anim);
     }
 
     // --- Textures (editor UI: asset thumbnails/previews) ------------------------

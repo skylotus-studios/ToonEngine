@@ -171,6 +171,33 @@ namespace toon {
                 e.material.roughness = 0.5f;
                 AddSpin(scene, i, {0.0f, 1.0f, 0.0f});
             }
+            // Loaded, animated glTF model (roadmap #11: skeletal animation): the Khronos Fox
+            // test asset, already under assets/models/ but unused before this. The
+            // AnimationComponent is only attached if the file actually exposes a playable
+            // clip -- defensive, since this is the first real skinned-model asset this engine
+            // has loaded, rather than assuming its content sight-unseen.
+            const char *foxPath = TOON_MODELS_DIR "/fox.glb";
+            const ModelHandle fox = renderer.LoadModel(foxPath);
+            if (fox != ModelHandle::Invalid) {
+                const int i = AddEntity(scene, 0, "Fox");
+                Entity &e = scene.entities[i];
+                e.model = fox;
+                e.modelPath = foxPath; // so a saved scene can reload it (see core/scene/serializer.h)
+                e.transform->position = {-3.0f, 0.0f, 0.0f};
+                // The Khronos Fox test asset's own mesh units are much larger than this
+                // scene's other content (dwarfing the helmet at scale 1); 0.15 brings it to a
+                // comparable size.
+                e.transform->scale = {0.15f, 0.15f, 0.15f};
+                e.material.baseColor = {1.0f, 1.0f, 1.0f}; // white tint (glTF supplies the color)
+                e.material.outlineColor = {0.02f, 0.02f, 0.03f};
+                e.material.outlineWidth = 0.03f;
+                e.material.roughness = 0.6f;
+                if (renderer.ModelHasSkin(fox) && renderer.GetModelAnimationCount(fox) > 0) {
+                    AnimationComponent anim;
+                    anim.clipIndex = 0; // play whatever the file's first clip is (e.g. Survey)
+                    e.animation = anim;
+                }
+            }
             // Sun: a directional light entity (no mesh/model, so the draw loop's isMesh/isModel
             // check skips it). Aimed by rotation (MakeLightTransform), reproducing the scene's old
             // fixed light direction exactly, so the default render is unchanged.

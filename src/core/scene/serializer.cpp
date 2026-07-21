@@ -79,6 +79,17 @@ namespace toon {
             f << buf;
         }
 
+        // "animation <clipIndex> <playing> <looping>". `time`/`prevTime` are deliberately NOT
+        // written: unlike `transform` (an authored pose), they're a transient playback cursor
+        // that only means anything mid-session -- same "runtime state, not scene data"
+        // treatment as RigidBodyComponent::handle/AudioSource::handle above, just without an
+        // actual handle to skip. A loaded entity always starts its clip fresh, from time 0.
+        void WriteAnimation(std::ofstream &f, const AnimationComponent &a) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "  animation %d %d %d\n", a.clipIndex, a.playing ? 1 : 0, a.looping ? 1 : 0);
+            f << buf;
+        }
+
         // One line per PrimitiveKind, since each generator takes a different param list (see
         // PrimitiveDesc's field comments in primitives.h for the kind -> field mapping).
         void WritePrimitive(std::ofstream &f, const PrimitiveDesc &d) {
@@ -170,6 +181,7 @@ namespace toon {
             if (e.collider) { WriteCollider(f, *e.collider); }
             if (e.body) { WriteRigidBody(f, *e.body); }
             if (e.audioSource) { WriteAudioSource(f, *e.audioSource); }
+            if (e.animation) { WriteAnimation(f, *e.animation); }
 
             // One line per script: "script <Name> <field...>"; the name resolves through
             // the registry on load (see below); the fields are whatever that script's own
@@ -339,6 +351,13 @@ namespace toon {
                 a.spatial = spatialInt != 0;
                 a.stream = streamInt != 0;
                 cur->audioSource = a;
+            } else if (key == "animation") {
+                AnimationComponent a;
+                int playingInt = 0, loopingInt = 0;
+                ss >> a.clipIndex >> playingInt >> loopingInt;
+                a.playing = playingInt != 0;
+                a.looping = loopingInt != 0;
+                cur->animation = a; // time/prevTime stay 0 -- see WriteAnimation's own comment
             } else if (key == "script") {
                 std::string scriptName;
                 ss >> scriptName;
