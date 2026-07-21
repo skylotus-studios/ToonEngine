@@ -1,18 +1,18 @@
 #pragma once
 //============================================================================
-//  core/scene/scene.h — the scene graph: an entity tree with hierarchy-composed world
+//  core/scene/scene.h: the scene graph, an entity tree with hierarchy-composed world
 //  transforms.
 //
 //  Backend-agnostic like the rest of the seam vocabulary (toon::Transform + Mat4 +
-//  opaque handles) — no Diligent types leak here. The world-matrix composition (the
+//  opaque handles). No Diligent types leak here. The world-matrix composition (the
 //  actual 4x4 math) lives in scene.cpp, which IS allowed to use Diligent (build-on-Diligent).
 //  Adapted from ToonEngineOld/src/scene.
 //============================================================================
 #include "core/rendering/renderer.h"   // Transform, Material, Mesh/ModelHandle, Mat4 (via math.h)
-#include "core/rendering/primitives.h" // PrimitiveDesc — mesh-regeneration params for serialization
-#include "core/physics/physics.h"      // ColliderShape/BodyType/BodyHandle — Entity's physics components (M2.1)
-#include "core/audio/audio.h"          // SoundHandle — Entity's AudioSource component (M2.2)
-#include "core/scene/script.h"         // ScriptComponent — Entity's attached native scripts (M1.3)
+#include "core/rendering/primitives.h" // PrimitiveDesc: mesh-regeneration params for serialization
+#include "core/physics/physics.h"      // ColliderShape/BodyType/BodyHandle: Entity's physics components (M2.1)
+#include "core/audio/audio.h"          // SoundHandle: Entity's AudioSource component (M2.2)
+#include "core/scene/script.h"         // ScriptComponent: Entity's attached native scripts (M1.3)
 
 #include <optional>
 #include <string>
@@ -21,40 +21,40 @@
 namespace toon {
 
     // A directional light carried by an entity. Aimed by the entity's ROTATION (its local +Z
-    // axis in world space is the direction light rays travel — Unity/Godot-style; rotate the
+    // axis in world space is the direction light rays travel, Unity/Godot-style; rotate the
     // entity, e.g. with the gizmo, to re-aim it). See MakeLightTransform / GetActiveLight.
     struct LightComponent {
         Vec3 color = {1.0f, 1.0f, 1.0f};
         float intensity = 1.0f;
     };
 
-    // A collision shape carried by an entity (M2.1) — the physics seam's ColliderShape/Vec3
+    // A collision shape carried by an entity (M2.1): the physics seam's ColliderShape/Vec3
     // vocabulary (core/physics/physics.h). An entity with a collider but no RigidBodyComponent is an
     // implicit static collider (a wall/floor); paired with one, it becomes a dynamic/kinematic
-    // mover — see RigidBodyComponent below.
+    // mover; see RigidBodyComponent below.
     struct ColliderComponent {
         ColliderShape shape = ColliderShape::Box;
-        Vec3 extents = {0.5f, 0.5f, 0.5f}; // meaning depends on shape — see BodyDesc
+        Vec3 extents = {0.5f, 0.5f, 0.5f}; // meaning depends on shape; see BodyDesc
     };
 
     // Physics behavior for an entity that also carries a ColliderComponent (M2.1). `handle` is
-    // runtime-only state (like Entity::worldMatrix) — populated when the physics world is built
+    // runtime-only state (like Entity::worldMatrix): populated when the physics world is built
     // for a Play session (main.cpp) and never serialized; it copies as a plain id, which is
     // harmless since a copy is only ever a snapshot/backup (Play/Stop, DuplicateEntity) and the
     // real body is rebuilt the next time Play starts.
     struct RigidBodyComponent {
         BodyType type = BodyType::Dynamic;
-        float mass = 1.0f; // ignored for Static/Kinematic — see BodyDesc
+        float mass = 1.0f; // ignored for Static/Kinematic; see BodyDesc
         float friction = 0.5f;
         float restitution = 0.2f;
         BodyHandle handle = BodyHandle::Invalid;
     };
 
-    // A sound emitter carried by an entity (M2.2) — the audio seam's SoundDesc vocabulary
+    // A sound emitter carried by an entity (M2.2): the audio seam's SoundDesc vocabulary
     // (core/audio/audio.h). `clip` is a path under TOON_AUDIO_DIR, same "asset path on the
     // component, GPU/audio resource behind a handle" split as Entity::modelPath/model. Autoplay
     // emitters start when a Play/Step session begins (app/audio_glue.cpp's BuildAudioWorld);
-    // `handle` is runtime-only state (like RigidBodyComponent::handle above) — populated then,
+    // `handle` is runtime-only state (like RigidBodyComponent::handle above): populated then,
     // never serialized, harmless to copy as a plain id (Play/Stop, DuplicateEntity are snapshots;
     // the real sound is rebuilt the next time Play starts).
     struct AudioSource {
@@ -65,7 +65,7 @@ namespace toon {
         bool autoplay = true;
         bool spatial = true;       // false = plays the same everywhere (ambience/music/UI)
         bool stream = false;       // true = decode from disk as it plays (long music tracks)
-        float maxDistance = 25.0f; // spatial only — see SoundDesc
+        float maxDistance = 25.0f; // spatial only; see SoundDesc
         SoundHandle handle = SoundHandle::Invalid;
     };
 
@@ -105,12 +105,12 @@ namespace toon {
         std::optional<ColliderComponent> collider;
         std::optional<RigidBodyComponent> body;
 
-        // Audio (M2.2): a positional or non-positional sound emitter — see AudioSource above.
+        // Audio (M2.2): a positional or non-positional sound emitter; see AudioSource above.
         std::optional<AudioSource> audioSource;
 
-        // Attached native scripts (core/scene/script.h) — per-tick gameplay hooks (M1.3). A
+        // Attached native scripts (core/scene/script.h): per-tick gameplay hooks (M1.3). A
         // std::unique_ptr member makes ScriptComponent, and therefore Entity, NOT implicitly
-        // copyable — the copy constructor/assignment below deep-clone each script via the
+        // copyable: the copy constructor/assignment below deep-clone each script via the
         // name registry (CreateScript) and its own Save/Load, instead of a raw memberwise
         // copy. This is what keeps main.cpp's Play/Stop (`sceneBackup = scene` / `scene =
         // sceneBackup`) and DuplicateEntity (scene.cpp) working unchanged: a copy is no
@@ -145,7 +145,7 @@ namespace toon {
     // Recompute every entity's cached worldMatrix from the hierarchy (one forward pass, since
     // parents precede children), snapshotting the previous frame's matrices first. Each entity's
     // local pose is interpolated between prevSimTransform and transform by `alpha` (the fixed-
-    // timestep accumulator's fraction into the next sim tick; see main.cpp's frame loop) — the
+    // timestep accumulator's fraction into the next sim tick; see main.cpp's frame loop), the
     // default 1.0 renders the current sim tick exactly, for callers outside that loop (e.g. right
     // after a scene load). Call once per rendered frame, before drawing.
     void UpdateWorldTransforms(Scene &scene, float alpha = 1.0f);
@@ -165,7 +165,7 @@ namespace toon {
     // default light. Call UpdateWorldTransforms afterward for it to take effect.
     Transform MakeLightTransform(const Vec3 &position, const Vec3 &dirToLight);
 
-    // Compose a world Mat4 from a position + quaternion rotation + scale — lets a Diligent-free
+    // Compose a world Mat4 from a position + quaternion rotation + scale: lets a Diligent-free
     // caller (main.cpp) build a Mat4 without touching Diligent itself. The physics write-back
     // path (M2.1) is the one call site: Jolt hands back a dynamic body's world (position,
     // rotation) each tick, and the entity's EXISTING scale (physics doesn't simulate scale)
@@ -196,7 +196,7 @@ namespace toon {
     // models stay shared by handle). Returns the duplicate root's new index, or -1 on failure.
     int DuplicateEntity(Scene &scene, int idx);
 
-    // Re-parent `idx` under `newParent`, preserving its WORLD transform — the local TRS is
+    // Re-parent `idx` under `newParent`, preserving its WORLD transform: the local TRS is
     // rewritten (via the decompose) so the object doesn't jump. Refuses the root, cycles, and
     // no-ops. Returns true on success.
     bool ReparentEntity(Scene &scene, int idx, int newParent);
@@ -206,7 +206,7 @@ namespace toon {
     bool MoveEntityAsSibling(Scene &scene, int idx, int target, bool before);
 
     // Drop all entities. GPU meshes/models are owned by the Renderer and freed at its Shutdown,
-    // so the scene only holds handles — nothing GPU-side to release here.
+    // so the scene only holds handles; nothing GPU-side to release here.
     inline void DestroyScene(Scene &scene) { scene.entities.clear(); }
 
 } // namespace toon

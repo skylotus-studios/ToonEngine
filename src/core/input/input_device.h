@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  core/input/input_device.h — raw per-device state.
+//  core/input/input_device.h: raw per-device state.
 //
 //  Keyboard/Mouse update via GLFW callbacks (input_system.cpp); Gamepad is polled once a
 //  frame since glfwGetGamepadState has no callback form. Every device keeps current/previous
@@ -8,7 +8,7 @@
 //
 //  Ported from ToonEngineOld/src/core/input/input_device.h: glm::dvec2 replaced by
 //  toon::Vec2 (this engine has no glm dependency), and Mouse's scroll bookkeeping collapsed
-//  from a two-field latch to a single live accumulator — BeginFrame() clears it (like
+//  from a two-field latch to a single live accumulator: BeginFrame() clears it (like
 //  `delta`), OnScroll() accumulates into it directly, and it's read live at query time. The
 //  old two-field scrollAccum/scrollDelta split only existed to survive a BeginFrame-after-
 //  PollEvents order; this engine's loop runs BeginFrame BEFORE glfwPollEvents (see
@@ -44,7 +44,7 @@ namespace toon {
             Vec2 position{};         // cursor position in pixels
             Vec2 previousPosition{};
             Vec2 delta{};             // pixels moved this frame (0 unless the cursor actually moved)
-            Vec2 scrollDelta{};       // scroll notches this frame — live accumulator, see BeginFrame
+            Vec2 scrollDelta{};       // scroll notches this frame: live accumulator, see BeginFrame
             bool insideWindow = false;
 
             std::array<uint8_t, kMaxMouseButtons> current{};
@@ -52,7 +52,7 @@ namespace toon {
 
             // Snapshot for edge detection and reset this frame's deltas. Called BEFORE
             // glfwPollEvents so OnMove/OnScroll (fired during the poll) accumulate into a clean
-            // frame and are visible to this SAME frame's queries — no one-frame lag.
+            // frame and are visible to this SAME frame's queries: no one-frame lag.
             void BeginFrame() {
                 previous = current;
                 previousPosition = position;
@@ -88,9 +88,9 @@ namespace toon {
             std::array<float,   kMaxGamepadAxes>    axes{};
             std::array<float,   kMaxGamepadAxes>    previousAxes{};
 
-            // Applied by GetAxis. This is the ONLY deadzone the analog axis path gets — a bound
+            // Applied by GetAxis. This is the ONLY deadzone the analog axis path gets. A bound
             // action's own per-binding deadzone (action_map.h's GamepadAxisBinding::deadzone) only
-            // gates the digital is-this-axis-held-like-a-button query, not GetAxis — so don't drop
+            // gates the digital is-this-axis-held-like-a-button query, not GetAxis, so don't drop
             // this thinking it's redundant with that one.
             float deadzone = 0.15f;
 
@@ -99,7 +99,7 @@ namespace toon {
                 previousAxes = axes;
             }
 
-            // Poll the OS device directly — glfwGetGamepadState has no callback/event form, so this
+            // Poll the OS device directly. glfwGetGamepadState has no callback/event form, so this
             // must run once a frame (input_system.cpp's BeginFrame) rather than react to a callback.
             void Poll() {
                 if (!connected) { return; }

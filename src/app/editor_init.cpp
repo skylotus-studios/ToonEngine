@@ -1,5 +1,5 @@
 //============================================================================
-//  app/editor_init.cpp — see editor_init.h.
+//  app/editor_init.cpp: see editor_init.h.
 //============================================================================
 #include "app/editor_init.h"
 
@@ -68,7 +68,7 @@ namespace toon {
                 // not an oversight (a future collider-offset field would let it align exactly).
                 e.collider = ColliderComponent{ColliderShape::Box, {5.0f, 0.1f, 5.0f}};
             }
-            // Sphere — non-uniformly scaled into a spinning ellipsoid (exercises the normal matrix).
+            // Sphere: non-uniformly scaled into a spinning ellipsoid (exercises the normal matrix).
             {
                 const int i = AddEntity(scene, 0, "Sphere");
                 Entity &e = scene.entities[i];
@@ -79,7 +79,7 @@ namespace toon {
                 e.material.roughness = 0.15f; // lightly glossy so SSR reflects on it
                 AddSpin(scene, i, {0.0f, 1.0f, 0.0f});
             }
-            // Cube — the satellite's parent.
+            // Cube: the satellite's parent.
             const int cubeIdx = AddEntity(scene, 0, "Cube");
             {
                 Entity &e = scene.entities[cubeIdx];
@@ -88,10 +88,10 @@ namespace toon {
                 e.material.roughness = 0.15f;
                 AddSpin(scene, cubeIdx, {0.5f, 1.0f, 0.0f});
             }
-            // Satellite — a small sphere PARENTED to the cube (the hierarchy demo). It has no spin of
+            // Satellite: a small sphere PARENTED to the cube (the hierarchy demo). It has no spin of
             // its own; it orbits the cube purely by inheriting the cube's spinning world transform.
             // Created right after the cube so the flat outliner (vector order) lists it directly under
-            // its parent — keeping the scripted scene in pre-order, as the editor mutations always are.
+            // its parent, keeping the scripted scene in pre-order, as the editor mutations always are.
             {
                 Entity &e = scene.entities[AddEntity(scene, cubeIdx, "Satellite")];
                 SetPrimitive(renderer, e, PrimitiveDesc::Sphere(0.22f, 16, 24));
@@ -99,7 +99,7 @@ namespace toon {
                 e.material = Material{{0.40f, 0.90f, 0.55f}, {0.03f, 0.07f, 0.04f}, 0.014f};
                 e.material.roughness = 0.15f;
             }
-            // Torus — also the audio demo emitter (M2.2): a looping, positional hum, so
+            // Torus: also the audio demo emitter (M2.2), a looping, positional hum, so
             // orbiting the camera around it while Playing audibly pans/attenuates. Autoplay
             // starts it the moment Play begins (app/audio_glue.cpp's BuildAudioWorld).
             {
@@ -171,7 +171,7 @@ namespace toon {
                 e.material.roughness = 0.5f;
                 AddSpin(scene, i, {0.0f, 1.0f, 0.0f});
             }
-            // Sun — a directional light entity (no mesh/model, so the draw loop's isMesh/isModel
+            // Sun: a directional light entity (no mesh/model, so the draw loop's isMesh/isModel
             // check skips it). Aimed by rotation (MakeLightTransform), reproducing the scene's old
             // fixed light direction exactly, so the default render is unchanged.
             {
@@ -210,7 +210,7 @@ namespace toon {
         // overwriting them (see core/input/input_system.h's Init banner).
         Input::Init(window);
 
-        // Seed the default editor bindings (camera fly/orbit + focus — see action_map.cpp's
+        // Seed the default editor bindings (camera fly/orbit + focus; see action_map.cpp's
         // RegisterDefaultEditorBindings), then let a saved assets/input.json override them if one
         // exists; otherwise write the defaults so the file exists next time. Same "load or create"
         // shape as scene save/load (core/scene/serializer.h).
@@ -229,23 +229,23 @@ namespace toon {
 
         // Editor-style docking: panels can be dragged to snap around the 3D view.
         // (ImGui is exempt from the renderer seam, so app code drives UI policy.)
-        // Guarded on IMGUI_HAS_DOCK so the build stays green with a non-docking imgui
-        // — docking activates only when a docking-branch imgui is checked out.
+        // Guarded on IMGUI_HAS_DOCK so the build stays green with a non-docking imgui.
+        // Docking activates only when a docking-branch imgui is checked out.
 #ifdef IMGUI_HAS_DOCK
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
 
         // Editor look: load the UI font (Bai Jamjuree) at the display's DPI scale, then apply the
         // starting theme. ImGui is seam-exempt and the Diligent backend advertises
-        // RendererHasTextures (imgui 1.92 dynamic atlas), so adding the font here — after InitUI
-        // created the context, before the first frame — is enough; the glyph texture uploads on
+        // RendererHasTextures (imgui 1.92 dynamic atlas), so adding the font here (after InitUI
+        // created the context, before the first frame) is enough; the glyph texture uploads on
         // first draw. uiScale also drives ApplyTheme's ScaleAllSizes so the whole UI matches DPI.
         glfwGetWindowContentScale(window, &state.uiScale, &state.uiScaleY);
         ImGui::GetIO().Fonts->AddFontFromFileTTF(TOON_FONTS_DIR "/BaiJamjuree-Medium.ttf", 18.0f * state.uiScale);
 
         // Merge Font Awesome 6 solid's icon glyphs into that same font (MergeMode stitches them
         // into the range Bai Jamjuree just registered instead of starting a second font), so the
-        // ICON_FA_* macros (ui/panels/file_browser.cpp) render inline with body text — same
+        // ICON_FA_* macros (ui/panels/file_browser.cpp) render inline with body text: same
         // baseline, same line height. GlyphMinAdvanceX gives every icon the same advance width
         // regardless of its natural glyph width, which keeps a column of mixed icons visually
         // aligned.
@@ -269,7 +269,7 @@ namespace toon {
 
         SeedDemoScene(state);
 
-        // Editor camera — driven by the mouse/keyboard in TickEditor (defaults: pivot at the
+        // Editor camera: driven by the mouse/keyboard in TickEditor (defaults: pivot at the
         // origin, distance 10, a slight downward pitch so the ground + its AO show).
         state.cameraDefault = state.camera; // for the "Reset camera" button
 

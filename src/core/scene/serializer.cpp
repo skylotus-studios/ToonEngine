@@ -1,5 +1,5 @@
 //============================================================================
-//  core/scene/serializer.cpp — scene save/load implementation.
+//  core/scene/serializer.cpp: scene save/load implementation.
 //
 //  A simple line-based text format: "key value..." per line, two-space-indented entity
 //  properties following an "entity "Name"" header, a blank line between entities. Ported
@@ -43,7 +43,7 @@ namespace toon {
 
         // "collider <box|sphere|capsule> <ex ey ez>". `extents`' meaning depends on shape (see
         // BodyDesc's own comment: Box = half-extents, Sphere = radius in .x, Capsule = half-height
-        // in .x + radius in .y) but is always 3 floats, so — unlike WritePrimitive below — one
+        // in .x + radius in .y) but is always 3 floats, so (unlike WritePrimitive below) one
         // line shape covers every ColliderShape; load only needs to parse the shape name once.
         void WriteCollider(std::ofstream &f, const ColliderComponent &c) {
             const char *kind = c.shape == ColliderShape::Sphere    ? "sphere"
@@ -56,7 +56,7 @@ namespace toon {
         }
 
         // "rigidbody <static|dynamic|kinematic> <mass friction restitution>". The runtime
-        // BodyHandle is deliberately NOT written — like Entity::worldMatrix, it's populated when
+        // BodyHandle is deliberately NOT written: like Entity::worldMatrix, it's populated when
         // Play builds the physics world (main.cpp), not part of the saved scene's data.
         void WriteRigidBody(std::ofstream &f, const RigidBodyComponent &b) {
             const char *kind = b.type == BodyType::Static      ? "static"
@@ -68,7 +68,7 @@ namespace toon {
         }
 
         // "audio <clip> <volume> <pitch> <loop> <autoplay> <spatial> <stream> <maxDistance>".
-        // `handle` is deliberately NOT written — like RigidBodyComponent::handle, it's populated
+        // `handle` is deliberately NOT written: like RigidBodyComponent::handle, it's populated
         // when Play builds the audio world (app/audio_glue.cpp), not part of the saved scene's
         // data. `clip` is written as a single whitespace-free token, same convention as `model`.
         void WriteAudioSource(std::ofstream &f, const AudioSource &a) {
@@ -133,8 +133,8 @@ namespace toon {
         WriteFloat(f, "camera.fov", camera.fovY);
         f << "\n";
 
-        // Entities are written in vector order — parents always precede children (the scene's
-        // own invariant, see scene.h) — so "parent <index>" on load names an already-parsed
+        // Entities are written in vector order: parents always precede children (the scene's
+        // own invariant, see scene.h), so "parent <index>" on load names an already-parsed
         // entity and LoadScene's append-in-file-order rebuild reproduces the exact same vector.
         for (const Entity &e : scene.entities) {
             f << "entity \"" << e.name << "\"\n";
@@ -171,7 +171,7 @@ namespace toon {
             if (e.body) { WriteRigidBody(f, *e.body); }
             if (e.audioSource) { WriteAudioSource(f, *e.audioSource); }
 
-            // One line per script: "script <Name> <field...>" — the name resolves through
+            // One line per script: "script <Name> <field...>"; the name resolves through
             // the registry on load (see below); the fields are whatever that script's own
             // Save writes, exactly like "primitive <kind> <field...>" above.
             for (const ScriptComponent &sc : e.scripts) {
@@ -195,7 +195,7 @@ namespace toon {
         }
 
         // Parse into a side buffer and only replace `scene`/`camera` once the whole file is
-        // read — a malformed file then leaves the caller's current scene untouched, matching
+        // read. A malformed file then leaves the caller's current scene untouched, matching
         // this function's documented failure contract.
         Scene loaded;
         Camera loadedCamera = camera;
@@ -243,7 +243,7 @@ namespace toon {
                 continue;
             }
             if (!cur) {
-                continue; // a property line before the first "entity" header — ignore
+                continue; // a property line before the first "entity" header: ignore
             }
 
             if (key == "parent") {
@@ -290,7 +290,7 @@ namespace toon {
                                                     mesh.indices.data(), static_cast<uint32_t>(mesh.indices.size()));
                 }
             } else if (key == "model") {
-                ss >> cur->modelPath; // a single token — fine for the baked TOON_MODELS_DIR paths this writes
+                ss >> cur->modelPath; // a single token, fine for the baked TOON_MODELS_DIR paths this writes
                 cur->model = renderer.LoadModel(cur->modelPath.c_str());
             } else if (key == "material.baseColor") {
                 cur->material.baseColor = ParseVec3(ss);

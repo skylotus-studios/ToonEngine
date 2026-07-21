@@ -1,9 +1,9 @@
 //============================================================================
-//  core/scene/script.cpp — native script registry + per-tick dispatch.
+//  core/scene/script.cpp: native script registry + per-tick dispatch.
 //============================================================================
 #include "core/scene/script.h"
 
-#include "core/scene/scene.h" // Entity, Scene — the dispatch loops below walk their real fields
+#include "core/scene/scene.h" // Entity, Scene: the dispatch loops below walk their real fields
 
 #include <algorithm>
 #include <cstdio>
@@ -15,7 +15,7 @@ namespace toon {
 
         // Function-local static: constructed on first use regardless of which translation
         // unit's static initializer (a script's self-registering static, e.g.
-        // spin_script.cpp) runs first — sidesteps the static-initialization-order fiasco a
+        // spin_script.cpp) runs first: sidesteps the static-initialization-order fiasco a
         // plain namespace-scope map would risk.
         std::unordered_map<std::string, ScriptFactory> &Registry() {
             static std::unordered_map<std::string, ScriptFactory> registry;

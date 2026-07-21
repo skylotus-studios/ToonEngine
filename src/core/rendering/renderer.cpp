@@ -1,12 +1,12 @@
 //============================================================================
-//  core/renderer.cpp — Diligent Engine (Vulkan) implementation of the seam.
+//  core/renderer.cpp: Diligent Engine (Vulkan) implementation of the seam.
 //
 //  Everything Diligent-specific is contained in this translation unit. The
 //  public header (renderer.h) exposes only opaque handles and plain types.
 //============================================================================
 #include "core/rendering/renderer.h"
 
-// GLFW with native access — extracting the OS window handle is a backend
+// GLFW with native access: extracting the OS window handle is a backend
 // concern, so it lives behind the seam here. main.cpp includes only plain GLFW.
 // GLFW_INCLUDE_NONE is set engine-wide (CMakeLists.txt), not per-file here, since
 // core/input/input_device.h also needs it ahead of any single TU's own #define.
@@ -45,13 +45,30 @@
 #include "GraphicsTypes.h"
 #include "Buffer.h"
 #include "Texture.h"
-#include "TextureUtilities.h" // CreateTextureFromFile — asset-browser thumbnails/previews
+#include "TextureUtilities.h" // CreateTextureFromFile: asset-browser thumbnails/previews
 #include "Sampler.h"
 #include "Shader.h"
 #include "PipelineState.h"
 #include "RefCntAutoPtr.hpp"
 #include "MapHelper.hpp" // Diligent-GraphicsTools
 #include "BasicMath.hpp"
+
+// Roadmap #10 (shader hot-reload): IRenderStateCache wraps CreateShader/CreateGraphicsPipelineState
+// so Reload() can recompile whatever .hlsl source changed; LoadAndGetArchiverFactory() is the
+// runtime-loaded factory it needs at creation (see Renderer::Init). Both always compile in
+// (the cache exists in every build, see CreateRenderStateCache below), even though hot-reload
+// itself -- the efsw watcher, EnableHotReload, and the Settings-panel button -- is Debug-only
+// (TOON_SHADER_HOT_RELOAD, set in CMakeLists.txt).
+#include "RenderStateCache.h"
+#include "ArchiverFactoryLoader.h"
+
+#ifdef TOON_SHADER_HOT_RELOAD
+// efsw is a small cross-platform (Windows/Linux/macOS) file-system watcher (see CMakeLists.txt's
+// efsw add_subdirectory guard) -- notices a changed .hlsl file and flips shadersDirty, checked
+// once per frame in BeginFrame. Not part of the Diligent seam; kept behind this ifdef and this
+// TU only, same "third-party type stays out of renderer.h" rule as every Diligent type here.
+#include <efsw/efsw.hpp>
+#endif
 
 // DiligentFX post-processing: the Bloom + SSAO effects and the shared PostFXContext
 // they depend on. All compile into the DiligentFX target, whose root is on the
@@ -80,11 +97,11 @@
 #include "Utilities/interface/DiligentFXShaderSourceStreamFactory.hpp"
 
 // DiligentTools asset loading: the glTF/GLB loader (Diligent::GLTF::Model owns the
-// vertex/index buffers + textures). Self-contained in DiligentTools — no DiligentFX /
+// vertex/index buffers + textures). Self-contained in DiligentTools, no DiligentFX /
 // PBR renderer needed (we cel-shade with our own PSO).
 #include "GLTFLoader.hpp"
 
-// DiligentTools' CPU-side image decoder (PNG/JPEG/TGA/...) — used to load the window
+// DiligentTools' CPU-side image decoder (PNG/JPEG/TGA/...), used to load the window
 // icon. No GPU device involved, so this needs no Renderer::Impl state.
 #include "Image.h"
 
@@ -95,6 +112,7 @@
 #include "ImGuiImplDiligent.hpp"
 #include "backends/imgui_impl_glfw.h"
 
+#include <atomic>
 #include <cstdio>
 #include <memory>
 #include <vector>
@@ -112,7 +130,7 @@ using namespace Diligent;
 // shaders include. BasicStructures.fxh brings in CameraAttribs (which PostFXContext
 // wants); BloomStructures.fxh defines BloomAttribs. float4x4/float4/uint etc.
 // resolve to the Diligent:: aliases pulled in by BasicMath.hpp above. (Mirrors how
-// DiligentFX's own .cpp files include these — see Bloom.cpp.) BasicStructures.fxh
+// DiligentFX's own .cpp files include these; see Bloom.cpp.) BasicStructures.fxh
 // does a bare #include "ShaderDefinitions.fxh"; CMake puts that directory on the
 // include path so it resolves.
 namespace Diligent {
@@ -147,7 +165,7 @@ namespace Diligent {
 namespace toon {
 
     // Sets the OS window/taskbar icon from an image file, via DiligentTools' CPU-side
-    // decoder (Image.h — no GPU device needed). GLFW wants tightly-packed 8-bit RGBA
+    // decoder (Image.h, no GPU device needed). GLFW wants tightly-packed 8-bit RGBA
     // rows; the decoder's RowStride may be padded and NumComponents may be less than 4
     // (grayscale/RGB/etc.), so this expands each source pixel into the RGBA buffer GLFW
     // copies internally (glfwSetWindowIcon doesn't retain `pixels` after it returns).
@@ -291,6 +309,44 @@ namespace toon {
         float4 color;
     };
 
+#ifdef TOON_SHADER_HOT_RELOAD
+    // Fires on efsw's own watch thread (see Renderer::Impl::shaderWatcher below), so it does
+    // the absolute minimum: flip a flag. `dirty` outlives the listener (it's an Impl member;
+    // the listener is destroyed by ~Impl before `dirty` itself is), and efsw stops calling in
+    // once the FileWatcher that owns this listener is destroyed, so no dangling-pointer window.
+    class ShaderReloadListener final : public efsw::FileWatchListener {
+    public:
+        explicit ShaderReloadListener(std::atomic<bool> &dirty) : m_dirty(dirty) {}
+
+        // Note: efsw 1.5.0's oldFilename param is by-value (std::string), not const&, unlike
+        // efsw's current master branch -- matched exactly here, since a mismatched parameter
+        // type silently turns this into a non-overriding hide of the pure virtual base
+        // instead of a real override (caught by the compiler's own -Woverride diagnostic).
+        void handleFileAction(efsw::WatchID, const std::string &, const std::string &filename, efsw::Action action,
+                              std::string = "") override {
+            // Modified: a plain in-place write. Add/Moved: many editors (and this repo's own
+            // tooling, confirmed directly by watching a real save) write atomically instead --
+            // a temp file, then a rename over the original -- which the OS reports as the old
+            // name disappearing and the new content arriving under the original name again, not
+            // as a Modified event. React to all three; Delete alone is deliberately excluded
+            // (nothing to reload from a file that's gone, e.g. mid-rename it briefly vanishes).
+            if (action != efsw::Actions::Modified && action != efsw::Actions::Add &&
+                action != efsw::Actions::Moved) {
+                return;
+            }
+            const auto endsWith = [](const std::string &s, const std::string &suffix) {
+                return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+            };
+            if (endsWith(filename, ".hlsl") || endsWith(filename, ".hlsli")) {
+                m_dirty.store(true, std::memory_order_relaxed);
+            }
+        }
+
+    private:
+        std::atomic<bool> &m_dirty;
+    };
+#endif
+
     // All Diligent state hides here, behind the PIMPL boundary.
     struct Renderer::Impl {
         RefCntAutoPtr<IRenderDevice> device;
@@ -300,6 +356,22 @@ namespace toon {
 
         // Toon pipeline.
         RefCntAutoPtr<IShaderSourceInputStreamFactory> shaderFactory;
+
+        // Roadmap #10 (shader hot-reload): every shader/PSO in this file is created through
+        // this cache (CreateToonShader, every CreateGraphicsPipelineState call) instead of
+        // `device` directly, in every build -- so no call site needs to branch on whether
+        // hot-reload is actually enabled. Only EnableHotReload (Init) and the watcher below
+        // differ between Debug and Release.
+        RefCntAutoPtr<IRenderStateCache> stateCache;
+#ifdef TOON_SHADER_HOT_RELOAD
+        // Set (relaxed -- a bool flag, not a value other code depends on being immediately
+        // visible) by ShaderReloadListener::handleFileAction on efsw's own watch thread;
+        // BeginFrame is the one reader, on the main thread, once per frame.
+        std::atomic<bool> shadersDirty{false};
+        efsw::FileWatcher shaderWatcher;
+        std::unique_ptr<efsw::FileWatchListener> shaderListener;
+#endif
+
         RefCntAutoPtr<IPipelineState> fillPSO;
         RefCntAutoPtr<IPipelineState> outlinePSO;
         RefCntAutoPtr<IShaderResourceBinding> fillSRB;
@@ -311,7 +383,7 @@ namespace toon {
             RefCntAutoPtr<IBuffer> indexBuffer;
             Uint32 indexCount = 0;
             // Local-space (object-space) bounds, min/max swept over `vertices[i].position` at
-            // creation — mouse-pick (app/picking.cpp) transforms these by an entity's worldMatrix.
+            // creation; mouse-pick (app/picking.cpp) transforms these by an entity's worldMatrix.
             Vec3 boundsMin;
             Vec3 boundsMax;
         };
@@ -324,12 +396,12 @@ namespace toon {
         RefCntAutoPtr<IPipelineState> modelOutlinePSO; // inverted-hull outline
         RefCntAutoPtr<IShaderResourceBinding> modelOutlineSRB;
         std::vector<std::unique_ptr<GLTF::Model>> models;
-        // Local-space bounds (model-space, RootTransform = identity) — index-matched with
+        // Local-space bounds (model-space, RootTransform = identity), index-matched with
         // `models` (one push_back site, LoadModel, keeps them in sync). Same mouse-pick use as
         // GpuMesh::boundsMin/Max above.
         std::vector<std::pair<Vec3, Vec3>> modelBounds;
 
-        // Editor-UI textures (asset browser thumbnails/previews) — decoded image files,
+        // Editor-UI textures (asset browser thumbnails/previews); decoded image files,
         // unrelated to the toon draw path. handle N -> textures[N-1], same 1-based
         // convention as meshes/models above; a null slot is a destroyed handle.
         std::vector<RefCntAutoPtr<ITexture>> textures;
@@ -411,7 +483,7 @@ namespace toon {
         // Run the shared PostFXContext plus whichever effects are enabled. The color
         // effects chain in order scene -> TAA -> DoF -> Bloom; `colorOut` is the last
         // stage's output (or null -> resolve the raw scene). `aoOut` (SSAO visibility) and
-        // `ssrOut` (reflection radiance) composite in the resolve — null -> their defaults.
+        // `ssrOut` (reflection radiance) composite in the resolve; null -> their defaults.
         // No-op if no effect is enabled.
         void RunPostFX(const PostParams &p, ITextureView *&colorOut, ITextureView *&aoOut, ITextureView *&ssrOut);
 
@@ -475,7 +547,7 @@ namespace toon {
         if (sc.Width == 0 || sc.Height == 0) { return; }
 
         // DoF uses the motion vectors (via the context) to smooth its circle-of-confusion
-        // over time — safe now that motion is real.
+        // over time, safe now that motion is real.
         const auto dofFlags = DepthOfField::FEATURE_FLAG_ENABLE_TEMPORAL_SMOOTHING;
         const auto taaFlags = TemporalAntiAliasing::FEATURE_FLAG_BICUBIC_FILTER;
 
@@ -528,7 +600,7 @@ namespace toon {
         prevPostCamera = postCamera;
 
         if (!postFX->IsPSOsReady()) {
-            return; // still compiling — skip effects this frame
+            return; // still compiling: skip effects this frame
         }
 
         if (p.ssao) {
@@ -619,7 +691,7 @@ namespace toon {
             HLSL::BloomAttribs attribs{};
             attribs.Intensity = p.bloomIntensity;
             attribs.Threshold = p.bloomThreshold;
-            attribs.SoftTreshold = p.bloomSoftKnee; // (sic — DiligentFX's field spelling)
+            attribs.SoftTreshold = p.bloomSoftKnee; // (sic: DiligentFX's field spelling)
             attribs.Radius = p.bloomRadius;
 
             Bloom::RenderAttributes bra;
@@ -658,7 +730,10 @@ namespace toon {
     // (Shaders/Common/public/BasicStructures.fxh) declare their float4x4 fields with no
     // explicit row_major/column_major keyword -- unlike our own Constants cbuffer, which
     // marks every matrix row_major explicitly and so is unaffected by this flag either way.
-    static RefCntAutoPtr<IShader> CreateToonShader(IRenderDevice *device, IShaderSourceInputStreamFactory *factory,
+    // `cache` instead of a raw IRenderDevice*: every shader in this file is created through
+    // Renderer::Impl::stateCache (roadmap #10, shader hot-reload) instead of the device
+    // directly, in every build -- see stateCache's own comment (Impl, above).
+    static RefCntAutoPtr<IShader> CreateToonShader(IRenderStateCache *cache, IShaderSourceInputStreamFactory *factory,
                                                    SHADER_TYPE type, const char *name, const char *file,
                                                    const char *entry,
                                                    SHADER_COMPILE_FLAGS compileFlags = SHADER_COMPILE_FLAG_NONE) {
@@ -673,14 +748,14 @@ namespace toon {
         ci.CompileFlags = compileFlags;
 
         RefCntAutoPtr<IShader> shader;
-        device->CreateShader(ci, &shader);
+        cache->CreateShader(ci, &shader);
         return shader;
     }
 
     // Vertex attributes we ask the glTF loader to produce: POSITION / NORMAL / TEXCOORD_0,
     // all interleaved into buffer 0. The model PSO's input layout is built from this SAME
     // array (VertexAttributesToInputLayout), so the loader's buffer and the shader agree on
-    // ATTRIB0/1/2. (No smooth normal — models get the fill pass only, no inverted hull.)
+    // ATTRIB0/1/2. (No smooth normal; models get the fill pass only, no inverted hull.)
     static const GLTF::VertexAttributeDesc *ModelVertexAttribs(size_t &count) {
         static const GLTF::VertexAttributeDesc kAttribs[] = {
             {GLTF::PositionAttributeName, 0, VT_FLOAT32, 3},
@@ -735,6 +810,37 @@ namespace toon {
         }
         m_impl->shaderFactory = CreateCompoundShaderSourceFactory(
             {m_impl->shaderFactory, &DiligentFXShaderSourceStreamFactory::GetInstance()});
+
+        // Roadmap #10 (shader hot-reload): every shader/PSO below is created through this
+        // cache, in every build (see Impl::stateCache's own comment) -- only EnableHotReload
+        // and the watcher differ between Debug and Release.
+        {
+            IArchiverFactory *archiverFactory = LoadAndGetArchiverFactory();
+            if (!archiverFactory) {
+                std::fprintf(stderr, "Renderer: failed to load the Archiver factory\n");
+                return false;
+            }
+            RenderStateCacheCreateInfo cacheCI;
+            cacheCI.pDevice = m_impl->device;
+            cacheCI.pArchiverFactory = archiverFactory;
+            cacheCI.FileHashMode = RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT;
+#ifdef TOON_SHADER_HOT_RELOAD
+            cacheCI.EnableHotReload = true;
+#endif
+            CreateRenderStateCache(cacheCI, &m_impl->stateCache);
+            if (!m_impl->stateCache) {
+                std::fprintf(stderr, "Renderer: failed to create the shader/PSO state cache\n");
+                return false;
+            }
+        }
+#ifdef TOON_SHADER_HOT_RELOAD
+        // Watches assets/shaders/ for a saved .hlsl/.hlsli file (ShaderReloadListener above);
+        // BeginFrame checks shadersDirty once per frame and calls stateCache->Reload() when
+        // it's set. Non-recursive: every .hlsl lives flat in this one directory.
+        m_impl->shaderListener = std::make_unique<ShaderReloadListener>(m_impl->shadersDirty);
+        m_impl->shaderWatcher.addWatch(TOON_SHADERS_DIR, m_impl->shaderListener.get(), /*recursive=*/false);
+        m_impl->shaderWatcher.watch();
+#endif
 
         // Before the toon/model pipelines: CreateShadowMap builds the shadow map atlas +
         // its own depth-only PSOs, and CreateToonPipeline/CreateModelPipeline bind it into
@@ -862,6 +968,7 @@ namespace toon {
     // before their SRBs are created -- a static variable can't be set afterward.
     bool Renderer::CreateShadowMap() {
         IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this, not `device`
 
         ShadowMapManager::InitInfo smInfo;
         smInfo.Format = kSceneDepthFormat;
@@ -930,7 +1037,7 @@ namespace toon {
         // mitigation, matching the toon outline PSO's own cull/winding for these primitives.
         // Depth-only: no render targets, no pixel shader.
         {
-            auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "shadow VS", "shadow_depth.hlsl", "VSMain");
+            auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "shadow VS", "shadow_depth.hlsl", "VSMain");
             if (!vs) { return false; }
 
             LayoutElement layoutElems[] = {
@@ -959,7 +1066,7 @@ namespace toon {
             ci.pPS = nullptr; // depth-only
             ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
 
-            device->CreateGraphicsPipelineState(ci, &m_impl->shadowPSO);
+            cache->CreateGraphicsPipelineState(ci, &m_impl->shadowPSO);
             if (!m_impl->shadowPSO) { return false; }
             if (auto *v = m_impl->shadowPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "ShadowConstants")) {
                 v->Set(m_impl->shadowDrawConstants);
@@ -970,7 +1077,7 @@ namespace toon {
 
         // glTF-model shadow PSO: same vertex layout + winding as the model outline PSO.
         {
-            auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "model shadow VS", "model_shadow_depth.hlsl",
+            auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "model shadow VS", "model_shadow_depth.hlsl",
                                        "VSMain");
             if (!vs) { return false; }
 
@@ -1000,7 +1107,7 @@ namespace toon {
             ci.pPS = nullptr;
             ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
 
-            device->CreateGraphicsPipelineState(ci, &m_impl->modelShadowPSO);
+            cache->CreateGraphicsPipelineState(ci, &m_impl->modelShadowPSO);
             if (!m_impl->modelShadowPSO) { return false; }
             if (auto *v = m_impl->modelShadowPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "ShadowConstants")) {
                 v->Set(m_impl->shadowDrawConstants);
@@ -1020,6 +1127,7 @@ namespace toon {
 
     bool Renderer::CreatePostPipeline() {
         IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this, not `device`
         const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
 
         {
@@ -1034,8 +1142,8 @@ namespace toon {
         }
 
         IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
-        auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "tonemap VS", "tonemap.hlsl", "VSMain");
-        auto ps = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "tonemap PS", "tonemap.hlsl", "PSMain");
+        auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "tonemap VS", "tonemap.hlsl", "VSMain");
+        auto ps = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "tonemap PS", "tonemap.hlsl", "PSMain");
         if (!vs || !ps) { return false; }
 
         GraphicsPipelineStateCreateInfo ci;
@@ -1055,8 +1163,8 @@ namespace toon {
         // g_HDRColor / g_AO / g_SSR are DYNAMIC: EndScene re-points them every frame at
         // whichever HDR source we resolve (raw scene or post-FX output), the SSAO result
         // (or a white "no occlusion" default), and the SSR result (or a black "no
-        // reflection" default) — each also changes on resize. A dynamic variable is the
-        // type meant for a per-frame-changing binding — Diligent manages a fresh
+        // reflection" default); each also changes on resize. A dynamic variable is the
+        // type meant for a per-frame-changing binding: Diligent manages a fresh
         // descriptor each commit. (A MUTABLE variable bakes one binding and rejects being
         // overwritten while a prior frame may still be reading it.) PostConstants never
         // changes binding, so it stays static.
@@ -1084,7 +1192,7 @@ namespace toon {
         ci.PSODesc.ResourceLayout.ImmutableSamplers = immSamplers;
         ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
 
-        device->CreateGraphicsPipelineState(ci, &m_impl->tonemapPSO);
+        cache->CreateGraphicsPipelineState(ci, &m_impl->tonemapPSO);
         if (!m_impl->tonemapPSO) { return false; }
         if (auto *v = m_impl->tonemapPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "PostConstants")) {
             v->Set(m_impl->postConstants);
@@ -1095,6 +1203,7 @@ namespace toon {
 
     bool Renderer::CreateWireframePipeline() {
         IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this, not `device`
         const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
 
         {
@@ -1119,8 +1228,8 @@ namespace toon {
         }
 
         IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
-        auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "wireframe VS", "wireframe.hlsl", "VSMain");
-        auto ps = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "wireframe PS", "wireframe.hlsl", "PSMain");
+        auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "wireframe VS", "wireframe.hlsl", "VSMain");
+        auto ps = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "wireframe PS", "wireframe.hlsl", "PSMain");
         if (!vs || !ps) { return false; }
 
         LayoutElement layoutElems[] = {
@@ -1144,7 +1253,7 @@ namespace toon {
         ci.pPS = ps;
         ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
 
-        device->CreateGraphicsPipelineState(ci, &m_impl->wireframePSO);
+        cache->CreateGraphicsPipelineState(ci, &m_impl->wireframePSO);
         if (!m_impl->wireframePSO) { return false; }
         if (auto *v = m_impl->wireframePSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) {
             v->Set(m_impl->wireframeConstants);
@@ -1203,7 +1312,7 @@ namespace toon {
         make1x1("SSR black default", black, m_impl->ssrBlack);
 
         // 1x1 white 2D-ARRAY albedo default: the glTF loader stores textures as 2D arrays, so
-        // the model fill's g_Albedo is a Texture2DArray — the untextured fallback must match
+        // the model fill's g_Albedo is a Texture2DArray; the untextured fallback must match
         // that dimension (the plain-2D aoWhite would trip a view-dimension assertion).
         {
             const Uint8 white1[4] = {255, 255, 255, 255};
@@ -1227,6 +1336,7 @@ namespace toon {
 
     bool Renderer::CreateToonPipeline() {
         IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this, not `device`
 
         // Shared, per-draw-updated constant buffer.
         {
@@ -1275,7 +1385,7 @@ namespace toon {
             // One shared static CB across both stages; set once on the PSO below.
             ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
 
-            device->CreateGraphicsPipelineState(ci, &pso);
+            cache->CreateGraphicsPipelineState(ci, &pso);
             if (!pso) { return false; }
             if (auto *v = pso->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) { v->Set(m_impl->constants); }
             if (auto *p = pso->GetStaticVariableByName(SHADER_TYPE_PIXEL, "Constants")) { p->Set(m_impl->constants); }
@@ -1300,12 +1410,12 @@ namespace toon {
 
         // Fill shaders alone need PACK_MATRIX_ROW_MAJOR (see CreateToonShader's comment) --
         // they're the only ones that reference DiligentFX's ShadowMapAttribs/CascadeAttribs.
-        auto fillVS = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "toon fill VS", "toon_fill.hlsl", "VSMain",
+        auto fillVS = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "toon fill VS", "toon_fill.hlsl", "VSMain",
                                        SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
-        auto fillPS = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "toon fill PS", "toon_fill.hlsl", "PSMain",
+        auto fillPS = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "toon fill PS", "toon_fill.hlsl", "PSMain",
                                        SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
-        auto outVS = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "toon outline VS", "toon_outline.hlsl", "VSMain");
-        auto outPS = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "toon outline PS", "toon_outline.hlsl", "PSMain");
+        auto outVS = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "toon outline VS", "toon_outline.hlsl", "VSMain");
+        auto outPS = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "toon outline PS", "toon_outline.hlsl", "PSMain");
         if (!fillVS || !fillPS || !outVS || !outPS) { return false; }
 
         // Fill: cull back faces. Outline: cull front faces (keep the enlarged shell).
@@ -1320,19 +1430,20 @@ namespace toon {
 
     bool Renderer::CreateModelPipeline() {
         IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this, not `device`
         IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
 
         // PACK_MATRIX_ROW_MAJOR: model_fill.hlsl also references DiligentFX's ShadowMapAttribs/
         // CascadeAttribs (via ComputeShadowFactor) -- see CreateToonShader's comment.
-        auto vs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "model fill VS", "model_fill.hlsl", "VSMain",
+        auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "model fill VS", "model_fill.hlsl", "VSMain",
                                    SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
-        auto ps = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "model fill PS", "model_fill.hlsl", "PSMain",
+        auto ps = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "model fill PS", "model_fill.hlsl", "PSMain",
                                    SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR);
         if (!vs || !ps) { return false; }
 
         // Input layout matching the interleaved buffer the loader fills from ModelVertexAttribs
         // (POSITION/NORMAL/TEXCOORD_0 in buffer 0). Auto offset/stride reproduce the loader's
-        // packing exactly (pos@0, normal@12, uv@24, stride 32), so we hardcode it — same idiom
+        // packing exactly (pos@0, normal@12, uv@24, stride 32), so we hardcode it: same idiom
         // as CreateToonPipeline.
         LayoutElement modelLayout[] = {
             LayoutElement{0, 0, 3, VT_FLOAT32, False}, // ATTRIB0 position
@@ -1354,7 +1465,7 @@ namespace toon {
         gp.RasterizerDesc.CullMode = CULL_MODE_BACK;
         // glTF winds front faces CCW in its RIGHT-handed space; our projection is LEFT-handed,
         // which flips screen-space winding, so the model's outward faces are CW here. Hence
-        // FrontCounterClockwise = False — the OPPOSITE of our own primitives (authored CCW-front
+        // FrontCounterClockwise = False: the OPPOSITE of our own primitives (authored CCW-front
         // for the LH setup). With True, the outward faces cull and you see through the helmet to
         // its inner surface.
         gp.RasterizerDesc.FrontCounterClockwise = False;
@@ -1367,8 +1478,8 @@ namespace toon {
         ci.pVS = vs;
         ci.pPS = ps;
 
-        // Shared static Constants CB (like the toon PSOs); g_Albedo is DYNAMIC — DrawModel
-        // re-Sets it per primitive — with a linear-wrap immutable sampler (combined-sampler
+        // Shared static Constants CB (like the toon PSOs); g_Albedo is DYNAMIC: DrawModel
+        // re-Sets it per primitive, with a linear-wrap immutable sampler (combined-sampler
         // "g_Albedo", same pattern as tonemap's g_HDRColor). ShadowAttribsCB/g_ShadowMap are
         // STATIC (set once below, like Constants) -- model_fill.hlsl's ComputeShadowFactor
         // call is what pulls these into this PSO's reflected resources. No separate
@@ -1398,7 +1509,7 @@ namespace toon {
         ci.PSODesc.ResourceLayout.ImmutableSamplers = immSamplers;
         ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
 
-        device->CreateGraphicsPipelineState(ci, &m_impl->modelPSO);
+        cache->CreateGraphicsPipelineState(ci, &m_impl->modelPSO);
         if (!m_impl->modelPSO) { return false; }
         if (auto *v = m_impl->modelPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) {
             v->Set(m_impl->constants);
@@ -1417,8 +1528,8 @@ namespace toon {
 
         // --- Outline pass PSO (inverted hull) --- same vertex layout; cull FRONT to keep the
         // enlarged back-facing shell; only the shared Constants CB (no albedo texture).
-        auto ovs = CreateToonShader(device, sf, SHADER_TYPE_VERTEX, "model outline VS", "model_outline.hlsl", "VSMain");
-        auto ops = CreateToonShader(device, sf, SHADER_TYPE_PIXEL, "model outline PS", "model_outline.hlsl", "PSMain");
+        auto ovs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "model outline VS", "model_outline.hlsl", "VSMain");
+        auto ops = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "model outline PS", "model_outline.hlsl", "PSMain");
         if (!ovs || !ops) { return false; }
 
         GraphicsPipelineStateCreateInfo oci;
@@ -1450,7 +1561,7 @@ namespace toon {
         oci.PSODesc.ResourceLayout.Variables = ovars;
         oci.PSODesc.ResourceLayout.NumVariables = sizeof(ovars) / sizeof(ovars[0]);
 
-        device->CreateGraphicsPipelineState(oci, &m_impl->modelOutlinePSO);
+        cache->CreateGraphicsPipelineState(oci, &m_impl->modelOutlinePSO);
         if (!m_impl->modelOutlinePSO) { return false; }
         if (auto *v = m_impl->modelOutlinePSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) {
             v->Set(m_impl->constants);
@@ -1523,6 +1634,16 @@ namespace toon {
     // --- Per-frame lifecycle ----------------------------------------------------
 
     void Renderer::BeginFrame(const Color &c) {
+#ifdef TOON_SHADER_HOT_RELOAD
+        // Roadmap #10: one atomic-bool check, every frame; real work (the hash comparison
+        // Reload() does per tracked file) only runs on the rare frame right after efsw's
+        // watch thread actually saw a .hlsl/.hlsli file change.
+        if (m_impl->shadersDirty.exchange(false, std::memory_order_relaxed)) {
+            const Uint32 n = m_impl->stateCache->Reload();
+            std::fprintf(stderr, "[ShaderHotReload] Reloaded %u state(s)\n", n);
+        }
+#endif
+
         // The scene renders into three offscreen targets (consumed in EndScene): HDR
         // color, a world-space normal G-buffer (SSAO), and NDC motion vectors (SSAO
         // temporal / DoF), sharing the scene depth buffer.
@@ -1538,6 +1659,14 @@ namespace toon {
         m_impl->context->ClearRenderTarget(rtvs[1], zero, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         m_impl->context->ClearRenderTarget(rtvs[2], zero, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         m_impl->context->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    }
+
+    uint32_t Renderer::ReloadShaders() {
+#ifdef TOON_SHADER_HOT_RELOAD
+        return m_impl->stateCache->Reload();
+#else
+        return 0; // hot-reload is compiled out entirely in a Release build -- a real no-op
+#endif
     }
 
     void Renderer::SetPostParams(const PostParams &params) { m_impl->post = params; }
@@ -1612,7 +1741,7 @@ namespace toon {
         m_impl->swapChain->Resize(width, height);
         const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
         CreateOffscreenTargets(sc.Width, sc.Height); // match the new back-buffer size
-        // The resolve's HDR input (g_HDRColor) is dynamic — EndScene re-points it at the
+        // The resolve's HDR input (g_HDRColor) is dynamic: EndScene re-points it at the
         // recreated target next frame, so there's nothing to rebind here.
     }
 
@@ -1704,7 +1833,7 @@ namespace toon {
     // toon::Quat (core/math.h); converting to Diligent's QuaternionF here (not before) is
     // what lets Transform stay Diligent-free while this, the one file allowed to touch
     // Diligent, still builds on its (numerically fiddlier) quaternion-to-matrix math
-    // instead of reimplementing it. Must match scene.cpp's LocalFromTransform exactly —
+    // instead of reimplementing it. Must match scene.cpp's LocalFromTransform exactly;
     // the scene graph and this single-object path compose the same way.
     static float4x4 WorldFromTransform(const Transform &t) {
         const QuaternionF q(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w);
@@ -1712,7 +1841,7 @@ namespace toon {
                float4x4::Translation(t.position.x, t.position.y, t.position.z);
     }
 
-    // Plain Mat4 (seam vocabulary) <-> Diligent float4x4 — both row-major, so a straight
+    // Plain Mat4 (seam vocabulary) <-> Diligent float4x4: both row-major, so a straight
     // element copy. The scene graph composes world matrices on the Diligent side and hands
     // them across the seam as Mat4.
     static Mat4 ToMat4(const float4x4 &m) {
@@ -1928,7 +2057,7 @@ namespace toon {
     // Expose the current view + projection (as of the last SetCamera) for the editor's transform
     // gizmo. ImGuizmo (in main.cpp) needs them to project the gizmo onto the selected entity; the
     // seam hands them out as plain Mat4 so ImGuizmo stays Diligent-free. (The proj may carry the
-    // sub-pixel TAA jitter — negligible for a UI overlay, and TAA is off by default.)
+    // sub-pixel TAA jitter, negligible for a UI overlay, and TAA is off by default.)
     void Renderer::GetViewProj(Mat4 &view, Mat4 &proj) const {
         view = ToMat4(m_impl->view);
         proj = ToMat4(m_impl->proj);
@@ -2023,7 +2152,7 @@ namespace toon {
         draw.NumIndices = mesh.indexCount;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
 
-        // Outline first (enlarged back-facing shell), then the fill on top — the
+        // Outline first (enlarged back-facing shell), then the fill on top: the
         // fill's nearer depth overwrites the shell everywhere except the rim.
         m_impl->context->SetPipelineState(m_impl->outlinePSO);
         m_impl->context->CommitShaderResources(m_impl->outlineSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -2179,7 +2308,7 @@ namespace toon {
                 }
                 if (auto *v = m_impl->modelSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_Albedo")) { v->Set(albedoSRV); }
 
-                // Outline first (enlarged back-facing shell), then the textured fill on top —
+                // Outline first (enlarged back-facing shell), then the textured fill on top:
                 // the fill's nearer depth overwrites the shell everywhere but the silhouette rim.
                 m_impl->context->SetPipelineState(m_impl->modelOutlinePSO);
                 m_impl->context->CommitShaderResources(m_impl->modelOutlineSRB,
@@ -2202,7 +2331,7 @@ namespace toon {
 
     // Decodes an image file straight to GPU via DiligentTools' loader (PNG/JPG/BMP/TGA).
     // Default TextureLoadInfo is exactly right here: IMMUTABLE + BIND_SHADER_RESOURCE, mips
-    // generated, and — load-bearing — IsSRGB = false. ImGui's own shader treats a bound
+    // generated, and (load-bearing) IsSRGB = false. ImGui's own shader treats a bound
     // texture's samples and its per-vertex colors (authored in gamma space by the editor
     // themes) as the same color space; an sRGB-sampled texture would linearize on read while
     // the UI around it doesn't, so every thumbnail would come out too dark. CreateTextureFromFile
@@ -2222,7 +2351,7 @@ namespace toon {
     }
 
     // Releases one texture's GPU memory early (the thumbnail cache calls this at shutdown, not
-    // per-frame). Leaves the slot null rather than compacting the vector — handles must stay
+    // per-frame). Leaves the slot null rather than compacting the vector: handles must stay
     // stable, and this cache is small enough that slot reuse isn't worth the bookkeeping.
     void Renderer::DestroyTexture(TextureHandle texture) {
         const uint32_t idx = static_cast<uint32_t>(texture);
@@ -2231,17 +2360,17 @@ namespace toon {
     }
 
     // The texture's default SRV, handed out as a plain integer so this header never has to
-    // mention ITextureView — the UI casts it to ImTextureID at the ImGui::Image call site.
+    // mention ITextureView; the UI casts it to ImTextureID at the ImGui::Image call site.
     // Diligent's ImGui backend reinterpret_casts it right back and transitions the resource
     // itself (RESOURCE_STATE_TRANSITION_MODE_TRANSITION), the same path the model albedo
-    // texture already goes through — so there's no extra state-management burden here.
+    // texture already goes through, so there's no extra state-management burden here.
     uint64_t Renderer::GetTextureImGuiID(TextureHandle texture) const {
         const uint32_t idx = static_cast<uint32_t>(texture);
         if (idx == 0 || idx > m_impl->textures.size() || !m_impl->textures[idx - 1]) { return 0; }
         return reinterpret_cast<uint64_t>(m_impl->textures[idx - 1]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
     }
 
-    // Pixel dimensions read straight from the texture's own desc — nothing cached, since
+    // Pixel dimensions read straight from the texture's own desc; nothing cached, since
     // Diligent already stores it and the caller (a preview pane) only asks once per draw.
     void Renderer::GetTextureSize(TextureHandle texture, uint32_t &width, uint32_t &height) const {
         const uint32_t idx = static_cast<uint32_t>(texture);
@@ -2254,7 +2383,7 @@ namespace toon {
     // --- Debug UI (Dear ImGui) --------------------------------------------------
 
     bool Renderer::InitUI(GLFWwindow *window) {
-        // ImGuiImplDiligent's constructor calls ImGui::CreateContext() — it must
+        // ImGuiImplDiligent's constructor calls ImGui::CreateContext(); it must
         // run before ImGui_ImplGlfw_InitForVulkan(), which itself calls
         // ImGui::GetIO() and asserts if no context exists yet.
         //
@@ -2279,7 +2408,7 @@ namespace toon {
         // Tear down in the reverse of InitUI. The GLFW platform backend must be shut
         // down *before* the ImGui context is destroyed: ~ImGuiImplDiligent() calls
         // ImGui::DestroyContext(), which asserts ("Forgot to shutdown Platform
-        // backend?") if the GLFW backend is still registered — that assert aborts the
+        // backend?") if the GLFW backend is still registered; that assert aborts the
         // process on window close.
         ImGui_ImplGlfw_Shutdown();
         m_impl->imgui.reset(); // destroys the Diligent ImGui backend + the ImGui context

@@ -1,5 +1,5 @@
 //============================================================================
-//  ui/panels/objects_panel.cpp — see objects_panel.h.
+//  ui/panels/objects_panel.cpp: see objects_panel.h.
 //============================================================================
 #include "ui/panels/objects_panel.h"
 
@@ -52,7 +52,7 @@ namespace toon {
                     ImGui::Text("%s", e.name.c_str());
                     ImGui::EndDragDropSource();
                 }
-                // Drop target: cursor-Y within the row picks the zone — top/bottom quarter =
+                // Drop target: cursor-Y within the row picks the zone; top/bottom quarter =
                 // sibling before/after, middle = make-child (the root only accepts children).
                 if (ImGui::BeginDragDropTarget()) {
                     if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("TOON_ENTITY_IDX")) {
@@ -98,7 +98,7 @@ namespace toon {
         }
         if (hierarchyOpen) { ImGui::End(); }
 
-        // Apply the one recorded structural op, then the drag-drop — indices are stable now.
+        // Apply the one recorded structural op, then the drag-drop; indices are stable now.
         switch (pendingOp) {
             case HierOp::AddChild:
                 scene.selected = AddChildEntity(scene, pendingTarget, "Entity");

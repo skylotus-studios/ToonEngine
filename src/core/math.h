@@ -1,15 +1,15 @@
 #pragma once
 //============================================================================
-//  core/math.h — minimal, dependency-free vector types for the engine's public
+//  core/math.h: minimal, dependency-free vector types for the engine's public
 //  (renderer-seam) API.
 //
 //  Deliberately NOT Diligent's BasicMath: the renderer seam must not leak any
 //  Diligent type (see core/renderer.h), so the vocabulary the engine and game
-//  code speak in — vertex positions, light directions, transforms — is defined
+//  code speak in (vertex positions, light directions, transforms) is defined
 //  here in plain structs. renderer.cpp converts these to Diligent's
 //  float3/float4/float4x4 internally. Projection/view matrices (NDC + handedness
 //  conventions are backend-specific) stay behind the seam; the one matrix here is a
-//  plain, math-free `Mat4` — the vocabulary for a composed world transform the scene
+//  plain, math-free `Mat4`: the vocabulary for a composed world transform the scene
 //  graph hands to the renderer (the actual 4x4 math happens on the Diligent side).
 //============================================================================
 #include <cmath>
@@ -27,20 +27,20 @@ namespace toon {
     };
 
     // A rotation as a unit quaternion (x,y,z = imaginary/vector part, w = real/scalar part).
-    // Defaults to identity (no rotation). Plain data, like Mat4 below — the seam's vocabulary
+    // Defaults to identity (no rotation). Plain data, like Mat4 below: the seam's vocabulary
     // for "an entity's orientation" (Transform::rotation, core/renderer.h). Composition/matrix
     // conversion/spherical interpolation are numerically fiddly enough that they're built on
     // Diligent's own Quaternion<T> (core/scene.cpp, core/renderer.cpp), per the guiding
-    // principle — NOT reimplemented here. The handful of operations below ARE hand-rolled
+    // principle, NOT reimplemented here. The handful of operations below ARE hand-rolled
     // anyway, for the same reason Vec3's Dot/Length/Normalize are: gameplay scripts
     // (core/scripts/*, e.g. SpinScript) and the app layer (main.cpp's Inspector) must stay
     // Diligent-free, so they need a way to compose/convert a rotation without including
-    // BasicMath.hpp. Kept deliberately small — just enough for those two call sites.
+    // BasicMath.hpp. Kept deliberately small: just enough for those two call sites.
     struct Quat {
         float x = 0.0f, y = 0.0f, z = 0.0f, w = 1.0f;
     };
 
-    // A 4x4 matrix as *pure data* — the seam's vocabulary for a composed world transform
+    // A 4x4 matrix as *pure data*: the seam's vocabulary for a composed world transform
     // (object -> world). Row-major, matching Diligent's float4x4 memory layout, so the
     // renderer converts by a straight copy. Intentionally math-free: composition/inverse
     // happen on the Diligent side (core/scene.cpp, core/renderer.cpp). Defaults to identity.
@@ -65,7 +65,7 @@ namespace toon {
 
     // Hamilton product, mirroring Diligent::Quaternion<T>::Mul field-for-field so a Quat
     // composed here means exactly what Diligent's own Mul would once converted to a
-    // QuaternionF (core/scene.cpp). `a * b` applies `b`'s rotation first, `a`'s second/last —
+    // QuaternionF (core/scene.cpp). `a * b` applies `b`'s rotation first, `a`'s second/last:
     // e.g. to pre-multiply a world-space delta onto an existing rotation, write `delta * old`.
     inline Quat operator*(const Quat &a, const Quat &b) {
         return {
@@ -102,7 +102,7 @@ namespace toon {
     // core/scene.cpp's LocalFromTransform / renderer.cpp's WorldFromTransform composition
     // order). The inspector (main.cpp) is the one call site: it edits rotation as Euler
     // degrees, converting to/from a quaternion at the widget boundary. Composed as
-    // `qz * qy * qx` — per operator*'s "b first, a last" rule, that applies qx first, qy
+    // `qz * qy * qx`, per operator*'s "b first, a last" rule, so that applies qx first, qy
     // second, qz last, i.e. X then Y then Z.
     inline Quat QuatFromEuler(const Vec3 &eulerRadians) {
         const Quat qx = QuatFromAxisAngle({1.0f, 0.0f, 0.0f}, eulerRadians.x);

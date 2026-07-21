@@ -1,5 +1,5 @@
 //============================================================================
-//  ui/thumbnail_cache.cpp — see thumbnail_cache.h.
+//  ui/thumbnail_cache.cpp: see thumbnail_cache.h.
 //============================================================================
 #include "ui/thumbnail_cache.h"
 

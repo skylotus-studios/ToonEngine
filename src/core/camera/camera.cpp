@@ -1,9 +1,9 @@
 //============================================================================
-//  core/camera/camera.cpp — editor camera controls.
+//  core/camera/camera.cpp: editor camera controls.
 //
 //  Uses Diligent's float4x4 to derive the camera's world basis from yaw/pitch, so it
 //  agrees exactly with the renderer's view (SetCamera). The public API (camera.h) stays
-//  Diligent-free — same split as scene.cpp.
+//  Diligent-free: the same split as scene.cpp.
 //============================================================================
 #include "core/camera/camera.h"
 
@@ -24,7 +24,7 @@ namespace toon {
         // Inverting, the world direction that appears as a given view axis is
         //   viewAxis * RotationX(-pitch) * RotationY(-yaw) = the matching ROW of that inverse
         // (since e_k * M = row k of M). Deriving it from the same Diligent matrices makes the
-        // basis correct-by-construction — no hand-guessed left-handed signs.
+        // basis correct-by-construction: no hand-guessed left-handed signs.
         struct Basis {
             float3 right, up, forward;
         };
@@ -89,7 +89,7 @@ namespace toon {
         const Basis b = CameraBasis(cam);
         outForward = {b.forward.x, b.forward.y, b.forward.z};
         outUp = {b.up.x, b.up.y, b.up.z};
-        // The orbit camera looks FROM the eye TOWARD the pivot, i.e. along +forward — so the
+        // The orbit camera looks FROM the eye TOWARD the pivot, i.e. along +forward, so the
         // eye sits `distance` back along -forward from the pivot (see CameraBasis's own
         // comment: b.forward is "view +Z, toward the pivot").
         const float3 eye = float3(cam.pivot.x, cam.pivot.y, cam.pivot.z) - b.forward * cam.distance;

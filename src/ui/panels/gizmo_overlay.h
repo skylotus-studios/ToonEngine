@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/panels/gizmo_overlay.h — ImGuizmo hotkeys + the transform-gizmo overlay itself.
+//  ui/panels/gizmo_overlay.h: ImGuizmo hotkeys + the transform-gizmo overlay itself.
 //============================================================================
 namespace toon {
 

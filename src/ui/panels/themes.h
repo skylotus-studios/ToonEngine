@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/panels/themes.h — editor color themes (ported from ToonEngineOld/src/ui/themes.cpp).
+//  ui/panels/themes.h: editor color themes (ported from ToonEngineOld/src/ui/themes.cpp).
 //============================================================================
 struct GLFWwindow;
 

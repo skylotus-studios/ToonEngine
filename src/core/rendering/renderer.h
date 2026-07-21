@@ -1,9 +1,9 @@
 //============================================================================
-//  core/renderer.h — ToonEngine's rendering seam.
+//  core/renderer.h: ToonEngine's rendering seam.
 //
 //  This is the ONE header the rest of the engine talks to for GPU work. Every
 //  backend detail (currently Diligent Engine on Vulkan) lives behind it in
-//  renderer.cpp via PIMPL, so no Diligent type — and no Diligent header —
+//  renderer.cpp via PIMPL, so neither a Diligent type nor a Diligent header
 //  escapes into engine or game code. Swapping the backend (or porting to a
 //  console) becomes "write another renderer_*.cpp", not a rewrite.
 //============================================================================
@@ -23,7 +23,7 @@ namespace toon {
     // null/invalid handle). The mapping from id to the underlying backend resource
     // lives entirely inside the renderer. Resource-creation APIs land with the
     // shader/pipeline work on the roadmap; the types are defined now so the seam's
-    // contract — "the engine names resources, never Diligent objects" — is explicit.
+    // contract is explicit: "the engine names resources, never Diligent objects."
     enum class TextureHandle : uint32_t { Invalid = 0 };
     enum class BufferHandle : uint32_t { Invalid = 0 };
     enum class ShaderHandle : uint32_t { Invalid = 0 };
@@ -36,7 +36,7 @@ namespace toon {
     };
 
     // Sets the OS window/taskbar icon from an image file (PNG/TGA/etc, decoded via
-    // DiligentTools — no GPU device needed). Returns false on failure (details go to
+    // DiligentTools, no GPU device needed). Returns false on failure (details go to
     // stderr). Call any time after the window is created.
     bool SetWindowIcon(GLFWwindow *window, const char *path);
 
@@ -77,7 +77,7 @@ namespace toon {
         float nearZ = 0.1f;
         float farZ = 100.0f;
 
-        // Editor-control tuning (used by core/camera.h — not read by the renderer).
+        // Editor-control tuning (used by core/camera.h, not read by the renderer).
         float lookSensitivity = 0.005f; // radians per pixel (orbit)
         float panSensitivity = 0.0015f; // world units per pixel, per unit of distance (pan)
         float zoomSpeed = 0.12f;        // fraction of distance per scroll notch (zoom)
@@ -86,7 +86,7 @@ namespace toon {
 
     // Per-object toon look, passed to DrawMesh. Lives in the seam so the debug UI
     // can drive it live and so each object in a scene can differ. (The light is
-    // global scene state — see SetLight.)
+    // global scene state; see SetLight.)
     struct Material {
         Vec3 baseColor = {0.85f, 0.30f, 0.35f};    // albedo
         Vec3 outlineColor = {0.05f, 0.05f, 0.07f}; // rim color
@@ -98,7 +98,7 @@ namespace toon {
 
     // Per-object placement. `rotation` is a quaternion (identity = no rotation); use
     // core/math.h's QuatFromEuler/QuatToEuler to edit it as Euler XYZ degrees (e.g. the
-    // Inspector) — that conversion applies X, then Y, then Z. Scale may be non-uniform:
+    // Inspector); that conversion applies X, then Y, then Z. Scale may be non-uniform:
     // DrawMesh derives an inverse-transpose normal matrix so shading, the G-buffer
     // normals, and the outline width all stay correct under any scale.
     struct Transform {
@@ -117,8 +117,8 @@ namespace toon {
         // Bloom (DiligentFX's Bloom effect via PostFXContext). Bright pixels bleed a
         // soft glow into their surroundings. NOTE: the threshold/knee run on the *raw*
         // HDR scene, before exposure + tone mapping, so on this LDR-ranged toon scene
-        // (fill maxes near the base color, < 1.0) the default threshold sits below 1.0
-        // — otherwise nothing is bright enough to bloom. Raise it toward/above 1.0 once
+        // (fill maxes near the base color, < 1.0) the default threshold sits below 1.0.
+        // Otherwise nothing is bright enough to bloom. Raise it toward/above 1.0 once
         // the scene carries real over-bright (emissive) values.
         bool bloom = true;
         float bloomIntensity = 0.5f; // strength of the added glow
@@ -132,11 +132,11 @@ namespace toon {
         bool ssao = true;
         float ssaoStrength = 1.0f; // composite strength (0 = off, 1 = full occlusion)
         float ssaoRadius = 1.5f;   // world-space occlusion radius
-        bool ssaoTemporal = true;  // temporal accumulation — denoises the AO; safe now
+        bool ssaoTemporal = true;  // temporal accumulation, denoises the AO; safe now
                                    // that the scene writes real motion vectors
 
         // App-computed (not a Debug-panel toggle): true whenever temporal history
-        // shouldn't be trusted — an active gizmo/UI interaction, or anything
+        // shouldn't be trusted: an active gizmo/UI interaction, or anything
         // continuously animating (Spin). Forces SSAO/TAA to drop accumulated history for
         // the duration. The Spin case needed real investigation: a rotating silhouette
         // is a view-dependent contour, not a fixed set of vertices, so no per-vertex
@@ -154,7 +154,7 @@ namespace toon {
         // Focus/aperture live in the camera attribs (see FillCameraAttribs).
         bool dof = false;           // off by default (it's a strong look)
         float dofFocusDist = 10.5f; // world-space distance in sharp focus (~the objects)
-        float dofFStop = 6.0f;      // aperture — smaller = shallower focus = more blur
+        float dofFStop = 6.0f;      // aperture: smaller = shallower focus = more blur
         float dofMaxCoC = 0.015f;   // max circle-of-confusion (blur size), texture-UV units
 
         // Temporal anti-aliasing (DiligentFX's TemporalAntiAliasing). Jitters the camera
@@ -171,7 +171,7 @@ namespace toon {
         bool ssr = false;
         float ssrStrength = 0.6f; // how strongly the reflection is added
 
-        // Cascaded shadow maps (Diligent's ShadowMapManager, forward-rendered — not a
+        // Cascaded shadow maps (Diligent's ShadowMapManager, forward-rendered, not a
         // PostFXContext effect). Casts shadows from the scene light onto every cel-shaded
         // surface; see Renderer::BeginShadowPass / DrawMeshShadow / DrawModelShadow.
         bool shadows = true;
@@ -200,12 +200,19 @@ namespace toon {
         // Keep the swap chain matched to the window's framebuffer size.
         void Resize(uint32_t width, uint32_t height);
 
+        // Manually re-check every shader source file and recompile whatever changed (roadmap
+        // #10). In a Debug build a file-system watcher already does this automatically once
+        // per frame inside BeginFrame; this is a fallback trigger for the Settings panel's
+        // "Reload Now" button. Returns how many shaders/pipelines were reloaded -- always 0 in
+        // a Release build, where hot-reload is compiled out entirely.
+        uint32_t ReloadShaders();
+
         // --- Scene: meshes + toon draw ------------------------------------------
         // Upload a mesh once; returns a handle (MeshHandle::Invalid on failure).
         MeshHandle CreateMesh(const Vertex *vertices, uint32_t vertexCount, const uint32_t *indices,
                               uint32_t indexCount);
 
-        // Local-space (object-space) axis-aligned bounds, computed once at creation/load — the
+        // Local-space (object-space) axis-aligned bounds, computed once at creation/load; the
         // app layer's mouse-pick (app/picking.cpp) transforms these by an entity's worldMatrix to
         // ray-test it. False (out-params untouched) for an invalid handle.
         bool GetMeshBounds(MeshHandle mesh, Vec3 &outMin, Vec3 &outMax) const;
@@ -215,7 +222,7 @@ namespace toon {
         void SetCamera(const Camera &camera);
 
         // Global scene light (single directional light). `color`/`intensity` are
-        // premultiplied together before upload — pass intensity > 1 to push it into HDR
+        // premultiplied together before upload: pass intensity > 1 to push it into HDR
         // (bloom will pick it up).
         void SetLight(const Vec3 &directionToLight, const Vec3 &color, float intensity);
 
@@ -231,13 +238,13 @@ namespace toon {
                                Vec3 &outDir) const;
 
         // Draw a mesh with the toon pipeline (outline pass + banded fill pass).
-        // `prevTransform` is the object's placement *last* frame — it drives the motion
+        // `prevTransform` is the object's placement *last* frame; it drives the motion
         // vectors SSAO temporal accumulation / DoF consume. Pass the same value as
         // `transform` for a static object (no motion).
         void DrawMesh(MeshHandle mesh, const Transform &transform, const Transform &prevTransform,
                       const Material &material);
 
-        // Draw with a pre-composed world matrix (+ last frame's, for motion vectors) — the
+        // Draw with a pre-composed world matrix (+ last frame's, for motion vectors), the
         // path the scene graph uses, since it composes world transforms down the hierarchy.
         void DrawMesh(MeshHandle mesh, const Mat4 &world, const Mat4 &prevWorld, const Material &material);
 
@@ -261,7 +268,7 @@ namespace toon {
         ModelHandle LoadModel(const char *path);
 
         // Draw a loaded model cel-shaded (textured fill; no inverted-hull outline yet).
-        // `style` supplies the shared look — bands / ambient / roughness — and its
+        // `style` supplies the shared look (bands / ambient / roughness) and its
         // `baseColor` is a global tint over each primitive's glTF base color (default white
         // = untinted). Motion vectors come from transform vs prevTransform, like DrawMesh.
         void DrawModel(ModelHandle model, const Transform &transform, const Transform &prevTransform,
@@ -271,13 +278,13 @@ namespace toon {
         void DrawModel(ModelHandle model, const Mat4 &world, const Mat4 &prevWorld, const Material &style);
 
         // --- Textures (editor UI: asset thumbnails/previews) --------------------
-        // Not part of the toon draw path (materials don't carry textures yet) — this exists
+        // Not part of the toon draw path (materials don't carry textures yet); this exists
         // so editor UI (the asset browser) can decode an image file and display it with
         // ImGui::Image. Decodes PNG/JPG/BMP/TGA via DiligentTools' TextureLoader.
         TextureHandle LoadTexture(const char *path); // TextureHandle::Invalid on failure
         void DestroyTexture(TextureHandle texture);
 
-        // An opaque id ImGui::Image can draw (cast to ImTextureID at the call site — this
+        // An opaque id ImGui::Image can draw (cast to ImTextureID at the call site; this
         // header stays ImGui-free). 0 for an invalid handle.
         uint64_t GetTextureImGuiID(TextureHandle texture) const;
 
@@ -300,7 +307,7 @@ namespace toon {
 
         // --- Debug/editor UI (Dear ImGui) ---------------------------------------
         // Diligent's ImGui renderer backend (ImGuiImplDiligent) is confined to
-        // renderer.cpp same as everything else — main.cpp only sees these four
+        // renderer.cpp same as everything else; main.cpp only sees these four
         // calls. Dear ImGui itself is a plain UI library, not a Diligent type, so
         // engine/game code is free to include <imgui.h> and call ImGui:: directly
         // between BeginUI() and EndUI() to build UI.
@@ -320,7 +327,7 @@ namespace toon {
         bool CreateShadowMap();                                       // ShadowMapManager + depth-only PSOs
         bool CreateWireframePipeline();                               // debug line-list PSO (DrawWireframe)
 
-        struct Impl; // defined in renderer.cpp — hides all Diligent types
+        struct Impl; // defined in renderer.cpp; hides all Diligent types
         Impl *m_impl = nullptr;
     };
 

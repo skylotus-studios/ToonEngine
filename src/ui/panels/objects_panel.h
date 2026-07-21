@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/panels/objects_panel.h — the "Objects" hierarchy panel.
+//  ui/panels/objects_panel.h: the "Objects" hierarchy panel.
 //============================================================================
 namespace toon {
 

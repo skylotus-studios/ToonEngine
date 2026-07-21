@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/panels/dockspace.h — the full-window dockspace + one-time default panel layout.
+//  ui/panels/dockspace.h: the full-window dockspace + one-time default panel layout.
 //============================================================================
 namespace toon {
 

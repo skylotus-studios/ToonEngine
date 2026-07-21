@@ -1,5 +1,5 @@
 //============================================================================
-//  ui/panels/playback_panel.cpp — see playback_panel.h.
+//  ui/panels/playback_panel.cpp: see playback_panel.h.
 //============================================================================
 #include "ui/panels/playback_panel.h"
 

@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/panels/playback_panel.h — Play / Pause / Step / Stop for the fixed-timestep sim.
+//  ui/panels/playback_panel.h: Play / Pause / Step / Stop for the fixed-timestep sim.
 //============================================================================
 namespace toon {
 

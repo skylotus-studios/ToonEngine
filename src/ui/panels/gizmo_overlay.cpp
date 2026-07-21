@@ -1,5 +1,5 @@
 //============================================================================
-//  ui/panels/gizmo_overlay.cpp — see gizmo_overlay.h.
+//  ui/panels/gizmo_overlay.cpp: see gizmo_overlay.h.
 //============================================================================
 #include "ui/panels/gizmo_overlay.h"
 
@@ -26,7 +26,7 @@ namespace toon {
         if (scene.selected > 0 && scene.selected < static_cast<int>(scene.entities.size()) &&
             scene.entities[scene.selected].transform) {
             const ImGuiIO &io = ImGui::GetIO();
-            // Diligent's row-major matrices feed ImGuizmo (column-major) directly — the
+            // Diligent's row-major matrices feed ImGuizmo (column-major) directly: the
             // conventions are transposes, so the raw 16 floats already match, no explicit
             // transpose needed.
             Mat4 view, proj;

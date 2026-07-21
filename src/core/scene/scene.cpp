@@ -1,8 +1,8 @@
 //============================================================================
-//  core/scene/scene.cpp — scene graph world-transform composition.
+//  core/scene/scene.cpp: scene graph world-transform composition.
 //
 //  The one engine translation unit besides renderer.cpp that uses Diligent: it composes
-//  world matrices with Diligent's float4x4 (build-on-Diligent — no hand-rolled 4x4 math)
+//  world matrices with Diligent's float4x4 (build-on-Diligent, no hand-rolled 4x4 math)
 //  and hands them across the seam as the plain toon::Mat4. Everything the app sees stays
 //  Diligent-free (see scene.h).
 //============================================================================
@@ -46,7 +46,7 @@ namespace toon {
             return out;
         }
 
-        // Plain Mat4 (seam) <-> Diligent float4x4 — both row-major, a straight element copy.
+        // Plain Mat4 (seam) <-> Diligent float4x4: both row-major, a straight element copy.
         Mat4 ToMat4(const float4x4 &m) {
             Mat4 out;
             for (int r = 0; r < 4; ++r) {
@@ -66,7 +66,7 @@ namespace toon {
             return out;
         }
 
-        // Decompose a local (object->parent) matrix back into a Transform — the exact inverse of
+        // Decompose a local (object->parent) matrix back into a Transform: the exact inverse of
         // LocalFromTransform (Scale · R, row-vector). Used by the gizmo write-back + world-preserving
         // reparent, so a matrix round-trips to the same TRS the renderer would rebuild.
         void DecomposeToTransform(const float4x4 &m, Transform &out) {
@@ -180,7 +180,7 @@ namespace toon {
 
     // --- Entity copy semantics (M1.3) --------------------------------------------
     // A std::unique_ptr inside ScriptComponent makes Entity's implicit copy operations
-    // deleted (see scene.h) — these deep-clone `scripts` via the name registry and each
+    // deleted (see scene.h); these deep-clone `scripts` via the name registry and each
     // script's own Save/Load instead. Everything else is a plain member copy: mesh/model
     // handles are just IDs (never touches the Renderer, so no GPU re-upload/leak).
 
@@ -195,7 +195,7 @@ namespace toon {
             dup.name = src.name;
             dup.instance = CreateScript(src.name);
             if (dup.instance && src.instance) {
-                // Round-trip through a memory buffer, not the entity's own fields — a
+                // Round-trip through a memory buffer, not the entity's own fields: a
                 // script's Save/Load only ever touches its own state (see script.h).
                 std::ostringstream buf;
                 src.instance->Save(buf);
@@ -304,7 +304,7 @@ namespace toon {
         const float3 up = cross(fwd, right); // unit length: fwd, right already orthonormal
 
         // Rows = world axes [right, up, forward] (row-vector convention, matches
-        // LocalFromTransform) — local +Z maps to world `fwd`, i.e. `dirToLight`.
+        // LocalFromTransform); local +Z maps to world `fwd`, i.e. `dirToLight`.
         float4x4 rot = float4x4::Identity();
         rot[0][0] = right.x;
         rot[0][1] = right.y;

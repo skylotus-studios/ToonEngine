@@ -1,9 +1,9 @@
 //============================================================================
-//  ToonEngine — entry point.
+//  ToonEngine: entry point.
 //
 //  Owns the window and drives the editor's init/tick/render/UI calls (app/editor_*.h,
 //  ui/panels/*.h). All GPU/backend work lives behind core/rendering/renderer.h (see that
-//  header for the seam rationale); this file includes no Diligent header at all — that's
+//  header for the seam rationale); this file includes no Diligent header at all, which is
 //  the point of the seam.
 //============================================================================
 #include "app/editor_init.h"

@@ -1,5 +1,5 @@
 //============================================================================
-//  core/input/action_map.cpp — binding evaluation, the query API, the context
+//  core/input/action_map.cpp: binding evaluation, the query API, the context
 //  stack, and the default editor bindings.
 //============================================================================
 #include "core/input/action_map.h"
@@ -92,7 +92,7 @@ namespace toon {
                 }, b);
             }
 
-            // Context stack — searched top-down so later-pushed contexts win.
+            // Context stack: searched top-down so later-pushed contexts win.
             std::vector<InputContext> gContextStack;
 
             const Action* FindAction(ActionId id) {
@@ -215,7 +215,7 @@ namespace toon {
             editor.name = "editor";
             ActionMap& m = editor.map;
 
-            // Camera fly axes (active while right-drag orbits — see main.cpp). Up/down is E/Q,
+            // Camera fly axes (active while right-drag orbits, see main.cpp). Up/down is E/Q,
             // matching this engine's existing scheme (NOT the old engine's Space/LeftShift), so
             // porting the action map doesn't change today's feel.
             m.BindAxisPositive("camera.fly.forward", KeyBinding{Key::W});
@@ -225,14 +225,14 @@ namespace toon {
             m.BindAxisPositive("camera.fly.up",      KeyBinding{Key::E});
             m.BindAxisNegative("camera.fly.up",      KeyBinding{Key::Q});
 
-            // Gamepad camera fly (left stick) — the same named axes, so keyboard and gamepad both
+            // Gamepad camera fly (left stick): the same named axes, so keyboard and gamepad both
             // drive them without main.cpp caring which is live.
             m.BindAxisPositive("camera.fly.forward", GamepadAxisBinding{0, GamepadAxis::LeftY, true,  0.15f});
             m.BindAxisNegative("camera.fly.forward", GamepadAxisBinding{0, GamepadAxis::LeftY, false, 0.15f});
             m.BindAxisPositive("camera.fly.right",   GamepadAxisBinding{0, GamepadAxis::LeftX, false, 0.15f});
             m.BindAxisNegative("camera.fly.right",   GamepadAxisBinding{0, GamepadAxis::LeftX, true,  0.15f});
 
-            // Gamepad camera orbit (right stick) — a new capability; the mouse-drag orbit stays on
+            // Gamepad camera orbit (right stick): a new capability; the mouse-drag orbit stays on
             // raw polling (see main.cpp), so this is gamepad-only.
             m.BindAxisPositive("camera.orbit.x", GamepadAxisBinding{0, GamepadAxis::RightX, false, 0.15f});
             m.BindAxisNegative("camera.orbit.x", GamepadAxisBinding{0, GamepadAxis::RightX, true,  0.15f});
@@ -243,7 +243,7 @@ namespace toon {
             m.BindAction("camera.focus", KeyBinding{Key::F});
 
             // NOTE: the reference also bound gizmo.translate/rotate/scale and app.quit here. Neither
-            // has a consumer in this engine yet (gizmo hotkeys stay on ImGui's own key routing — see
+            // has a consumer in this engine yet (gizmo hotkeys stay on ImGui's own key routing, see
             // main.cpp; nothing calls WasActionPressed("app.quit")), so they're left out rather than
             // shipped as dead bindings in the generated assets/input.json.
 

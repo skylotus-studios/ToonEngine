@@ -1,9 +1,9 @@
 //============================================================================
-//  core/rendering/primitives.cpp — procedural mesh generators.
+//  core/rendering/primitives.cpp: procedural mesh generators.
 //
 //  Triangles are wound counter-clockwise as seen from OUTSIDE the surface (see
 //  primitives.h). Every vertex carries a per-face `normal` (fill shading) and a
-//  `smoothNormal` (outline hull extrusion) — identical for smooth meshes.
+//  `smoothNormal` (outline hull extrusion), identical for smooth meshes.
 //============================================================================
 #include "core/rendering/primitives.h"
 
@@ -56,7 +56,7 @@ namespace toon {
         // Per face: outward normal n and in-plane axes u, v chosen so u x v = n.
         // Corners are wound (-u-v, -u+v, +u+v, +u-v): this is CCW in screen for the
         // viewer-facing face under Diligent's LEFT-handed projection (the reverse of
-        // the right-handed u x v = n order) — matching the sphere/torus convention
+        // the right-handed u x v = n order), matching the sphere/torus convention
         // and the PSOs' FrontCounterClockwise = True.
         struct Face {
             Vec3 n, u, v;

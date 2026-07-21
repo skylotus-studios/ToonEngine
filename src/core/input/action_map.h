@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  core/input/action_map.h — named, rebindable actions/axes over the raw
+//  core/input/action_map.h: named, rebindable actions/axes over the raw
 //  device layer, plus a push/pop context stack.
 //
 //  Actions are hashed by name (FNV-1a) for O(1) lookup; each can carry several physical
@@ -98,7 +98,7 @@ namespace toon {
         void PopContext(const char* name);
         void ClearContexts();
 
-        // Find a pushed context by name — e.g. so BindingIO::Load can override its bindings from a
+        // Find a pushed context by name, e.g. so BindingIO::Load can override its bindings from a
         // saved file after RegisterDefaultEditorBindings pushes it (see main.cpp's startup). Returns
         // null if no context by that name is on the stack.
         InputContext* GetContext(const char* name);

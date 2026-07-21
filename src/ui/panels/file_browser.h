@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/panels/file_browser.h — the "Asset Browser" editor panel.
+//  ui/panels/file_browser.h: the "Asset Browser" editor panel.
 //
 //  Browses assets/ with a breadcrumb bar, a sortable file table, and an image
 //  preview pane. Ported from ToonEngineOld/src/ui/file_browser.* onto the
@@ -10,8 +10,8 @@
 //
 //  Passive besides navigation/selection: the one active behavior is reporting
 //  a double-clicked file back to the caller. FileBrowser doesn't know what a
-//  ".scene" file means — main.cpp routes an activated path through
-//  app/scene_ops.h's LoadSceneInto — so this stays decoupled from
+//  ".scene" file means: main.cpp routes an activated path through
+//  app/scene_ops.h's LoadSceneInto, so this stays decoupled from
 //  scene/serializer semantics.
 //
 //  Plain data + free functions (core/scene/scene.h's Scene shape), not a class:
@@ -56,7 +56,7 @@ namespace toon {
     void InitFileBrowser(FileBrowser &browser, const char *rootDir);
 
     // Draws the "Asset Browser" window: breadcrumb, sortable table, preview pane. Returns
-    // the path of a file the user double-clicked THIS frame, or an empty string otherwise —
+    // the path of a file the user double-clicked THIS frame, or an empty string otherwise:
     // directories are navigated internally and never returned.
     std::string RenderFileBrowser(FileBrowser &browser, Renderer &renderer);
 

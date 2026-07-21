@@ -1,9 +1,9 @@
 #pragma once
 //============================================================================
-//  core/scene/serializer.h — scene save/load to a simple text .scene file.
+//  core/scene/serializer.h: scene save/load to a simple text .scene file.
 //
 //  Adapted from ToonEngineOld/src/scene/serializer.* for this engine's entity shape: a
-//  renderable is either a procedural primitive (no source file — regenerated on load from a
+//  renderable is either a procedural primitive (no source file, regenerated on load from a
 //  saved PrimitiveDesc, see core/rendering/primitives.h) or a loaded glTF model (reloaded from a saved
 //  path), never both. Diligent-free like scene.h/camera.h: LoadScene only reaches Diligent
 //  indirectly, through Renderer::CreateMesh/LoadModel across the seam.

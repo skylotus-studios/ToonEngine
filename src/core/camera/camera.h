@@ -1,11 +1,11 @@
 #pragma once
 //============================================================================
-//  core/camera/camera.h — editor camera controls (orbit / pan / zoom / fly / focus).
+//  core/camera/camera.h: editor camera controls (orbit / pan / zoom / fly / focus).
 //
 //  Free functions that mutate a toon::Camera (the seam's camera data, from renderer.h)
 //  in response to input deltas. Backend-agnostic API; camera.cpp uses Diligent's
 //  float4x4 internally to derive the camera's world basis so it matches the renderer's
-//  view convention exactly — same build-on-Diligent pattern as scene.cpp.
+//  view convention exactly: the same build-on-Diligent pattern as scene.cpp.
 //============================================================================
 #include "core/rendering/renderer.h" // toon::Camera, Vec3
 
@@ -27,7 +27,7 @@ namespace toon {
     // Focus: re-target the pivot at a world point (keeps the current distance + orientation).
     void CameraFocus(Camera &cam, const Vec3 &target);
 
-    // The camera's world-space eye position + facing (forward/up) — the audio listener's
+    // The camera's world-space eye position + facing (forward/up): the audio listener's
     // source (core/audio/audio.h's SetListener, driven once per render frame from
     // TickEditor). Derived from the same yaw/pitch/pivot/distance basis SetCamera's view
     // matrix uses, so "what you hear" always matches "what you see".

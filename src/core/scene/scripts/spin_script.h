@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  core/scene/scripts/spin_script.h — the first concrete Script: spins an entity's local
+//  core/scene/scripts/spin_script.h: the first concrete Script, spins an entity's local
 //  rotation around a fixed axis at a constant rate.
 //
 //  Ports main.cpp's old hardcoded spin block (the "Spinner" side-list) onto the

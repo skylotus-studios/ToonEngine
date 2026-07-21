@@ -1,10 +1,10 @@
 #pragma once
 //============================================================================
-//  core/audio/audio.h — ToonEngine's audio seam.
+//  core/audio/audio.h: ToonEngine's audio seam.
 //
 //  Twin to core/physics/physics.h: the ONE header the rest of the engine talks to for
 //  sound. Every miniaudio type (ma_engine, ma_sound, ...) lives behind it in audio.cpp via
-//  PIMPL, so no miniaudio type — and no miniaudio header — escapes into engine or game
+//  PIMPL, so no miniaudio type (and no miniaudio header) escapes into engine or game
 //  code (per the project's build-on-Diligent guiding principle and the physics/renderer
 //  seams it already established). This header speaks only toon:: types: Vec3 (core/math.h)
 //  and plain
@@ -25,9 +25,9 @@ namespace toon {
 
     // --- Scene vocabulary ---------------------------------------------------------
 
-    // Everything Play needs to start one persistent (handled) sound — a scene emitter
+    // Everything Play needs to start one persistent (handled) sound: a scene emitter
     // (app/audio_glue.cpp's BuildAudioWorld) or a music track. `clip` is typically just a
-    // filename (e.g. "demo_hum.wav") — audio.cpp resolves anything that isn't already an
+    // filename (e.g. "demo_hum.wav"). audio.cpp resolves anything that isn't already an
     // absolute path against TOON_AUDIO_DIR, so a full path also works if one is given.
     struct SoundDesc {
         std::string clip;
@@ -37,13 +37,13 @@ namespace toon {
         bool spatial = true; // false = plays the same everywhere (music, UI); true = 3D positioned
         bool stream =
             false; // true = decode from disk as it plays (long music tracks); false = load fully upfront (short SFX)
-        float maxDistance = 25.0f; // spatial only — beyond this, attenuation bottoms out
-        Vec3 position;             // spatial only — initial world position (SetPosition updates it per frame)
+        float maxDistance = 25.0f; // spatial only: beyond this, attenuation bottoms out
+        Vec3 position;             // spatial only: initial world position (SetPosition updates it per frame)
     };
 
     // --- AudioEngine --------------------------------------------------------------
     // PIMPL, the same rationale as Renderer/PhysicsWorld: miniaudio already provides its own
-    // internal dispatch (and owns its own realtime audio callback thread — see audio.cpp's
+    // internal dispatch (and owns its own realtime audio callback thread, see audio.cpp's
     // banner), so a second dispatch layer here would buy nothing.
     class AudioEngine {
     public:
@@ -58,21 +58,21 @@ namespace toon {
         bool Init();
         void Shutdown();
 
-        // Listener — the "virtual ears" spatial sounds are heard relative to. Driven from the
-        // editor camera every RENDERED frame (not the fixed sim tick — see docs/architecture.md's
+        // Listener: the "virtual ears" spatial sounds are heard relative to. Driven from the
+        // editor camera every RENDERED frame (not the fixed sim tick, see docs/architecture.md's
         // audio section): audio is a presentation concern, like rendering, so it should track the
         // same smoothly-interpolated transform the camera renders with, not the stepped sim pose.
         void SetListener(const Vec3 &position, const Vec3 &forward, const Vec3 &up);
 
-        // Fire-and-forget one-shots: play once, then miniaudio releases the resources itself —
-        // there is no handle to hold or clean up. PlayOneShot is non-spatial (UI blips, global
+        // Fire-and-forget one-shots: play once, then miniaudio releases the resources itself.
+        // There is no handle to hold or clean up. PlayOneShot is non-spatial (UI blips, global
         // SFX); PlayOneShotAt places a transient emitter at a world point (an impact, a pickup)
         // that plays once and is gone, mirroring Unity's PlayClipAtPoint.
         void PlayOneShot(const char *clip, float volume = 1.0f);
         void PlayOneShotAt(const char *clip, const Vec3 &position, float volume = 1.0f);
 
         // Persistent (handled) sounds: scene emitters (looping ambience, one per AudioSource
-        // component) and music. Returns SoundHandle::Invalid on failure (bad path — logs to
+        // component) and music. Returns SoundHandle::Invalid on failure (bad path, logs to
         // stderr). Play starts it immediately (respecting SoundDesc::loop).
         SoundHandle Play(const SoundDesc &desc);
         void Stop(SoundHandle sound);                              // stop + release this one handled sound
@@ -87,7 +87,7 @@ namespace toon {
 
         // Note on editor auditioning: there is no separate "preview" API. The Properties
         // panel's "Preview"/"Stop Preview" button (ui/panels/properties_panel.cpp) auditions an
-        // AudioSource exactly as authored — loop, volume, pitch, spatial — by calling Play()
+        // AudioSource exactly as authored (loop, volume, pitch, spatial) by calling Play()
         // with a SoundDesc built from the component's own fields and holding the returned
         // handle until the button is pressed again (or another entity is previewed), then
         // calling Stop() on it. This works in any Editing/Playing/Paused mode since AudioEngine
@@ -96,7 +96,7 @@ namespace toon {
         void SetMasterVolume(float volume); // Settings panel's mute/volume control
 
     private:
-        struct Impl; // defined in audio.cpp — hides all miniaudio types
+        struct Impl; // defined in audio.cpp: hides all miniaudio types
         Impl *m_impl = nullptr;
     };
 

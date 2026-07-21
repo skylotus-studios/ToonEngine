@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  app/picking.h — click-to-select: unproject the mouse to a world ray, then find
+//  app/picking.h: click-to-select. Unproject the mouse to a world ray, then find
 //  the nearest entity whose world-space bounds it pierces.
 //
 //  Geometric (ray-vs-bounding-box), NOT the physics PhysicsWorld::Raycast: that raycast's

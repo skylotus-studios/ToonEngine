@@ -1,9 +1,9 @@
 #pragma once
 //============================================================================
-//  app/editor_state.h — the editor's shared per-frame state.
+//  app/editor_state.h: the editor's shared per-frame state.
 //
 //  A plain data bundle (no methods, no hidden internals) that main.cpp's InitEditor/
-//  TickEditor/RenderFrame and every ui/panels/* function share by reference — the same
+//  TickEditor/RenderFrame and every ui/panels/* function share by reference, the same
 //  plain-struct-plus-free-functions shape core/scene/scene.h's Scene already uses, not a class
 //  wrapping this state in private members:
 //  nothing here hides a third-party dependency the way Renderer/PhysicsWorld's PIMPL does,
@@ -72,6 +72,11 @@ namespace toon {
         // Settings panel (SaveScene/LoadScene also log to the console).
         char scenePathBuf[256] = {};
         std::string sceneStatus;
+
+        // Roadmap #10: last result of the Settings panel's "Reload Now" shader button
+        // (Debug builds only -- an automatic file watcher already does this every frame; this
+        // status just echoes the manual fallback's own last result, same shape as sceneStatus).
+        std::string shaderReloadStatus;
 
         // "Contents" editor panel: browses assets/ with thumbnails.
         FileBrowser assetBrowser;

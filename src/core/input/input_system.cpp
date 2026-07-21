@@ -1,5 +1,5 @@
 //============================================================================
-//  core/input/input_system.cpp — GLFW callback wiring + polling implementation.
+//  core/input/input_system.cpp: GLFW callback wiring + polling implementation.
 //============================================================================
 #include "core/input/input_system.h"
 
@@ -43,7 +43,7 @@ namespace toon {
 
             // Gamepad hot-plug: keep the connected flag accurate so GamepadCount()/GetGamepad() reflect
             // reality. (The reference also pushed a connect/disconnect event here; this engine has no
-            // event queue — see input_system.h's banner.)
+            // event queue, see input_system.h's banner.)
             void JoystickCallback(int jid, int event) {
                 if (jid < 0 || jid >= kMaxGamepads) { return; }
                 if (event == GLFW_CONNECTED && glfwJoystickIsGamepad(jid)) {
@@ -89,7 +89,7 @@ namespace toon {
             gMouse.BeginFrame();
             for (Gamepad& gp : gGamepads) {
                 gp.BeginFrame();
-                gp.Poll();   // glfwGetGamepadState reads the OS device live — safe to call before PollEvents.
+                gp.Poll();   // glfwGetGamepadState reads the OS device live: safe to call before PollEvents.
             }
         }
 
