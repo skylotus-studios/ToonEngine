@@ -1,5 +1,5 @@
 //============================================================================
-//  ui/panels/settings_panel.cpp — see settings_panel.h.
+//  ui/panels/settings_panel.cpp: see settings_panel.h.
 //============================================================================
 #include "ui/panels/settings_panel.h"
 

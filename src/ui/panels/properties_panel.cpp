@@ -1,5 +1,5 @@
 //============================================================================
-//  ui/panels/properties_panel.cpp — see properties_panel.h.
+//  ui/panels/properties_panel.cpp: see properties_panel.h.
 //============================================================================
 #include "ui/panels/properties_panel.h"
 
@@ -29,12 +29,12 @@ namespace toon {
                 std::snprintf(nameBuf, sizeof(nameBuf), "%s", e.name.c_str());
                 if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) { e.name = nameBuf; }
 
-                // Transform — rotation shown in DEGREES for editing, stored as a quaternion
+                // Transform: rotation shown in DEGREES for editing, stored as a quaternion
                 // (core/rendering/renderer.h's Transform::rotation); QuatToEuler/QuatFromEuler
                 // (core/math.h) convert at this widget boundary only. Euler is re-derived
                 // from the live quaternion every frame rather than cached, so a value can
                 // display renormalized (e.g. 190 shown as -170) and, near gimbal lock, the
-                // other two axes can jump when one is edited — the same trade-off Unity's
+                // other two axes can jump when one is edited, the same trade-off Unity's
                 // inspector accepts without its extra hidden-Euler-cache bookkeeping.
                 if (e.transform && !isRoot) {
                     ImGui::SeparatorText("Transform");
@@ -48,10 +48,10 @@ namespace toon {
                     }
                     ImGui::DragFloat3("Scale", &t.scale.x, 0.01f, 0.001f, 100.0f);
                 } else if (isRoot) {
-                    ImGui::TextDisabled("(scene root — a pure anchor, no transform)");
+                    ImGui::TextDisabled("(scene root: a pure anchor, no transform)");
                 }
 
-                // Material — only for renderables (a mesh or a model).
+                // Material: only for renderables (a mesh or a model).
                 if (e.mesh != MeshHandle::Invalid || e.model != ModelHandle::Invalid) {
                     ImGui::SeparatorText("Material");
                     ImGui::ColorEdit3("Base color", &e.material.baseColor.x);
@@ -60,7 +60,7 @@ namespace toon {
                     ImGui::SliderFloat("Roughness", &e.material.roughness, 0.0f, 1.0f);
                 }
 
-                // Light — a true optional component (core/scene/scene.h): Add/Remove it
+                // Light: a true optional component (core/scene/scene.h); Add/Remove it
                 // directly, rather than assuming it's attached in code. Direction isn't a
                 // field here: it comes from the entity's rotation (aim it with the gizmo,
                 // like Material's transform above).
@@ -78,7 +78,7 @@ namespace toon {
                     if (ImGui::Button("Add Light")) { e.light = LightComponent{}; }
                 }
 
-                // Collider and Rigid Body (M2.1) — two fully independent optional
+                // Collider and Rigid Body (M2.1): two fully independent optional
                 // components (core/scene/scene.h), each Add/Remove-able on its own; neither
                 // gates the other's visibility here, even though a RigidBody only does
                 // anything once the entity also has a Collider (app/physics_glue.cpp's
@@ -136,11 +136,11 @@ namespace toon {
                     }
                 }
 
-                // Audio Source (M2.2) — a true optional component (core/scene/scene.h), same
+                // Audio Source (M2.2): a true optional component (core/scene/scene.h), same
                 // Add/Remove idiom as Light/Collider/Rigid Body above. Field edits here only
                 // take effect on the NEXT Play session (BuildAudioWorld builds the handled
                 // sound once, like BuildPhysicsWorld does for bodies); "Preview" is the
-                // exception — it auditions the clip immediately, in ANY mode, independent of
+                // exception: it auditions the clip immediately, in ANY mode, independent of
                 // Play/Pause/Stop, using the component's OWN volume/pitch/loop/spatial fields
                 // (a real Play()/Stop() pair, held in state.previewHandle -- see
                 // editor_state.h's comment) so a looping source previews as a loop until
@@ -194,13 +194,13 @@ namespace toon {
                     }
                 }
 
-                // Scripts (core/scene/script.h) — a vector, not a single optional component:
+                // Scripts (core/scene/script.h): a vector, not a single optional component;
                 // an entity can carry several independent scripts at once (e.g. a Health
                 // script alongside a PlayerMovement script), so each attached script gets its
                 // own Remove button, and "Add Script" picks a registered type by name (the
                 // same registry CreateScript/serialization use) rather than a single
                 // attach/detach toggle. Editing a script's OWN fields (e.g. SpinScript's
-                // axis/speed) is deliberately not exposed here — that needs Script to grow
+                // axis/speed) is deliberately not exposed here; that needs Script to grow
                 // its own ImGui-drawing hook (beyond Save/Load), a separate, larger feature
                 // this pass doesn't include.
                 if (e.transform && !isRoot) {

@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  app/physics_glue.h — collider-extent scaling + physics-world (re)construction.
+//  app/physics_glue.h: collider-extent scaling + physics-world (re)construction.
 //
 //  Shared by editor_tick.cpp (rebuilding the world when Play/Step starts) and
 //  ui/panels/settings_panel.cpp's collider-wireframe overlay, which mirrors

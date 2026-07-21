@@ -1,10 +1,10 @@
 #pragma once
 //============================================================================
-//  core/input/keycodes.h — unified key/button/axis enums that isolate GLFW
+//  core/input/keycodes.h: unified key/button/axis enums that isolate GLFW
 //  from the rest of the engine.
 //
 //  Key mirrors GLFW's own key codes exactly, so GlfwFromKey/KeyFromGlfw are plain casts.
-//  Ported from ToonEngineOld/src/core/input/keycodes.h (unchanged — no glm/GLFW dependency
+//  Ported from ToonEngineOld/src/core/input/keycodes.h (unchanged, no glm/GLFW dependency
 //  to strip; the original's `#include <GLFW/glfw3.h>` was unused, dropped here).
 //============================================================================
 

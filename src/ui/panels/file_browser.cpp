@@ -1,9 +1,9 @@
 //============================================================================
-//  ui/panels/file_browser.cpp — see file_browser.h.
+//  ui/panels/file_browser.cpp: see file_browser.h.
 //============================================================================
 #include "ui/panels/file_browser.h"
 
-#include "imgui.h"             // ImGui is seam-exempt — UI code may call it directly
+#include "imgui.h"             // ImGui is seam-exempt: UI code may call it directly
 #include "IconsFontAwesome6.h" // ICON_FA_* glyphs, merged into the UI font in main.cpp
 
 #include <algorithm>
@@ -17,8 +17,8 @@ namespace toon {
 
     namespace {
         // Extensions the current engine's loader pipeline recognizes as a 3D asset (DiligentTools'
-        // glTF loader handles .gltf/.glb; .fbx is listed for the icon tag only — the engine has no
-        // FBX loader — so it still shows up, just not as "load-able").
+        // glTF loader handles .gltf/.glb; .fbx is listed for the icon tag only: the engine has no
+        // FBX loader, so it still shows up, just not as "load-able").
         const char *kModelExtensions[] = {".gltf", ".glb", ".fbx"};
 
         bool IsModelFile(const std::string &ext) {
@@ -46,7 +46,7 @@ namespace toon {
         // standard libraries), so there's no direct conversion to a display-able calendar time
         // before C++20's clock_cast (this project is C++17). The portable workaround: measure
         // `ft`'s offset from the file clock's "now" and apply that same offset to the system
-        // clock's "now" — exact given both `now()` calls happen back-to-back.
+        // clock's "now": exact given both `now()` calls happen back-to-back.
         std::string FormatTime(fs::file_time_type ft) {
             const auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
                 ft - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
@@ -90,7 +90,7 @@ namespace toon {
 
             std::error_code ec;
             for (const auto &it : fs::directory_iterator(browser.currentDir, ec)) {
-                // No .gitignore filter here (unlike the ToonEngineOld reference) — rooted at assets/,
+                // No .gitignore filter here (unlike the ToonEngineOld reference); rooted at assets/,
                 // there's nothing under it that needs hiding besides stray dotfiles.
                 const std::string name = it.path().filename().string();
                 if (!name.empty() && name[0] == '.') { continue; }

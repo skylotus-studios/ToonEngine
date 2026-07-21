@@ -1,5 +1,5 @@
 //============================================================================
-//  app/editor_render.cpp — see editor_render.h.
+//  app/editor_render.cpp: see editor_render.h.
 //============================================================================
 #include "app/editor_render.h"
 

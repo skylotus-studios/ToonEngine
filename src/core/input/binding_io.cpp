@@ -1,5 +1,5 @@
 //============================================================================
-//  core/input/binding_io.cpp — JSON save/load implementation.
+//  core/input/binding_io.cpp: JSON save/load implementation.
 //============================================================================
 #include "core/input/binding_io.h"
 
@@ -229,7 +229,7 @@ namespace toon {
                 if (!f.is_open()) { return false; }
 
                 // Parse and populate a side buffer under one try/catch, so ANY failure (a parse error or
-                // an unexpected JSON shape) leaves `ctx` completely untouched — same "build a side copy,
+                // an unexpected JSON shape) leaves `ctx` completely untouched, same "build a side copy,
                 // swap in only on full success" contract as core/serializer.cpp's LoadScene.
                 InputContext loaded;
                 try {

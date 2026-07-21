@@ -1,5 +1,5 @@
 //============================================================================
-//  ui/panels/dockspace.cpp — see dockspace.h.
+//  ui/panels/dockspace.cpp: see dockspace.h.
 //============================================================================
 #include "ui/panels/dockspace.h"
 
@@ -14,8 +14,8 @@ namespace toon {
     void SetupDockspace(EditorState &state) {
 #ifdef IMGUI_HAS_DOCK
         // DockSpaceOverViewport reads the main viewport's WorkPos/WorkSize, which Dear ImGui
-        // already shrinks around the main menu bar (DrawMenuBar, submitted earlier this frame)
-        // — so this whole dockspace, Playback strip included, composes below it automatically;
+        // already shrinks around the main menu bar (DrawMenuBar, submitted earlier this frame),
+        // so this whole dockspace, Playback strip included, composes below it automatically;
         // no coordinate math needed here.
         const ImGuiID dockspaceId =
             ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);

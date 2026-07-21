@@ -1,9 +1,9 @@
 //============================================================================
-//  core/scene/scripts/spin_script.cpp — SpinScript's OnUpdate/Save/Load and self-registration.
+//  core/scene/scripts/spin_script.cpp: SpinScript's OnUpdate/Save/Load and self-registration.
 //============================================================================
 #include "core/scene/scripts/spin_script.h"
 
-#include "core/scene/scene.h" // Entity — this script's whole job is mutating its transform
+#include "core/scene/scene.h" // Entity: this script's whole job is mutating its transform
 
 #include <iomanip>
 #include <memory>
@@ -12,7 +12,7 @@ namespace toon {
 
     void SpinScript::OnUpdate(Entity &self, Scene &, float dt) {
         if (!self.transform) {
-            return; // anchor/grouping node — nothing to spin
+            return; // anchor/grouping node, nothing to spin
         }
         // Pre-multiply a small delta rotation around the FIXED world-space `axis` onto the
         // entity's current orientation (core/math.h's hand-rolled Quat -- this file must stay
@@ -24,7 +24,7 @@ namespace toon {
     }
 
     // %.6f-equivalent precision (std::fixed + setprecision(6)) to match the rest of the
-    // .scene format's WriteFloat/WriteVec3 — not a bit-exact round-trip (that's a
+    // .scene format's WriteFloat/WriteVec3, not a bit-exact round-trip (that's a
     // rollback-netcode-grade concern, deliberately out of scope here), just enough to
     // avoid visible drift across repeated Play/Stop clones.
     void SpinScript::Save(std::ostream &out) const {

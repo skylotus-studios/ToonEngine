@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  app/editor_init.h — one-time editor setup.
+//  app/editor_init.h: one-time editor setup.
 //============================================================================
 struct GLFWwindow;
 

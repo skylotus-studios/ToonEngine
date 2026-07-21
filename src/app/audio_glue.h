@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  app/audio_glue.h — audio-world (re)construction from AudioSource-bearing entities.
+//  app/audio_glue.h: audio-world (re)construction from AudioSource-bearing entities.
 //
 //  Twin to app/physics_glue.h's BuildPhysicsWorld -- called from the same Play/Step
 //  transitions (ui/panels/playback_panel.cpp), right alongside it.

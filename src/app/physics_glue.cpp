@@ -1,5 +1,5 @@
 //============================================================================
-//  app/physics_glue.cpp — see physics_glue.h.
+//  app/physics_glue.cpp: see physics_glue.h.
 //============================================================================
 #include "app/physics_glue.h"
 

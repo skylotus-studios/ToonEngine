@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/panels/properties_panel.h — the "Properties" inspector for the selected entity.
+//  ui/panels/properties_panel.h: the "Properties" inspector for the selected entity.
 //============================================================================
 namespace toon {
 

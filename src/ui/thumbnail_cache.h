@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/thumbnail_cache.h — path -> texture cache for the asset browser.
+//  ui/thumbnail_cache.h: path -> texture cache for the asset browser.
 //
 //  Decodes an image file to a GPU texture once per path and remembers both hits and
 //  failures, so redrawing the file table every frame never re-decodes anything. Ported
@@ -32,7 +32,7 @@ namespace toon {
     // TextureHandle::Invalid if `path` doesn't decode as an image.
     TextureHandle GetThumbnail(ThumbnailCache &thumbnails, Renderer &renderer, const std::string &path);
 
-    // Releases every cached texture. Call once at shutdown only — never mid-session, since a
+    // Releases every cached texture. Call once at shutdown only, never mid-session, since a
     // texture already recorded in this frame's ImGui draw list must not be destroyed.
     void ClearThumbnails(ThumbnailCache &thumbnails, Renderer &renderer);
 

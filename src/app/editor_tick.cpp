@@ -1,5 +1,5 @@
 //============================================================================
-//  app/editor_tick.cpp — see editor_tick.h.
+//  app/editor_tick.cpp: see editor_tick.h.
 //============================================================================
 #include "app/editor_tick.h"
 
@@ -110,10 +110,10 @@ namespace toon {
         UpdateWorldTransforms(state.scene, alpha);
 
         // Audio (M2.2): listener + emitter positions update on the RENDER frame, not the fixed
-        // sim tick above — audio is a presentation concern like rendering, not a determinism
+        // sim tick above: audio is a presentation concern like rendering, not a determinism
         // one, so it should track the same smoothly-interpolated transforms just composed by
         // UpdateWorldTransforms rather than the raw stepped sim pose (see core/audio/audio.h's
-        // SetListener comment). Runs every frame regardless of mode — harmless while Editing/
+        // SetListener comment). Runs every frame regardless of mode, harmless while Editing/
         // Paused (BuildAudioWorld hasn't started anything yet, or PauseAll froze it), and keeps
         // the listener already correctly placed the instant Play starts.
         {
@@ -151,9 +151,9 @@ namespace toon {
             if (Input::IsMouseDown(M::Right)) {
                 CameraOrbit(state.camera, -mdx, -mdy);
                 // Fly axes go through the action map (camera.fly.*) so keyboard AND a gamepad
-                // stick drive the same names — see action_map.cpp's RegisterDefaultEditorBindings.
+                // stick drive the same names; see action_map.cpp's RegisterDefaultEditorBindings.
                 // Guarded on WantCaptureKeyboard because GetAxis reads raw device state (it
-                // bypasses SetCaptured, like the rest of the action-map layer) — without the
+                // bypasses SetCaptured, like the rest of the action-map layer). Without the
                 // guard, typing in an ImGui field while right-dragging would also fly the camera.
                 if (!io.WantCaptureKeyboard) {
                     const float fwd = Input::GetAxis("camera.fly.forward");
@@ -168,14 +168,14 @@ namespace toon {
                 CameraFocus(state.camera, {0.0f, 0.0f, 0.0f});
             }
 
-            // Gamepad orbit (right stick) — a new capability the action map adds; ungated (unlike
+            // Gamepad orbit (right stick): a new capability the action map adds; ungated (unlike
             // the keyboard-sourced queries above) since a physical stick is never ambiguous with
             // ImGui text entry. Scaled by dt so the turn rate is frame-rate independent, unlike the
             // per-frame pixel deltas CameraOrbit otherwise expects from a mouse drag.
             const float gpOrbitX = Input::GetAxis("camera.orbit.x");
             const float gpOrbitY = Input::GetAxis("camera.orbit.y");
             if (gpOrbitX != 0.0f || gpOrbitY != 0.0f) {
-                // Pixel-equivalents/sec at full stick deflection. An untested starting point — no
+                // Pixel-equivalents/sec at full stick deflection. An untested starting point: no
                 // controller in this environment to feel-tune it against (see the verify skill);
                 // adjust if a full stick push turns too fast or too slow.
                 constexpr float kGamepadOrbitRate = 150.0f;

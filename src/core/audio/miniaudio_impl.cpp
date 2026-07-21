@@ -1,5 +1,5 @@
 //============================================================================
-//  core/audio/miniaudio_impl.cpp — compiles miniaudio's single-header implementation.
+//  core/audio/miniaudio_impl.cpp: compiles miniaudio's single-header implementation.
 //
 //  miniaudio.h is a ~90k-line combined declaration+implementation header (see
 //  external/miniaudio/README.md); exactly one translation unit must define

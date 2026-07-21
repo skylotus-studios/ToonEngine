@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  app/editor_tick.h — per-frame input, fixed-timestep sim, and camera nav.
+//  app/editor_tick.h: per-frame input, fixed-timestep sim, and camera nav.
 //============================================================================
 namespace toon {
 

@@ -1,13 +1,13 @@
 //============================================================================
-//  core/physics.cpp — Jolt Physics backend behind the physics seam.
+//  core/physics.cpp: Jolt Physics backend behind the physics seam.
 //
-//  The one translation unit allowed to include a Jolt header or name a JPH:: type — twin
+//  The one translation unit allowed to include a Jolt header or name a JPH:: type, twin
 //  to core/renderer.cpp's relationship with Diligent (see core/physics.h's banner). The
 //  boilerplate below (layers, filters, the Init/Shutdown sequence) mirrors Jolt's own
-//  HelloWorld sample (external/JoltPhysics/HelloWorld/HelloWorld.cpp) — read directly from
+//  HelloWorld sample (external/JoltPhysics/HelloWorld/HelloWorld.cpp), read directly from
 //  the vendored 5.6 headers/sample rather than assumed, since this Jolt version is newer
 //  than most published tutorials (it ships hair/vehicle/soft-body modules ToonEngine
-//  doesn't use — see CMakeLists.txt's JPH_USE_* trimming).
+//  doesn't use; see CMakeLists.txt's JPH_USE_* trimming).
 //============================================================================
 #include "core/physics/physics.h"
 
@@ -30,7 +30,7 @@
 #include <Jolt/RegisterTypes.h>
 
 // Disables the common clang/MSVC warnings Jolt's own headers are known to trigger (see
-// Jolt's Core.h) — the same role the DILIGENT_NO_* trimming plays for Diligent.
+// Jolt's Core.h): the same role the DILIGENT_NO_* trimming plays for Diligent.
 JPH_SUPPRESS_WARNINGS
 
 #include <cmath>
@@ -74,7 +74,7 @@ public:
 
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
     // Jolt's own PROFILER_IN_DEBUG_AND_RELEASE (CMakeLists.txt, default ON) defines
-    // JPH_PROFILE_ENABLED for this Debug build, which makes this pure virtual too —
+    // JPH_PROFILE_ENABLED for this Debug build, which makes this pure virtual too;
     // omitting it (as an earlier draft of this file did) makes the class abstract and
     // fails to compile with "field type ... is an abstract class".
     const char *GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override {
@@ -110,10 +110,10 @@ public:
     }
 };
 
-// toon:: <-> Jolt conversions — trivial field copies, the same style as scene.cpp's
+// toon:: <-> Jolt conversions: trivial field copies, the same style as scene.cpp's
 // ToMat4/ToFloat4x4 (toon <-> Diligent). One ToVec3 overload covers both JPH::Vec3Arg and
 // JPH::RVec3Arg: ToonEngine doesn't build Jolt with JPH_DOUBLE_PRECISION, so RVec3Arg is
-// literally Vec3Arg (see Jolt/Math/Real.h) — a second overload for it is a redefinition,
+// literally Vec3Arg (see Jolt/Math/Real.h); a second overload for it is a redefinition,
 // not a distinct type, in this configuration.
 JPH::Vec3 ToJoltVec3(const Vec3 &v) { return JPH::Vec3(v.x, v.y, v.z); }
 Vec3      ToVec3(JPH::Vec3Arg v) { return {v.GetX(), v.GetY(), v.GetZ()}; }
@@ -137,7 +137,7 @@ JPH::EMotionType ToJoltMotionType(BodyType type) {
 // --- PhysicsWorld::Impl --------------------------------------------------------
 // The filters/layer-interface are held BY VALUE here (not stack locals in Init, unlike
 // HelloWorld's main()) because PhysicsSystem::Init only takes a reference to them and
-// requires them to outlive the PhysicsSystem (see its own doc comment) — Impl's lifetime
+// requires them to outlive the PhysicsSystem (see its own doc comment); Impl's lifetime
 // already matches that requirement.
 //
 // Also IS-A JPH::ContactListener (registered via SetContactListener in Init), rather than a
@@ -248,19 +248,19 @@ PhysicsWorld::PhysicsWorld() : m_impl(new Impl()) {}
 PhysicsWorld::~PhysicsWorld() { delete m_impl; }
 
 bool PhysicsWorld::Init() {
-    // Process-global Jolt setup: allocator hook, the factory (deserialization support —
+    // Process-global Jolt setup: allocator hook, the factory (deserialization support,
     // unused today, but RegisterTypes needs it to exist), then the type registry itself.
     JPH::RegisterDefaultAllocator();
     JPH::Factory::sInstance = new JPH::Factory();
     JPH::RegisterTypes();
 
     // 10 MB is Jolt's own HelloWorld starting point ("way too much for this example but a
-    // typical value") — revisit only if a profiled Step ever reports running out.
+    // typical value"); revisit only if a profiled Step ever reports running out.
     m_impl->tempAllocator = new JPH::TempAllocatorImpl(10 * 1024 * 1024);
     m_impl->jobSystem = new JPH::JobSystemThreadPool(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
                                                       static_cast<int>(std::thread::hardware_concurrency()) - 1);
 
-    // Small fixed budgets — this is a toon-styled editor demo scene, not an open world;
+    // Small fixed budgets: this is a toon-styled editor demo scene, not an open world;
     // raise these if a scene ever actually needs more bodies/contacts than this.
     constexpr JPH::uint kMaxBodies = 1024;
     constexpr JPH::uint kNumBodyMutexes = 0; // 0 = Jolt picks a default
@@ -298,7 +298,7 @@ void PhysicsWorld::Clear() {
 
 BodyHandle PhysicsWorld::CreateBody(const BodyDesc &desc) {
     // BodyCreationSettings takes ownership via Jolt's intrusive refcounting (RefConst) the
-    // moment it's constructed below, so a freshly-`new`'d shape needs no manual delete —
+    // moment it's constructed below, so a freshly-`new`'d shape needs no manual delete,
     // the same pattern Jolt's own HelloWorld uses for its sphere (`new SphereShape(0.5f)`).
     JPH::Shape *shape = nullptr;
     switch (desc.shape) {
@@ -319,7 +319,7 @@ BodyHandle PhysicsWorld::CreateBody(const BodyDesc &desc) {
     settings.mFriction = desc.friction;
     settings.mRestitution = desc.restitution;
     if (desc.type != BodyType::Static && desc.mass > 0.0f) {
-        // Keep the shape's own inertia distribution, just scale it to the requested mass —
+        // Keep the shape's own inertia distribution, just scale it to the requested mass:
         // simpler and more robust than hand-supplying an inertia tensor (MassAndInertiaProvided).
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = desc.mass;
@@ -361,7 +361,7 @@ bool PhysicsWorld::GetBodyTransform(BodyHandle body, Vec3 &outPosition, Quat &ou
 
     // GetPositionAndRotation, NOT GetCenterOfMassPosition: the latter returns the shape's
     // center of mass, which only coincides with the body origin for a symmetric shape with
-    // no manual mass override — GetPositionAndRotation is always the body's actual placement,
+    // no manual mass override; GetPositionAndRotation is always the body's actual placement,
     // matching what an entity's Transform.position/rotation conceptually mean.
     JPH::RVec3 position;
     JPH::Quat rotation;
@@ -373,7 +373,7 @@ bool PhysicsWorld::GetBodyTransform(BodyHandle body, Vec3 &outPosition, Quat &ou
 
 void PhysicsWorld::Step(float dt) {
     // 1 collision step per call: correct as long as the caller passes Jolt's own
-    // recommended fixed 1/60 s tick (dt larger than that needs more steps to stay stable —
+    // recommended fixed 1/60 s tick (dt larger than that needs more steps to stay stable;
     // see PhysicsSystem::Update's own doc comment).
     m_impl->physicsSystem.Update(dt, 1, m_impl->tempAllocator, m_impl->jobSystem);
 }
@@ -386,8 +386,8 @@ bool PhysicsWorld::Raycast(const Vec3 &origin, const Vec3 &direction, RaycastHit
     if (!m_impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, hit)) { return false; }
 
     // Map the hit JPH::BodyID back to our opaque handle. A linear scan over `bodies` is
-    // fine at today's body counts (this seam ships Raycast now; nothing calls it yet — see
-    // physics.h) — revisit with a reverse map only if that stops being true.
+    // fine at today's body counts (this seam ships Raycast now; nothing calls it yet, see
+    // physics.h); revisit with a reverse map only if that stops being true.
     BodyHandle handle = BodyHandle::Invalid;
     for (const auto &[h, id] : m_impl->bodies) {
         if (id == hit.mBodyID) {

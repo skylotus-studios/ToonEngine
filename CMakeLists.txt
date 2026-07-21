@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20)
 # ToonEngine's own code is C++ only.
 project(ToonEngine CXX C)
 
-# RC (Windows resource-script) compiler, for the embedded window icon below — see the
+# RC (Windows resource-script) compiler, for the embedded window icon below: see the
 # "Application" section. Guarded on WIN32 since RC is a Windows-only concept (Linux/macOS
 # are planned but don't build yet either way; this just keeps the guard honest).
 if(WIN32)
@@ -13,7 +13,7 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
-#  ToonEngine — minimal Diligent Engine starting point
+#  ToonEngine: minimal Diligent Engine starting point
 #  Rendering-only (DiligentCore) + GLFW windowing, single Vulkan backend.
 # ---------------------------------------------------------------------------
 
@@ -23,7 +23,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # --- Diligent Engine (git submodules under external/) ------------------------
 # Core defaults to building every backend the platform can support (on
 # Windows: D3D11, D3D12, OpenGL, Vulkan) regardless of which ones we actually
-# link — that's most of the compile time. ToonEngine is Vulkan-first, so disable the
+# link, and that's most of the compile time. ToonEngine is Vulkan-first, so disable the
 # others; re-enable individually later if a specific backend is needed (e.g. D3D12 for
 # RenderDoc/PIX debugging).
 set(DILIGENT_NO_DIRECT3D11 ON CACHE BOOL "" FORCE)
@@ -32,9 +32,9 @@ set(DILIGENT_NO_OPENGL     ON CACHE BOOL "" FORCE)
 
 # DiligentFX also builds Radient (its real-time GI module) as a separate library.
 # ToonEngine never links it, so CLion (which builds only the ToonEngine target)
-# never compiled it — but a full `cmake --build` (the `all` target, i.e. CI) does,
+# never compiled it, but a full `cmake --build` (the `all` target, i.e. CI) does,
 # and it fails to compile under clang-cl (a noexcept static_assert in Radient's
-# asset managers). We don't use GI, so disable it — same rationale as the backends.
+# asset managers). We don't use GI, so disable it: same rationale as the backends.
 set(DILIGENT_NO_RADIENT    ON CACHE BOOL "" FORCE)
 
 # Dear ImGui: build against ToonEngine's own imgui submodule (external/imgui, pinned
@@ -46,7 +46,7 @@ set(DILIGENT_DEAR_IMGUI_PATH "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui"
     CACHE PATH "Dear ImGui source dir (docking branch)" FORCE)
 
 # Tools adds Dear ImGui (debug/editor UI) + texture/glTF loaders. FX adds the
-# post-processing effects (bloom, tone mapping, SSAO, ...) — see the toon HDR
+# post-processing effects (bloom, tone mapping, SSAO, ...): see the toon HDR
 # post chain in core/renderer.cpp.
 add_subdirectory(external/DiligentCore)
 add_subdirectory(external/DiligentTools)
@@ -154,12 +154,12 @@ add_executable(ToonEngine
 
 # Embed the window icon into the .exe itself (RT_GROUP_ICON/RT_ICON resources), not just
 # set it at runtime (core/renderer.cpp's SetWindowIcon, called from main.cpp, still does
-# that too — WM_SETICON on the live window). GLFW's Win32 backend looks for a resource
+# that too, for WM_SETICON on the live window). GLFW's Win32 backend looks for a resource
 # named exactly GLFW_ICON when it registers the window class (see
 # external/glfw/src/win32_window.c) and falls back to the generic system icon if it can't
-# find one — that fallback is what the taskbar/Alt-Tab/shell were showing even though the
+# find one; that fallback is what the taskbar/Alt-Tab/shell were showing even though the
 # runtime call had already fixed the title bar. assets/icon.ico wraps assets/icon.png in a
-# minimal ICO container (a single PNG-compressed frame — supported since Windows Vista).
+# minimal ICO container (a single PNG-compressed frame, supported since Windows Vista).
 if(WIN32)
     set(TOON_ICON_ICO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.ico")
     configure_file(src/icon.rc.in ${CMAKE_CURRENT_BINARY_DIR}/icon.rc @ONLY)
@@ -216,12 +216,12 @@ target_link_libraries(ToonEngine
                                             # no Diligent-Archiver-static in the build). The DLL itself
                                             # is already built (DILIGENT_NO_ARCHIVER unset) and
                                             # copy_required_dlls already copies it automatically.
-        Diligent-AssetLoader               # GLTF::Model — glTF/GLB loading (self-contained; no PBR renderer)
+        Diligent-AssetLoader               # GLTF::Model: glTF/GLB loading (self-contained; no PBR renderer)
         Diligent-TextureLoader             # CreateTextureFromFile + image decode (PNG/JPG)
         Diligent-Imgui                     # ImGuiImplDiligent renderer backend + vendored Dear ImGui
         Diligent-JSON                      # nlohmann/json for input-bindings persistence (see below).
                                             # Diligent-AssetLoader links this PRIVATE, so it does NOT
-                                            # propagate transitively — must be linked explicitly here.
+                                            # propagate transitively: must be linked explicitly here.
         DiligentFX                         # post-processing effects (bloom, tone mapping, ...)
         glfw
         Jolt                                # rigid-body physics + collision (M2.1) -- also brings

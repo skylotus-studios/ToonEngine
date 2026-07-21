@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  core/rendering/primitives.h — procedural mesh generators (CPU-side geometry).
+//  core/rendering/primitives.h: procedural mesh generators (CPU-side geometry).
 //
 //  Diligent-free: produces plain toon::Vertex + index arrays that engine/game
 //  code hands to Renderer::CreateMesh. Triangles are wound counter-clockwise as
@@ -38,7 +38,7 @@ namespace toon {
     MeshData MakePlane(float halfExtent);
 
     // --- Primitive provenance (for scene serialization) -------------------------
-    // A procedural mesh has no source file to reload from, unlike a loaded glTF model — so a
+    // A procedural mesh has no source file to reload from, unlike a loaded glTF model, so a
     // saved scene instead records which generator above built it, plus its params, and
     // regenerates via MakePrimitiveMesh on load. See core/scene/serializer.h and Entity::primitive.
 
@@ -60,7 +60,7 @@ namespace toon {
     };
 
     // Dispatch to the matching MakeXxx generator above from a PrimitiveDesc (PrimitiveKind::None
-    // returns an empty MeshData — nothing to draw).
+    // returns an empty MeshData: nothing to draw).
     MeshData MakePrimitiveMesh(const PrimitiveDesc &desc);
 
 } // namespace toon

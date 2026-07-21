@@ -1,29 +1,29 @@
 //============================================================================
-//  core/audio/audio.cpp — miniaudio backend behind the audio seam.
+//  core/audio/audio.cpp: miniaudio backend behind the audio seam.
 //
-//  The one translation unit allowed to include miniaudio.h or name an ma_* type — twin to
+//  The one translation unit allowed to include miniaudio.h or name an ma_* type: twin to
 //  core/physics/physics.cpp's relationship with Jolt (see core/audio/audio.h's banner).
 //  miniaudio.h's actual ~90k-line implementation is compiled once in the sibling
 //  miniaudio_impl.cpp, not here, so editing this (much smaller, much more frequently
 //  touched) file never re-pays that compile cost.
 //
 //  miniaudio's ma_engine owns its OWN realtime audio callback thread (see miniaudio.h's
-//  "5. High Level API" docs) — nothing in this file, or the frame loop that calls it, ever
+//  "5. High Level API" docs). Nothing in this file, or the frame loop that calls it, ever
 //  touches the mixing itself. The engine's own thread pulls PCM frames on its own schedule;
 //  this file's job is only to (a) start/stop sounds and (b) push position updates the
 //  engine's thread will pick up on its next mix. Every position/volume/pitch setter below
 //  (ma_sound_set_*, ma_engine_listener_set_*) is designed to be called from the caller's
-//  thread while the audio thread reads it concurrently — see miniaudio.h's own docs; this
+//  thread while the audio thread reads it concurrently (see miniaudio.h's own docs); this
 //  file must never call INTO miniaudio from an ma_sound_end_callback (that callback fires
-//  ON the audio thread, and miniaudio's own docs say NOT to uninitialize a sound from it) —
-//  that's why one-shots below use a lazily-recycled voice pool instead, matching the exact
+//  ON the audio thread, and miniaudio's own docs say NOT to uninitialize a sound from it),
+//  which is why one-shots below use a lazily-recycled voice pool instead, matching the exact
 //  technique ma_engine_play_sound_ex uses internally for its own "inlined sounds".
 //
 //  World-space vectors (entity positions, the listener's eye/forward/up from
 //  CameraWorldBasis) are handed to miniaudio as-is: ToonEngine's world space is already
 //  self-consistent (every position and direction below comes from the same scene/camera
-//  math), and miniaudio only ever compares vectors against each other in that same space —
-//  it has no opinion on world handedness, so no basis conversion is needed here.
+//  math), and miniaudio only ever compares vectors against each other in that same space.
+//  It has no opinion on world handedness, so no basis conversion is needed here.
 //============================================================================
 #include "core/audio/audio.h"
 
@@ -40,7 +40,7 @@ namespace toon {
     namespace {
 
         // A one-shot voice slot, recycled once its sound finishes (mirrors miniaudio's own
-        // ma_engine_play_sound_ex recycling of "inlined sounds" — see this file's banner).
+        // ma_engine_play_sound_ex recycling of "inlined sounds", see this file's banner).
         // Heap-allocated (one `new` per slot, never moved) so `sound`'s address is stable for
         // its whole lifetime; miniaudio's node graph keeps pointers into it once attached.
         struct OneShotVoice {
@@ -73,7 +73,7 @@ namespace toon {
         bool initialized = false;
 
         // SoundHandle (this seam's opaque id) -> the real ma_sound it names. Stored by VALUE
-        // (not by pointer) — unordered_map guarantees a stored element's address never moves
+        // (not by pointer). unordered_map guarantees a stored element's address never moves
         // for its lifetime (only erase invalidates it), so ma_sound_init_from_file can target
         // `handled[id]` directly and miniaudio's internal pointers into it stay valid.
         std::unordered_map<uint32_t, ma_sound> handled;
@@ -104,8 +104,8 @@ namespace toon {
             }
 
             // DECODE: pay the decode cost once upfront instead of per-mix (these are short
-            // clips). NO_SPATIALIZATION for the non-positional case — see MA_SOUND_FLAG_*'s
-            // own "16.2 High Level API" optimization tip.
+            // clips). NO_SPATIALIZATION for the non-positional case (see MA_SOUND_FLAG_*'s
+            // own "16.2 High Level API" optimization tip).
             ma_uint32 flags = MA_SOUND_FLAG_DECODE;
             if (!spatial) { flags |= MA_SOUND_FLAG_NO_SPATIALIZATION; }
             const std::string resolvedClip = ResolveClipPath(clip);
@@ -154,7 +154,7 @@ namespace toon {
 
     void AudioEngine::SetListener(const Vec3 &position, const Vec3 &forward, const Vec3 &up) {
         if (!m_impl->initialized) { return; }
-        constexpr ma_uint32 kListenerIndex = 0; // a single editor camera/listener — no split-screen
+        constexpr ma_uint32 kListenerIndex = 0; // a single editor camera/listener, no split-screen
         ma_engine_listener_set_position(&m_impl->engine, kListenerIndex, position.x, position.y, position.z);
         ma_engine_listener_set_direction(&m_impl->engine, kListenerIndex, forward.x, forward.y, forward.z);
         ma_engine_listener_set_world_up(&m_impl->engine, kListenerIndex, up.x, up.y, up.z);

@@ -1,11 +1,11 @@
 //============================================================================
-//  ui/panels/themes.cpp — see themes.h.
+//  ui/panels/themes.cpp: see themes.h.
 //============================================================================
 #include "ui/panels/themes.h"
 
 #include "core/rendering/renderer.h" // toon::SetTitleBarTheme
 
-#include "imgui.h" // ImGui is seam-exempt — UI code may call it directly
+#include "imgui.h" // ImGui is seam-exempt: UI code may call it directly
 
 #include <GLFW/glfw3.h>
 

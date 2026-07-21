@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  ui/panels/menu_bar.h — the main menu bar (File / Edit / Tools / View / Help) and its
+//  ui/panels/menu_bar.h: the main menu bar (File / Edit / Tools / View / Help) and its
 //  Open Scene / Save Scene As / About modals.
 //============================================================================
 namespace toon {

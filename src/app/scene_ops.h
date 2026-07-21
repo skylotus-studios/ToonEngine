@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  app/scene_ops.h — scene load/save/new, writing EditorState::sceneStatus.
+//  app/scene_ops.h: scene load/save/new, writing EditorState::sceneStatus.
 //
 //  Free functions replacing main()'s old loadScene/newScene lambdas, so both
 //  ui/panels/menu_bar.cpp (File menu + its Open/Save-As modals) and

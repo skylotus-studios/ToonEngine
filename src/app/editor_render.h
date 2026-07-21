@@ -1,6 +1,6 @@
 #pragma once
 //============================================================================
-//  app/editor_render.h — shadow pass, main draw, and the collider debug overlay.
+//  app/editor_render.h: shadow pass, main draw, and the collider debug overlay.
 //============================================================================
 namespace toon {
 

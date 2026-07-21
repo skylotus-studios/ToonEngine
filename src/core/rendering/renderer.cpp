@@ -1,12 +1,12 @@
 //============================================================================
-//  core/renderer.cpp — Diligent Engine (Vulkan) implementation of the seam.
+//  core/renderer.cpp: Diligent Engine (Vulkan) implementation of the seam.
 //
 //  Everything Diligent-specific is contained in this translation unit. The
 //  public header (renderer.h) exposes only opaque handles and plain types.
 //============================================================================
 #include "core/rendering/renderer.h"
 
-// GLFW with native access — extracting the OS window handle is a backend
+// GLFW with native access: extracting the OS window handle is a backend
 // concern, so it lives behind the seam here. main.cpp includes only plain GLFW.
 // GLFW_INCLUDE_NONE is set engine-wide (CMakeLists.txt), not per-file here, since
 // core/input/input_device.h also needs it ahead of any single TU's own #define.
@@ -45,7 +45,7 @@
 #include "GraphicsTypes.h"
 #include "Buffer.h"
 #include "Texture.h"
-#include "TextureUtilities.h" // CreateTextureFromFile — asset-browser thumbnails/previews
+#include "TextureUtilities.h" // CreateTextureFromFile: asset-browser thumbnails/previews
 #include "Sampler.h"
 #include "Shader.h"
 #include "PipelineState.h"
@@ -97,11 +97,11 @@
 #include "Utilities/interface/DiligentFXShaderSourceStreamFactory.hpp"
 
 // DiligentTools asset loading: the glTF/GLB loader (Diligent::GLTF::Model owns the
-// vertex/index buffers + textures). Self-contained in DiligentTools — no DiligentFX /
+// vertex/index buffers + textures). Self-contained in DiligentTools, no DiligentFX /
 // PBR renderer needed (we cel-shade with our own PSO).
 #include "GLTFLoader.hpp"
 
-// DiligentTools' CPU-side image decoder (PNG/JPEG/TGA/...) — used to load the window
+// DiligentTools' CPU-side image decoder (PNG/JPEG/TGA/...), used to load the window
 // icon. No GPU device involved, so this needs no Renderer::Impl state.
 #include "Image.h"
 
@@ -130,7 +130,7 @@ using namespace Diligent;
 // shaders include. BasicStructures.fxh brings in CameraAttribs (which PostFXContext
 // wants); BloomStructures.fxh defines BloomAttribs. float4x4/float4/uint etc.
 // resolve to the Diligent:: aliases pulled in by BasicMath.hpp above. (Mirrors how
-// DiligentFX's own .cpp files include these — see Bloom.cpp.) BasicStructures.fxh
+// DiligentFX's own .cpp files include these; see Bloom.cpp.) BasicStructures.fxh
 // does a bare #include "ShaderDefinitions.fxh"; CMake puts that directory on the
 // include path so it resolves.
 namespace Diligent {
@@ -165,7 +165,7 @@ namespace Diligent {
 namespace toon {
 
     // Sets the OS window/taskbar icon from an image file, via DiligentTools' CPU-side
-    // decoder (Image.h — no GPU device needed). GLFW wants tightly-packed 8-bit RGBA
+    // decoder (Image.h, no GPU device needed). GLFW wants tightly-packed 8-bit RGBA
     // rows; the decoder's RowStride may be padded and NumComponents may be less than 4
     // (grayscale/RGB/etc.), so this expands each source pixel into the RGBA buffer GLFW
     // copies internally (glfwSetWindowIcon doesn't retain `pixels` after it returns).
@@ -383,7 +383,7 @@ namespace toon {
             RefCntAutoPtr<IBuffer> indexBuffer;
             Uint32 indexCount = 0;
             // Local-space (object-space) bounds, min/max swept over `vertices[i].position` at
-            // creation — mouse-pick (app/picking.cpp) transforms these by an entity's worldMatrix.
+            // creation; mouse-pick (app/picking.cpp) transforms these by an entity's worldMatrix.
             Vec3 boundsMin;
             Vec3 boundsMax;
         };
@@ -396,12 +396,12 @@ namespace toon {
         RefCntAutoPtr<IPipelineState> modelOutlinePSO; // inverted-hull outline
         RefCntAutoPtr<IShaderResourceBinding> modelOutlineSRB;
         std::vector<std::unique_ptr<GLTF::Model>> models;
-        // Local-space bounds (model-space, RootTransform = identity) — index-matched with
+        // Local-space bounds (model-space, RootTransform = identity), index-matched with
         // `models` (one push_back site, LoadModel, keeps them in sync). Same mouse-pick use as
         // GpuMesh::boundsMin/Max above.
         std::vector<std::pair<Vec3, Vec3>> modelBounds;
 
-        // Editor-UI textures (asset browser thumbnails/previews) — decoded image files,
+        // Editor-UI textures (asset browser thumbnails/previews); decoded image files,
         // unrelated to the toon draw path. handle N -> textures[N-1], same 1-based
         // convention as meshes/models above; a null slot is a destroyed handle.
         std::vector<RefCntAutoPtr<ITexture>> textures;
@@ -483,7 +483,7 @@ namespace toon {
         // Run the shared PostFXContext plus whichever effects are enabled. The color
         // effects chain in order scene -> TAA -> DoF -> Bloom; `colorOut` is the last
         // stage's output (or null -> resolve the raw scene). `aoOut` (SSAO visibility) and
-        // `ssrOut` (reflection radiance) composite in the resolve — null -> their defaults.
+        // `ssrOut` (reflection radiance) composite in the resolve; null -> their defaults.
         // No-op if no effect is enabled.
         void RunPostFX(const PostParams &p, ITextureView *&colorOut, ITextureView *&aoOut, ITextureView *&ssrOut);
 
@@ -547,7 +547,7 @@ namespace toon {
         if (sc.Width == 0 || sc.Height == 0) { return; }
 
         // DoF uses the motion vectors (via the context) to smooth its circle-of-confusion
-        // over time — safe now that motion is real.
+        // over time, safe now that motion is real.
         const auto dofFlags = DepthOfField::FEATURE_FLAG_ENABLE_TEMPORAL_SMOOTHING;
         const auto taaFlags = TemporalAntiAliasing::FEATURE_FLAG_BICUBIC_FILTER;
 
@@ -600,7 +600,7 @@ namespace toon {
         prevPostCamera = postCamera;
 
         if (!postFX->IsPSOsReady()) {
-            return; // still compiling — skip effects this frame
+            return; // still compiling: skip effects this frame
         }
 
         if (p.ssao) {
@@ -691,7 +691,7 @@ namespace toon {
             HLSL::BloomAttribs attribs{};
             attribs.Intensity = p.bloomIntensity;
             attribs.Threshold = p.bloomThreshold;
-            attribs.SoftTreshold = p.bloomSoftKnee; // (sic — DiligentFX's field spelling)
+            attribs.SoftTreshold = p.bloomSoftKnee; // (sic: DiligentFX's field spelling)
             attribs.Radius = p.bloomRadius;
 
             Bloom::RenderAttributes bra;
@@ -755,7 +755,7 @@ namespace toon {
     // Vertex attributes we ask the glTF loader to produce: POSITION / NORMAL / TEXCOORD_0,
     // all interleaved into buffer 0. The model PSO's input layout is built from this SAME
     // array (VertexAttributesToInputLayout), so the loader's buffer and the shader agree on
-    // ATTRIB0/1/2. (No smooth normal — models get the fill pass only, no inverted hull.)
+    // ATTRIB0/1/2. (No smooth normal; models get the fill pass only, no inverted hull.)
     static const GLTF::VertexAttributeDesc *ModelVertexAttribs(size_t &count) {
         static const GLTF::VertexAttributeDesc kAttribs[] = {
             {GLTF::PositionAttributeName, 0, VT_FLOAT32, 3},
@@ -1163,8 +1163,8 @@ namespace toon {
         // g_HDRColor / g_AO / g_SSR are DYNAMIC: EndScene re-points them every frame at
         // whichever HDR source we resolve (raw scene or post-FX output), the SSAO result
         // (or a white "no occlusion" default), and the SSR result (or a black "no
-        // reflection" default) — each also changes on resize. A dynamic variable is the
-        // type meant for a per-frame-changing binding — Diligent manages a fresh
+        // reflection" default); each also changes on resize. A dynamic variable is the
+        // type meant for a per-frame-changing binding: Diligent manages a fresh
         // descriptor each commit. (A MUTABLE variable bakes one binding and rejects being
         // overwritten while a prior frame may still be reading it.) PostConstants never
         // changes binding, so it stays static.
@@ -1312,7 +1312,7 @@ namespace toon {
         make1x1("SSR black default", black, m_impl->ssrBlack);
 
         // 1x1 white 2D-ARRAY albedo default: the glTF loader stores textures as 2D arrays, so
-        // the model fill's g_Albedo is a Texture2DArray — the untextured fallback must match
+        // the model fill's g_Albedo is a Texture2DArray; the untextured fallback must match
         // that dimension (the plain-2D aoWhite would trip a view-dimension assertion).
         {
             const Uint8 white1[4] = {255, 255, 255, 255};
@@ -1443,7 +1443,7 @@ namespace toon {
 
         // Input layout matching the interleaved buffer the loader fills from ModelVertexAttribs
         // (POSITION/NORMAL/TEXCOORD_0 in buffer 0). Auto offset/stride reproduce the loader's
-        // packing exactly (pos@0, normal@12, uv@24, stride 32), so we hardcode it — same idiom
+        // packing exactly (pos@0, normal@12, uv@24, stride 32), so we hardcode it: same idiom
         // as CreateToonPipeline.
         LayoutElement modelLayout[] = {
             LayoutElement{0, 0, 3, VT_FLOAT32, False}, // ATTRIB0 position
@@ -1465,7 +1465,7 @@ namespace toon {
         gp.RasterizerDesc.CullMode = CULL_MODE_BACK;
         // glTF winds front faces CCW in its RIGHT-handed space; our projection is LEFT-handed,
         // which flips screen-space winding, so the model's outward faces are CW here. Hence
-        // FrontCounterClockwise = False — the OPPOSITE of our own primitives (authored CCW-front
+        // FrontCounterClockwise = False: the OPPOSITE of our own primitives (authored CCW-front
         // for the LH setup). With True, the outward faces cull and you see through the helmet to
         // its inner surface.
         gp.RasterizerDesc.FrontCounterClockwise = False;
@@ -1478,8 +1478,8 @@ namespace toon {
         ci.pVS = vs;
         ci.pPS = ps;
 
-        // Shared static Constants CB (like the toon PSOs); g_Albedo is DYNAMIC — DrawModel
-        // re-Sets it per primitive — with a linear-wrap immutable sampler (combined-sampler
+        // Shared static Constants CB (like the toon PSOs); g_Albedo is DYNAMIC: DrawModel
+        // re-Sets it per primitive, with a linear-wrap immutable sampler (combined-sampler
         // "g_Albedo", same pattern as tonemap's g_HDRColor). ShadowAttribsCB/g_ShadowMap are
         // STATIC (set once below, like Constants) -- model_fill.hlsl's ComputeShadowFactor
         // call is what pulls these into this PSO's reflected resources. No separate
@@ -1741,7 +1741,7 @@ namespace toon {
         m_impl->swapChain->Resize(width, height);
         const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
         CreateOffscreenTargets(sc.Width, sc.Height); // match the new back-buffer size
-        // The resolve's HDR input (g_HDRColor) is dynamic — EndScene re-points it at the
+        // The resolve's HDR input (g_HDRColor) is dynamic: EndScene re-points it at the
         // recreated target next frame, so there's nothing to rebind here.
     }
 
@@ -1833,7 +1833,7 @@ namespace toon {
     // toon::Quat (core/math.h); converting to Diligent's QuaternionF here (not before) is
     // what lets Transform stay Diligent-free while this, the one file allowed to touch
     // Diligent, still builds on its (numerically fiddlier) quaternion-to-matrix math
-    // instead of reimplementing it. Must match scene.cpp's LocalFromTransform exactly —
+    // instead of reimplementing it. Must match scene.cpp's LocalFromTransform exactly;
     // the scene graph and this single-object path compose the same way.
     static float4x4 WorldFromTransform(const Transform &t) {
         const QuaternionF q(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w);
@@ -1841,7 +1841,7 @@ namespace toon {
                float4x4::Translation(t.position.x, t.position.y, t.position.z);
     }
 
-    // Plain Mat4 (seam vocabulary) <-> Diligent float4x4 — both row-major, so a straight
+    // Plain Mat4 (seam vocabulary) <-> Diligent float4x4: both row-major, so a straight
     // element copy. The scene graph composes world matrices on the Diligent side and hands
     // them across the seam as Mat4.
     static Mat4 ToMat4(const float4x4 &m) {
@@ -2057,7 +2057,7 @@ namespace toon {
     // Expose the current view + projection (as of the last SetCamera) for the editor's transform
     // gizmo. ImGuizmo (in main.cpp) needs them to project the gizmo onto the selected entity; the
     // seam hands them out as plain Mat4 so ImGuizmo stays Diligent-free. (The proj may carry the
-    // sub-pixel TAA jitter — negligible for a UI overlay, and TAA is off by default.)
+    // sub-pixel TAA jitter, negligible for a UI overlay, and TAA is off by default.)
     void Renderer::GetViewProj(Mat4 &view, Mat4 &proj) const {
         view = ToMat4(m_impl->view);
         proj = ToMat4(m_impl->proj);
@@ -2152,7 +2152,7 @@ namespace toon {
         draw.NumIndices = mesh.indexCount;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
 
-        // Outline first (enlarged back-facing shell), then the fill on top — the
+        // Outline first (enlarged back-facing shell), then the fill on top: the
         // fill's nearer depth overwrites the shell everywhere except the rim.
         m_impl->context->SetPipelineState(m_impl->outlinePSO);
         m_impl->context->CommitShaderResources(m_impl->outlineSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -2308,7 +2308,7 @@ namespace toon {
                 }
                 if (auto *v = m_impl->modelSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_Albedo")) { v->Set(albedoSRV); }
 
-                // Outline first (enlarged back-facing shell), then the textured fill on top —
+                // Outline first (enlarged back-facing shell), then the textured fill on top:
                 // the fill's nearer depth overwrites the shell everywhere but the silhouette rim.
                 m_impl->context->SetPipelineState(m_impl->modelOutlinePSO);
                 m_impl->context->CommitShaderResources(m_impl->modelOutlineSRB,
@@ -2331,7 +2331,7 @@ namespace toon {
 
     // Decodes an image file straight to GPU via DiligentTools' loader (PNG/JPG/BMP/TGA).
     // Default TextureLoadInfo is exactly right here: IMMUTABLE + BIND_SHADER_RESOURCE, mips
-    // generated, and — load-bearing — IsSRGB = false. ImGui's own shader treats a bound
+    // generated, and (load-bearing) IsSRGB = false. ImGui's own shader treats a bound
     // texture's samples and its per-vertex colors (authored in gamma space by the editor
     // themes) as the same color space; an sRGB-sampled texture would linearize on read while
     // the UI around it doesn't, so every thumbnail would come out too dark. CreateTextureFromFile
@@ -2351,7 +2351,7 @@ namespace toon {
     }
 
     // Releases one texture's GPU memory early (the thumbnail cache calls this at shutdown, not
-    // per-frame). Leaves the slot null rather than compacting the vector — handles must stay
+    // per-frame). Leaves the slot null rather than compacting the vector: handles must stay
     // stable, and this cache is small enough that slot reuse isn't worth the bookkeeping.
     void Renderer::DestroyTexture(TextureHandle texture) {
         const uint32_t idx = static_cast<uint32_t>(texture);
@@ -2360,17 +2360,17 @@ namespace toon {
     }
 
     // The texture's default SRV, handed out as a plain integer so this header never has to
-    // mention ITextureView — the UI casts it to ImTextureID at the ImGui::Image call site.
+    // mention ITextureView; the UI casts it to ImTextureID at the ImGui::Image call site.
     // Diligent's ImGui backend reinterpret_casts it right back and transitions the resource
     // itself (RESOURCE_STATE_TRANSITION_MODE_TRANSITION), the same path the model albedo
-    // texture already goes through — so there's no extra state-management burden here.
+    // texture already goes through, so there's no extra state-management burden here.
     uint64_t Renderer::GetTextureImGuiID(TextureHandle texture) const {
         const uint32_t idx = static_cast<uint32_t>(texture);
         if (idx == 0 || idx > m_impl->textures.size() || !m_impl->textures[idx - 1]) { return 0; }
         return reinterpret_cast<uint64_t>(m_impl->textures[idx - 1]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
     }
 
-    // Pixel dimensions read straight from the texture's own desc — nothing cached, since
+    // Pixel dimensions read straight from the texture's own desc; nothing cached, since
     // Diligent already stores it and the caller (a preview pane) only asks once per draw.
     void Renderer::GetTextureSize(TextureHandle texture, uint32_t &width, uint32_t &height) const {
         const uint32_t idx = static_cast<uint32_t>(texture);
@@ -2383,7 +2383,7 @@ namespace toon {
     // --- Debug UI (Dear ImGui) --------------------------------------------------
 
     bool Renderer::InitUI(GLFWwindow *window) {
-        // ImGuiImplDiligent's constructor calls ImGui::CreateContext() — it must
+        // ImGuiImplDiligent's constructor calls ImGui::CreateContext(); it must
         // run before ImGui_ImplGlfw_InitForVulkan(), which itself calls
         // ImGui::GetIO() and asserts if no context exists yet.
         //
@@ -2408,7 +2408,7 @@ namespace toon {
         // Tear down in the reverse of InitUI. The GLFW platform backend must be shut
         // down *before* the ImGui context is destroyed: ~ImGuiImplDiligent() calls
         // ImGui::DestroyContext(), which asserts ("Forgot to shutdown Platform
-        // backend?") if the GLFW backend is still registered — that assert aborts the
+        // backend?") if the GLFW backend is still registered; that assert aborts the
         // process on window close.
         ImGui_ImplGlfw_Shutdown();
         m_impl->imgui.reset(); // destroys the Diligent ImGui backend + the ImGui context
