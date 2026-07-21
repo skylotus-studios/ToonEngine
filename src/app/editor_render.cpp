@@ -45,6 +45,11 @@ namespace toon {
         const Color kClearColor{0.10f, 0.11f, 0.13f, 1.0f};
         renderer.BeginFrame(kClearColor);
 
+        // Editor backdrop (roadmap #12): the gradient sky draws first, into the HDR G-buffer
+        // BeginFrame just cleared, so every later opaque entity draws over it. When off, the
+        // flat kClearColor above shows through instead.
+        if (state.showSky) { renderer.DrawSky(state.skyTop, state.skyBottom); }
+
         // Walk the scene, drawing every renderable entity with its hierarchy-composed world
         // matrix (+ last frame's, for motion vectors). The shared style overlays band count,
         // ambient, and the global outline-width multiplier onto each entity's own material.
@@ -73,6 +78,11 @@ namespace toon {
 
         // Resolve the HDR scene to the back buffer (post effects + exposure + tone map).
         renderer.EndScene();
+
+        // Ground grid (roadmap #12) -- after EndScene, before the UI overlay (see
+        // Renderer::DrawGrid's call-timing contract: it occludes itself by reading the
+        // now-finished scene depth buffer, so it can't run any earlier).
+        if (state.showGrid) { renderer.DrawGrid(); }
 
         // Collider debug wireframes (M2.1) -- after EndScene, before the UI overlay (see
         // Renderer::DrawWireframe's call-timing contract). A fixed yellow-ish color for every

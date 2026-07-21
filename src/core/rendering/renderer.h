@@ -337,6 +337,21 @@ namespace toon {
         // so a collider is never hidden inside the mesh it belongs to.
         void DrawWireframe(const Mat4 &world, const Vec3 *points, uint32_t count, const Color &color);
 
+        // --- Editor backdrop: sky gradient + ground grid (roadmap #12) ----------
+        // Two-color vertical gradient behind the scene, lerped by the world-space view ray's
+        // Y direction (so the horizon stays level as the camera pitches, not tied to screen
+        // Y). Call AFTER BeginFrame and BEFORE the entity DrawMesh/DrawModel calls, so opaque
+        // geometry draws over it; it writes the full HDR G-buffer (color + zeroed normal/
+        // motion) at the far depth BeginFrame already cleared to.
+        void DrawSky(const Color &top, const Color &bottom);
+
+        // Infinite ground grid on the XZ (Y=0) plane, built on DiligentFX's
+        // CoordinateGridRenderer: per-pixel ray/plane intersection, antialiased multi-level-
+        // of-detail lines, colored X/Z axes. Occludes itself by READING the finished scene
+        // depth buffer (not by writing its own), so call AFTER EndScene() -- same call-timing
+        // contract as DrawWireframe -- and BEFORE BeginUI().
+        void DrawGrid();
+
         // --- Debug/editor UI (Dear ImGui) ---------------------------------------
         // Diligent's ImGui renderer backend (ImGuiImplDiligent) is confined to
         // renderer.cpp same as everything else; main.cpp only sees these four
@@ -359,6 +374,8 @@ namespace toon {
         bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + normal + depth + motion
         bool CreateShadowMap();                                       // ShadowMapManager + depth-only PSOs
         bool CreateWireframePipeline();                               // debug line-list PSO (DrawWireframe)
+        bool CreateSkyPipeline();                                     // sky-gradient fullscreen PSO (DrawSky)
+        bool CreateGridRenderer();                                    // DiligentFX CoordinateGridRenderer (DrawGrid)
 
         // Roadmap #11 (skeletal animation): grow the shared skinning joints buffer (never
         // shrink it) to hold at least `neededElements` bone matrices, re-pointing every

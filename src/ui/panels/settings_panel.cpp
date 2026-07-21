@@ -68,6 +68,14 @@ namespace toon {
             ImGui::SeparatorText("Physics");
             ImGui::Checkbox("Show Colliders", &state.showColliders);
 
+            ImGui::SeparatorText("Environment");
+            ImGui::Checkbox("Grid", &state.showGrid);
+            ImGui::Checkbox("Sky Gradient", &state.showSky);
+            if (state.showSky) {
+                ImGui::ColorEdit3("Sky Top", &state.skyTop.r);
+                ImGui::ColorEdit3("Sky Bottom", &state.skyBottom.r);
+            }
+
             ImGui::SeparatorText("Audio");
             if (ImGui::Checkbox("Mute", &state.audioMuted)) {
                 state.audio.SetMasterVolume(state.audioMuted ? 0.0f : state.masterVolume);

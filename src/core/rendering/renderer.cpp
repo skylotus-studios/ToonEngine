@@ -143,6 +143,7 @@ namespace Diligent {
 #include "Shaders/PostProcess/DepthOfField/public/DepthOfFieldStructures.fxh"
 #include "Shaders/PostProcess/TemporalAntiAliasing/public/TemporalAntiAliasingStructures.fxh"
 #include "Shaders/PostProcess/ScreenSpaceReflection/public/ScreenSpaceReflectionStructures.fxh"
+#include "Shaders/Common/public/CoordinateGridStructures.fxh"
     } // namespace HLSL
 } // namespace Diligent
 
@@ -163,6 +164,15 @@ namespace Diligent {
 } // namespace Diligent
 
 #include "ShadowMapManager.hpp"
+
+// Roadmap #12 (grid + sky gradient backdrop): DiligentFX's ready-made coordinate-grid
+// renderer (Components, same library as ShadowMapManager above) -- an infinite ground grid
+// with antialiased/multi-LOD lines and colored axes, built on the shared HLSL::CameraAttribs
+// this file already fills (FillCameraAttribs). Its own .cpp includes BasicStructures.fxh the
+// same nested "namespace Diligent { namespace HLSL { ... } }" way the PostFX family above
+// does, unlike ShadowMapManager's bare-namespace form above -- so it doesn't need the #undef
+// workaround that ShadowMapManager required.
+#include "CoordinateGridRenderer.hpp"
 
 namespace toon {
 
@@ -309,6 +319,13 @@ namespace toon {
     struct WireframeConstants {
         float4x4 worldViewProj;
         float4 color;
+    };
+
+    // GPU mirror of sky_gradient.hlsl's SkyConstants cbuffer (roadmap #12: editor backdrop).
+    struct SkyConstants {
+        float4x4 invViewProj;
+        float4 skyTop;
+        float4 skyBottom;
     };
 
     // GPU mirror of {model_fill,model_outline}_skinned.hlsl's SkinConstants cbuffer
@@ -465,6 +482,16 @@ namespace toon {
         RefCntAutoPtr<IShaderResourceBinding> wireframeSRB;
         RefCntAutoPtr<IBuffer> wireframeConstants;
         RefCntAutoPtr<IBuffer> wireframeVB; // dynamic, kMaxWireframeVertices capacity
+
+        // Editor backdrop (roadmap #12): a gradient sky (fullscreen pass, drawn into the HDR
+        // G-buffer before scene geometry) + an infinite ground grid (DiligentFX's
+        // CoordinateGridRenderer, drawn onto the resolved back buffer after EndScene -- see
+        // CreateSkyPipeline/CreateGridRenderer and DrawSky/DrawGrid).
+        RefCntAutoPtr<IPipelineState> skyPSO;
+        RefCntAutoPtr<IShaderResourceBinding> skySRB;
+        RefCntAutoPtr<IBuffer> skyConstants;
+        std::unique_ptr<CoordinateGridRenderer> gridRenderer;
+        HLSL::CoordinateGridAttribs gridAttribs{};
 
         // DiligentFX post effects (Bloom + SSAO) share a PostFXContext. It requires
         // depth + motion + camera to reach its "PSOs ready" gate (which both effects
@@ -980,6 +1007,16 @@ namespace toon {
             return false;
         }
 
+        if (!CreateSkyPipeline()) {
+            std::fprintf(stderr, "Renderer: failed to create sky pipeline\n");
+            return false;
+        }
+
+        if (!CreateGridRenderer()) {
+            std::fprintf(stderr, "Renderer: failed to create grid renderer\n");
+            return false;
+        }
+
         // If the back buffer isn't an sRGB format, the tone-map shader encodes sRGB.
         m_impl->outputSRGB = !(sc.ColorBufferFormat == TEX_FORMAT_RGBA8_UNORM_SRGB ||
                                sc.ColorBufferFormat == TEX_FORMAT_BGRA8_UNORM_SRGB);
@@ -1429,6 +1466,71 @@ namespace toon {
         }
         m_impl->wireframePSO->CreateShaderResourceBinding(&m_impl->wireframeSRB, true);
         return m_impl->wireframeSRB != nullptr;
+    }
+
+    bool Renderer::CreateSkyPipeline() {
+        IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this, not `device`
+
+        {
+            BufferDesc cbDesc;
+            cbDesc.Name = "sky constants";
+            cbDesc.Size = sizeof(SkyConstants);
+            cbDesc.Usage = USAGE_DYNAMIC;
+            cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
+            cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            device->CreateBuffer(cbDesc, nullptr, &m_impl->skyConstants);
+            if (!m_impl->skyConstants) { return false; }
+        }
+
+        IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
+        auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "sky VS", "sky_gradient.hlsl", "VSMain");
+        auto ps = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "sky PS", "sky_gradient.hlsl", "PSMain");
+        if (!vs || !ps) { return false; }
+
+        GraphicsPipelineStateCreateInfo ci;
+        ci.PSODesc.Name = "sky PSO";
+        ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+        // Same 3-target HDR G-buffer shape as the toon PSOs (CreateToonPipeline): the sky
+        // draws into the offscreen scene BeginFrame already bound, before opaque geometry.
+        // Depth off -- it always fully covers the frame and never writes depth, so
+        // BeginFrame's far-plane clear survives for every pixel opaque geometry doesn't
+        // later draw over.
+        GraphicsPipelineDesc &gp = ci.GraphicsPipeline;
+        gp.NumRenderTargets = 3;
+        gp.RTVFormats[0] = kHDRFormat;
+        gp.RTVFormats[1] = kNormalFormat;
+        gp.RTVFormats[2] = kMotionFormat;
+        gp.DSVFormat = kSceneDepthFormat; // must match BeginFrame's bound DSV even though DepthEnable is off
+        gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+        gp.DepthStencilDesc.DepthEnable = False;
+
+        ci.pVS = vs;
+        ci.pPS = ps;
+        ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_STATIC;
+
+        cache->CreateGraphicsPipelineState(ci, &m_impl->skyPSO);
+        if (!m_impl->skyPSO) { return false; }
+        if (auto *v = m_impl->skyPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SkyConstants")) {
+            v->Set(m_impl->skyConstants);
+        }
+        m_impl->skyPSO->CreateShaderResourceBinding(&m_impl->skySRB, true);
+        return m_impl->skySRB != nullptr;
+    }
+
+    bool Renderer::CreateGridRenderer() {
+        // DiligentFX's own component (Components/CoordinateGridRenderer, same library as
+        // ShadowMapManager above) -- per the guiding principle, adopted instead of hand-
+        // porting ToonEngineOld's grid.frag (see MEMORY.md's carry-over note). Row-major to
+        // match every other PSO in this file (the same flag DistributeCascades is passed
+        // per-call in BeginShadowPass; here it's a construction-time CreateInfo field
+        // instead).
+        CoordinateGridRenderer::CreateInfo gridCI;
+        gridCI.PackMatrixRowMajor = true;
+        m_impl->gridRenderer = std::make_unique<CoordinateGridRenderer>(m_impl->device, gridCI);
+        return m_impl->gridRenderer != nullptr;
     }
 
     bool Renderer::CreatePostFX() {
@@ -1936,6 +2038,7 @@ namespace toon {
         m_impl->taa.reset();
         m_impl->ssr.reset();
         m_impl->postFX.reset();
+        m_impl->gridRenderer.reset(); // DiligentFX component; owns its own PSO cache + SRB + CBs
         m_impl->motionVectors.Release();
         m_impl->aoWhite.Release();
         m_impl->ssrBlack.Release();
@@ -1954,6 +2057,9 @@ namespace toon {
         m_impl->wireframePSO.Release();
         m_impl->wireframeConstants.Release();
         m_impl->wireframeVB.Release();
+        m_impl->skySRB.Release();
+        m_impl->skyPSO.Release();
+        m_impl->skyConstants.Release();
         m_impl->hdrColor.Release();
         m_impl->normalBuffer.Release();
         m_impl->sceneDepth.Release();
@@ -2250,6 +2356,72 @@ namespace toon {
         draw.NumVertices = count;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
         m_impl->context->Draw(draw);
+    }
+
+    // --- Editor backdrop: sky gradient + ground grid (roadmap #12) --------------
+
+    // Fullscreen gradient sky, lerped by the world-space view ray's Y direction (not screen
+    // Y), so the horizon stays level as the camera pitches -- ToonEngineOld's grid.frag sky,
+    // minus the grid (see DrawGrid for that half). Draws into the offscreen HDR G-buffer
+    // BeginFrame already bound + cleared; depth is off, so this always fully covers the frame
+    // and leaves BeginFrame's far-plane depth clear intact for every pixel opaque geometry
+    // doesn't later draw over.
+    void Renderer::DrawSky(const Color &top, const Color &bottom) {
+        if (!m_impl->skyPSO) { return; }
+
+        {
+            MapHelper<SkyConstants> cb(m_impl->context, m_impl->skyConstants, MAP_WRITE, MAP_FLAG_DISCARD);
+            cb->invViewProj = m_impl->viewProj.Inverse();
+            cb->skyTop = float4(top.r, top.g, top.b, top.a);
+            cb->skyBottom = float4(bottom.r, bottom.g, bottom.b, bottom.a);
+        }
+
+        m_impl->context->SetPipelineState(m_impl->skyPSO);
+        m_impl->context->CommitShaderResources(m_impl->skySRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+        DrawAttribs draw;
+        draw.NumVertices = 3; // full-screen triangle
+        draw.Flags = DRAW_FLAG_VERIFY_ALL;
+        m_impl->context->Draw(draw);
+    }
+
+    // Infinite ground grid on the XZ (Y=0) plane, built on DiligentFX's CoordinateGridRenderer
+    // (see CreateGridRenderer). Unlike DrawWireframe, it occludes itself by READING the
+    // finished scene depth buffer rather than writing its own -- so it must run after
+    // EndScene() resolves that depth (same call-timing contract as DrawWireframe) rather than
+    // during the main pass, where sceneDepth is still bound as the write target, not readable
+    // as a texture.
+    //
+    // CoordinateGridRenderer::Render binds only the color target it's given and unbinds every
+    // render target again before returning (see its own RenderGridAxes), unlike this file's
+    // own passes, which leave whatever they bound in place for the next call. Rebind the back
+    // buffer afterward so DrawWireframe and the ImGui overlay right after this still have a
+    // target to draw onto, preserving EndScene's "leaves the back buffer bound" contract.
+    void Renderer::DrawGrid() {
+        if (!m_impl->gridRenderer) { return; }
+
+        const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
+        // RunPostFX (EndScene) only fills postCamera when at least one post effect is
+        // enabled; the grid must be positioned correctly regardless, so fill it here too.
+        m_impl->FillCameraAttribs(sc);
+
+        CoordinateGridRenderer::RenderAttributes attribs;
+        attribs.pDevice = m_impl->device;
+        attribs.pStateCache = m_impl->stateCache;
+        attribs.pDeviceContext = m_impl->context;
+        attribs.pColorRTV = m_impl->swapChain->GetCurrentBackBufferRTV();
+        attribs.pDepthSRV = m_impl->sceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        attribs.pCamera = &m_impl->postCamera;
+        attribs.FeatureFlags = CoordinateGridRenderer::FEATURE_FLAG_RENDER_PLANE_XZ |
+                               CoordinateGridRenderer::FEATURE_FLAG_RENDER_AXIS_X |
+                               CoordinateGridRenderer::FEATURE_FLAG_RENDER_AXIS_Z;
+        if (m_impl->outputSRGB) { attribs.FeatureFlags |= CoordinateGridRenderer::FEATURE_FLAG_CONVERT_TO_SRGB; }
+        attribs.pAttribs = &m_impl->gridAttribs;
+
+        m_impl->gridRenderer->Render(attribs);
+
+        ITextureView *rtv = m_impl->swapChain->GetCurrentBackBufferRTV();
+        m_impl->context->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     }
 
     // --- Cascaded shadow maps ----------------------------------------------------

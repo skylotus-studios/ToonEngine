@@ -86,6 +86,12 @@ namespace toon {
         bool runScripts = true;
         // M2.1: overlay each collider-bearing entity's shape as a wireframe (Settings panel).
         bool showColliders = false;
+        // Roadmap #12: editor backdrop toggles + sky colors (Settings panel). Defaults match
+        // ToonEngineOld's grid.frag (skyTop/skyBottom).
+        bool showGrid = true;
+        bool showSky = true;
+        Color skyTop{0.35f, 0.55f, 0.80f, 1.0f};
+        Color skyBottom{0.15f, 0.15f, 0.20f, 1.0f};
         // M2.2: master volume + mute (Settings panel) -- applied via AudioEngine::SetMasterVolume.
         float masterVolume = 1.0f;
         bool audioMuted = false;
