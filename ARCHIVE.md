@@ -121,6 +121,214 @@ the six prior rounds' hypothesis space: all of them looked at object/Spin motion
 matching `DiligentSamples/Tutorial27_PostProcessing`'s own reference pattern (a real
 double-buffered `CameraAttribs[2]`, never aliased).
 
+## Editor UI: The Full Gizmo-Dogfooding Bug Write-Up (2026-07-11)
+
+`MEMORY.md`'s "Editor UI" section now keeps only the durable spin-animation fix, plus a
+pointer to "Temporal ghosting fixes" for the ghost-trail cause. This is the original
+write-up verbatim, from the session that found all three issues immediately after shipping
+gizmo snap + hotkeys (none caused by that change itself; the hotkeys just made dragging
+easy enough that this was the first time anyone drove the gizmo hard):
+
+**Bugs found dogfooding the above** (pre-existing, from the original gizmo commit, none
+caused by the snap/hotkey change; all surfaced because hotkeys made gizmo-dragging easy
+enough that this was the first time someone actually drove it hard):
+
+- **Gizmo rotate silently did nothing on a spinning entity, on any axis, whether Spin was
+  ticked or not, but worked fine on the (non-spinning) Ground; and re-enabling Spin after a
+  manual edit snapped back to the old trajectory instead of continuing from the new
+  orientation.** Root cause: the spin animation was an **absolute** function of one shared
+  clock: `for (spinners) e.transform->rotationEuler = axis * spinAngle;`, run
+  unconditionally every frame regardless of the `spin` checkbox (only advancing `spinAngle`
+  itself was gated). So the frame after any gizmo edit, this stomped `rotationEuler` right
+  back to `axis * spinAngle` for every entity in `spinners` (Sphere/Cube/Torus/Helmet, not
+  Ground, hence it alone worked); the whole `Vec3` gets replaced, not added to, so *every*
+  axis got wiped. And even gated on `if (spin)`, resuming would still snap to wherever the
+  shared clock said it "should" be, unrelated to the gizmo-set orientation. **Real fix:
+  made the animation incremental instead of absolute**: `rotationEuler = rotationEuler +
+  axis * (dt * kSpinRate)` each frame while `spin` is on, so it's always continuing from
+  whatever `rotationEuler` currently *is* (a natural continuation, or a gizmo-set baseline)
+  rather than recomputing from a shared clock. This let the shared `spinAngle` float be
+  deleted entirely. Each entity is now self-contained. Mathematically equivalent to the
+  original formula for the untouched default scene (sum of per-frame increments == the old
+  closed form), so no visual change there; only a paused-then-edited-then-resumed spinner
+  differs, and only in the intended way.
+- **A faint trail ("screen burn-in") followed objects while gizmo-dragging them** (both
+  move and rotate). `Impl::RunPostFX` feeds `PostFXContext` the current depth buffer as
+  *both* curr and prev (`pPrevDepthBufferSRV = depthSRV; // no history, reuse current`, a
+  deliberate simplification from the original SSAO work, since nothing needed real depth
+  history at the time). That defeats depth-based disocclusion entirely, so both SSAO's
+  temporal AO reprojection *and* TAA's color-history accumulation lean solely on motion
+  vectors: fine for smooth camera/spin motion, not for a large discontinuous mouse-driven
+  jump (not what such reprojection heuristics are tuned for). Fix: a new **app-computed**
+  `PostParams::gizmoManipulating` (not a Debug-panel toggle, set from `ImGuizmo::IsUsing()`,
+  same 1-frame-lag pattern already used for the camera capture-gate, read at the top of the
+  frame before that frame's `Manipulate()` call happens) forces
+  `ScreenSpaceAmbientOcclusionAttribs::ResetAccumulation = 1` **and**
+  `TemporalAntiAliasingAttribs::ResetAccumulation = true` for the duration of a drag: SSAO
+  reuses the exact flag its `ssaoTemporal` off-toggle already sets for the same "no
+  ghosting" reason; TAA's was previously never set at all (always `FALSE`, i.e. always
+  accumulating, though TAA is off by default, so it likely wasn't the primary contributor
+  unless the Debug panel had it toggled on). AO/TAA are very slightly noisier for the
+  duration of a drag, then resume smooth accumulation the instant it ends. **Not fully
+  confirmed by the user as of the first fix attempt (SSAO-only)**: the TAA half was added
+  as a natural extension of the same confirmed-correct root cause, not yet independently
+  re-tested. A real fix (an actual double-buffered depth history) is bigger; deferred unless
+  this residual trail is still visible after the TAA extension too.
+- **The Helmet's outline has visible gaps at hard edges, NOT a regression, already
+  documented.** `model_outline.hlsl`'s own header comment (and this file's "glTF model
+  loading" section) already states the exact limitation: loaded models carry no smooth
+  normal (unlike procedural primitives' `Vertex::smoothNormal`), so the inverted-hull
+  outline extrudes along the plain shading normal and gaps at split-vertex hard creases.
+  The Helmet's dense mechanical panel lines make this far more visible than on smoother
+  models. A real fix needs computing an averaged normal per unique position across the
+  loaded glTF vertex buffer (a real geometry-processing task, not a quick patch), worth a
+  future roadmap item, not folded into this dogfooding pass.
+
+**Not independently verified interactively by Claude**: this dev environment has no live
+input desktop, so synthetic keyboard/mouse (`SendInput`) reaches no window at all, proven
+and written up in `.claude/skills/verify/SKILL.md`. Both fixes above were made from a
+precise code trace (confirmed correct on read, both root-caused to an exact line), then
+confirmed working by the user after a manual test.
+
+## Input System: The CMakeLists.txt Reconfigure Incident and Full Verification Log (2026-07-12)
+
+`MEMORY.md`'s "Input system" section now keeps only a one-line pointer to this incident
+(the general lesson lives in "Build gotchas") and a compressed verification summary. This
+is the original write-up verbatim:
+
+**A real, non-obvious build gotcha found here, see "Build gotchas" above for the general
+lesson now folded in there.** After adding four `target_*` calls to `CMakeLists.txt` (new
+sources, the JSON include dir, the `Diligent-JSON` link, two compile defs) in one sitting,
+`cmake --build --preset windows-debug` forced a reconfigure and got most of the way through
+a full DiligentCore/Tools/FX rebuild before failing on `binding_io.cpp(6,10): fatal error:
+'nlohmann/json.hpp' file not found`. The file exists exactly where the new include dir
+points (confirmed on disk); the actual cause, found by extracting the real compiler
+invocation from `compile_commands.json`, was that **the include dir (and the two new
+compile defs) were simply absent from the generated command**: despite `CMakeLists.txt` on
+disk having all four edits, confirmed via a fresh `Read` immediately before the build.
+Grepping the generated `build.ninja` directly for the new content confirmed zero matches:
+the implicit reconfigure genuinely hadn't processed those lines, even though it *had*
+picked up the new source-file list (the three new `.cpp`s did compile). Root cause not
+fully isolated: `build.ninja`/`compile_commands.json`'s timestamps were only 2 seconds
+after `CMakeLists.txt`'s own last-write time, so this reads as the implicit
+regenerate-if-stale check running, but CMake's own configure pass not fully applying every
+`target_*` call from the edited file. **Fix: an *explicit* `cmake --preset windows-debug`
+reconfigure** (not `--build`) picked up all twelve new references immediately (confirmed via
+the same `build.ninja` grep), and the subsequent build succeeded.
+
+**Verified:**
+- **Clean build** (`cmake --preset windows-debug` then `cmake --build`, exit 0, 663/663
+  steps) after the reconfigure fix above.
+- **Persistence round-trip: the strongest evidence available without live input.** First
+  launch printed `Bindings saved: .../assets/input.json` (the file didn't exist before);
+  reading it back confirmed the exact expected schema: `camera.fly.up` bound to E/Q,
+  `camera.orbit.x/y` present as gamepad-only axes, no `gizmo.*`/`app.quit` keys anywhere.
+  This exercises `RegisterDefaultEditorBindings` → `GetContext` → `BindingIO::Load` (miss)
+  → `BindingIO::Save`, the action-map's binding→JSON serialization, and the
+  `Diligent-JSON` link, all in one observable artifact, not just "it compiled."
+- **Launch + `PrintWindow` screenshot** (cold-start wait, DPI-aware capture, see
+  MEMORY.md's "Screenshotting the window" section): the full scene rendered normally at 144
+  FPS (helmet, cube+satellite, sphere, torus, ground, gizmo, all panels), confirming the
+  moved `BeginFrame` and the new startup load/save path didn't crash or hang. The Debug
+  panel's new Camera-section lines rendered correctly, including the conditional
+  gamepad-count text, which read as *connected* on this machine. Cross-checked via
+  `Get-PnpDevice`: the only matching HID entries are "HID-compliant system controller"
+  collections under Razer/keyboard vendor IDs, which look like a peripheral's extra HID
+  interface rather than a dedicated controller, reported as an unconfirmed, likely-benign
+  detection, not a verified real gamepad.
+- **Graceful close**: `CloseMainWindow()` + `WaitForExit` returned within 5s, no hang, no
+  abort dialog (the ImGui shutdown-order fix from "Dear ImGui integration" above is
+  untouched by this change).
+- **Blocked, reported as such rather than glossed over:** live interactive behavior (does a
+  held key actually fly the camera, does editing `assets/input.json` change the feel) can't
+  be driven synthetically here (`SendInput` reaches no window in this environment, see the
+  `verify` skill), and there's no confirmed physical gamepad to test the new stick bindings
+  against. Both need a manual check on the user's own machine.
+
+## Verification-Log and Process-Note Trims (2026-07-20 MEMORY.md Compression Pass)
+
+Four verification write-ups and two documentation-sync notes, trimmed from `MEMORY.md`'s
+topical sections during the 2026-07-20 bloat pass (the `tidy-md` skill's MEMORY.md/ARCHIVE.md
+migration step). Each was already-passing, session-specific corroborating detail rather than
+a durable technical fact; `MEMORY.md` keeps a one- or two-sentence compressed version of most
+of these in place (the two documentation-sync notes were cut entirely, with nothing kept).
+Verbatim originals:
+
+**From "Scene serialization":**
+
+**Verified for real, not just by compiling.** This dev environment has no live input (see
+`.claude/skills/verify/SKILL.md`), so the Save/Load buttons can't be click-tested here. A
+temporary, reverted self-test in `main.cpp` round-tripped the scripted default scene
+through `SaveScene` + `LoadScene` into a throwaway `Scene`/`Camera` at startup (never
+touching the live one) and printed a comparison to stderr, redirected to a file at launch.
+Confirmed: 8/8 entities round-tripped with correct parent indices (Satellite correctly
+came back with `parent=3`, Cube's index), correct positions, a valid regenerated mesh
+handle for every primitive, a valid reloaded model handle for Helmet, and Sun reconstructed
+with neither mesh nor model set, light only. Also read the written `.scene` file directly:
+clean, matches the format above, human-readable. Screenshot-confirmed (before and after
+reverting the temp code) that the Debug panel's new Scene section renders correctly and
+nothing else regressed.
+
+**From "Asset browser":**
+
+**Verified:** clean build (after the CMakeLists.txt reconfigure gotcha noted in
+MEMORY.md's "Asset Browser" section). Screenshot comparison, not just a compile check:
+cropped the captured `icon.png` row's thumbnail out of a full-window `PrintWindow` capture
+and compared it directly against the source file: same upright orientation, same
+brightness, confirming both bug fixes above actually took. Graceful shutdown was also
+genuinely exercised despite the no-synthetic-input limitation (see the `verify` skill):
+`PostMessage(hwnd, WM_CLOSE, ...)` is a direct Win32 message post, not `SendInput`-based
+injection, so it isn't subject to that limitation: GLFW's win32 backend handles `WM_CLOSE`
+in its window procedure regardless of focus state. The process exited cleanly in ~2s with
+nothing in the Application event log: stronger evidence than one captured frame rendering
+fine, since it confirms `FileBrowser::Shutdown` and the new `Impl::textures.clear()` are
+ordered correctly across teardown. **Still blocked:** clicking a row to check the preview
+pane, double-clicking a folder to navigate, and double-clicking a `.scene` file to confirm
+the load all need synthetic input this environment doesn't have. The last one is also
+untestable for an unrelated reason: no `.scene` file exists yet in a fresh `assets/scenes/`
+(nobody has clicked "Save Scene" in this build), so even a manual check needs that done
+first.
+
+**From "Entity behavior system":**
+
+Verified non-interactively (no synthetic input reaches this environment; see the
+`verify` skill): clean build. A temporary default-to-`Playing` build captured two
+screenshots 5s apart and showed the Cube's rotation advance from
+`(123.186°, 246.372°, 0°)` to `(212.856°, 425.712°, 0°)`, an exact 2:1 X:Y ratio matching
+its `{0.5, 1.0, 0}` axis and a magnitude consistent with 0.6 rad/s given normal
+wall-clock capture slop, with the visual cube, its shadow, and the parented Satellite all
+rotating in the screenshots too. A second temporary block (removed after use, like the
+first) exercised the copy constructor and the save/load round-trip directly by calling
+them from `main()` and dumping results to stderr: the copy produced a *different* script
+pointer with *identical* field values (a genuine deep clone, not aliased), and a
+save-then-load round trip preserved all 8 entities including the Cube's script and its
+exact field values. Both temporary instrumentation blocks were fully removed and the
+final build reconfirmed clean (identical warning count to the pre-instrumentation build).
+
+**From "Entity behavior system" (documentation-sync note, cut entirely from MEMORY.md):**
+
+Docs sync done in a follow-up `tidy-md` pass, not folded into the implementation
+session: pruned the M1 roadmap entry out of CLAUDE.md, added `core/script.{h,cpp}` +
+`core/scripts/` to its source layout (attempted inline during implementation, but
+reverted then, since it pushed the file 2 lines past its hard 200-line cap; the `tidy-md`
+pass found a line to trim instead), and rewrote `docs/architecture.md`'s "Where new
+systems plug in" from speculative future tense into a descriptive account of what
+actually got built, plus a new "Scripts" subsection under "The scene model" documenting
+the `Entity`-copy-constructor consequence. README's Highlights gained a native-scripting
+bullet.
+
+**From "Physics + collision" (documentation-sync note, cut entirely from MEMORY.md):**
+
+Docs sync folded into this same `tidy-md` pass: pruned the M2.1 roadmap entry out of
+CLAUDE.md (folding its shipped capabilities into Current State instead), added its two named
+follow-ups (mouse-pick raycast, contact events → scripts) to the M2 roadmap list, added
+`core/physics.{h,cpp}` to CLAUDE.md's and `docs/architecture.md`'s source layouts, and
+rewrote `docs/architecture.md`'s "Where new systems plug in" physics paragraph from
+speculative future tense into a descriptive account of what actually got built (plus a new
+"The physics abstraction layer" section, `Transform`'s vocabulary entry, the `Entity` struct's two new
+fields, the frame loop's physics step, and the Play/Stop section, all updated to match).
+README's Highlights gained a physics bullet.
+
 ## ToonEngineOld: the Original Carry-Over Survey (2026-07-10, Audited 2026-07-11)
 
 The full per-system porting plan written before any of the engine/editor-layer roadmap items

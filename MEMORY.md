@@ -5,10 +5,12 @@ always-loaded context, but are worth keeping on hand. Pull this up when you
 hit one of the errors below, or want the "why" behind a rule in CLAUDE.md.
 Organized by system, not by date: each shipped feature has one section
 covering its design and gotchas. **[ARCHIVE.md](ARCHIVE.md)** holds the
-material that used to live here but no longer earns a place in the
-day-to-day lookup path: the full round-by-round debugging narrative behind
-the temporal-ghosting fix (condensed version below), and the original
-ToonEngineOld carry-over survey for systems that have since shipped.
+material that no longer earns a place in this day-to-day lookup path: full
+round-by-round debugging narratives (a condensed version stays here),
+superseded approaches, oversized verification logs, and survey documents
+whose subject matter has since shipped. Kept in sync by the `tidy-md` skill's
+MEMORY.md/ARCHIVE.md migration step; nothing there needs reading for routine
+engineering.
 
 ## Build Gotchas
 
@@ -930,66 +932,21 @@ are exempt from it):
   familiar momentary-snap gesture, the checkbox an always-on mode. Per-op step fields live in
   the Inspector's "Gizmo" section (only the active op's step shows, to stay compact).
 
-**Bugs found dogfooding the above** (pre-existing, from the original gizmo commit, none
-caused by the snap/hotkey change; all surfaced because hotkeys made gizmo-dragging easy
-enough that this was the first time someone actually drove it hard):
+**Two bugs found dogfooding gizmo snap/hotkeys**, pre-existing since the original gizmo
+commit and surfaced only once the hotkeys made dragging easy enough to drive hard (full
+write-up, including a third bug that turned out to be a pure restatement of the glTF
+outline-gap limitation already covered above, in ARCHIVE.md):
 
-- **Gizmo rotate silently did nothing on a spinning entity, on any axis, whether Spin was
-  ticked or not, but worked fine on the (non-spinning) Ground; and re-enabling Spin after a
-  manual edit snapped back to the old trajectory instead of continuing from the new
-  orientation.** Root cause: the spin animation was an **absolute** function of one shared
-  clock: `for (spinners) e.transform->rotationEuler = axis * spinAngle;`, run
-  unconditionally every frame regardless of the `spin` checkbox (only advancing `spinAngle`
-  itself was gated). So the frame after any gizmo edit, this stomped `rotationEuler` right
-  back to `axis * spinAngle` for every entity in `spinners` (Sphere/Cube/Torus/Helmet, not
-  Ground, hence it alone worked); the whole `Vec3` gets replaced, not added to, so *every*
-  axis got wiped. And even gated on `if (spin)`, resuming would still snap to wherever the
-  shared clock said it "should" be, unrelated to the gizmo-set orientation. **Real fix:
-  made the animation incremental instead of absolute**: `rotationEuler = rotationEuler +
-  axis * (dt * kSpinRate)` each frame while `spin` is on, so it's always continuing from
-  whatever `rotationEuler` currently *is* (a natural continuation, or a gizmo-set baseline)
-  rather than recomputing from a shared clock. This let the shared `spinAngle` float be
-  deleted entirely. Each entity is now self-contained. Mathematically equivalent to the
-  original formula for the untouched default scene (sum of per-frame increments == the old
-  closed form), so no visual change there; only a paused-then-edited-then-resumed spinner
-  differs, and only in the intended way.
-- **A faint trail ("screen burn-in") followed objects while gizmo-dragging them** (both
-  move and rotate). `Impl::RunPostFX` feeds `PostFXContext` the current depth buffer as
-  *both* curr and prev (`pPrevDepthBufferSRV = depthSRV; // no history, reuse current`, a
-  deliberate simplification from the original SSAO work, since nothing needed real depth
-  history at the time). That defeats depth-based disocclusion entirely, so both SSAO's
-  temporal AO reprojection *and* TAA's color-history accumulation lean solely on motion
-  vectors: fine for smooth camera/spin motion, not for a large discontinuous mouse-driven
-  jump (not what such reprojection heuristics are tuned for). Fix: a new **app-computed**
-  `PostParams::gizmoManipulating` (not a Debug-panel toggle, set from `ImGuizmo::IsUsing()`,
-  same 1-frame-lag pattern already used for the camera capture-gate, read at the top of the
-  frame before that frame's `Manipulate()` call happens) forces
-  `ScreenSpaceAmbientOcclusionAttribs::ResetAccumulation = 1` **and**
-  `TemporalAntiAliasingAttribs::ResetAccumulation = true` for the duration of a drag: SSAO
-  reuses the exact flag its `ssaoTemporal` off-toggle already sets for the same "no
-  ghosting" reason; TAA's was previously never set at all (always `FALSE`, i.e. always
-  accumulating, though TAA is off by default, so it likely wasn't the primary contributor
-  unless the Debug panel had it toggled on). AO/TAA are very slightly noisier for the
-  duration of a drag, then resume smooth accumulation the instant it ends. **Not fully
-  confirmed by the user as of the first fix attempt (SSAO-only)**: the TAA half was added
-  as a natural extension of the same confirmed-correct root cause, not yet independently
-  re-tested. A real fix (an actual double-buffered depth history) is bigger; deferred unless
-  this residual trail is still visible after the TAA extension too.
-- **The Helmet's outline has visible gaps at hard edges, NOT a regression, already
-  documented.** `model_outline.hlsl`'s own header comment (and this file's "glTF model
-  loading" section) already states the exact limitation: loaded models carry no smooth
-  normal (unlike procedural primitives' `Vertex::smoothNormal`), so the inverted-hull
-  outline extrudes along the plain shading normal and gaps at split-vertex hard creases.
-  The Helmet's dense mechanical panel lines make this far more visible than on smoother
-  models. A real fix needs computing an averaged normal per unique position across the
-  loaded glTF vertex buffer (a real geometry-processing task, not a quick patch), worth a
-  future roadmap item, not folded into this dogfooding pass.
-
-**Not independently verified interactively by Claude**: this dev environment has no live
-input desktop, so synthetic keyboard/mouse (`SendInput`) reaches no window at all, proven and
-written up in `.claude/skills/verify/SKILL.md`. Both fixes above were made from a precise
-code trace (confirmed correct on read, both root-caused to an exact line), then confirmed
-working by the user after a manual test.
+- **Gizmo rotate did nothing on a spinning entity, and re-enabling Spin after a manual edit
+  snapped back to the old trajectory.** The spin animation set `rotationEuler`
+  **absolutely** from one shared clock every frame regardless of the Spin checkbox,
+  stomping any gizmo edit the very next frame. Fixed by making it **incremental**
+  (`rotationEuler += axis * dt * kSpinRate` while Spin is on), so it always continues from
+  whatever `rotationEuler` currently is.
+- **A ghost trail followed objects while gizmo-dragging them.** The SSAO-only partial fix
+  applied here (`PostParams::gizmoManipulating` forcing `ResetAccumulation`) is superseded
+  by "Temporal Ghosting Fixes" below, which covers this same root cause (`PostFXContext`'s
+  missing previous-frame depth buffer) alongside three others found later.
 
 **Light entity component (roadmap A.1).** Promoted the single global light (a
 `toon::Vec3 lightDir` plus a Debug-panel `SliderFloat3("Direction")`) to a first-class scene
@@ -1111,18 +1068,11 @@ by which axis) holds raw indices into `scene.entities` and isn't part of the ser
 model: Load clears it on success so a freshly-loaded scene doesn't drive spin off stale
 or wrong indices.
 
-**Verified for real, not just by compiling.** This dev environment has no live input (see
-`.claude/skills/verify/SKILL.md`), so the Save/Load buttons can't be click-tested here. A
-temporary, reverted self-test in `main.cpp` round-tripped the scripted default scene
-through `SaveScene` + `LoadScene` into a throwaway `Scene`/`Camera` at startup (never
-touching the live one) and printed a comparison to stderr, redirected to a file at launch.
-Confirmed: 8/8 entities round-tripped with correct parent indices (Satellite correctly
-came back with `parent=3`, Cube's index), correct positions, a valid regenerated mesh
-handle for every primitive, a valid reloaded model handle for Helmet, and Sun reconstructed
-with neither mesh nor model set, light only. Also read the written `.scene` file directly:
-clean, matches the format above, human-readable. Screenshot-confirmed (before and after
-reverting the temp code) that the Debug panel's new Scene section renders correctly and
-nothing else regressed.
+**Verified via a temporary, reverted round-trip self-test** (no live input here to click
+the actual Save/Load buttons, see the `verify` skill): the scripted default scene
+round-tripped through `SaveScene`/`LoadScene` with all 8 entities, correct parent indices,
+correct positions, and valid regenerated mesh/reloaded model handles; the written `.scene`
+file matched the format above. Full verification log in ARCHIVE.md.
 
 ## Input System (Roadmap A.1)
 
@@ -1224,54 +1174,20 @@ in place, so a mid-populate exception could leave it partially overwritten): thi
 parses into a side buffer under one `try`/`catch` and only assigns on full success, the same
 "side-copy, swap on success" pattern `serializer.cpp`'s `LoadScene` already uses.
 
-**A real, non-obvious build gotcha found here, see "Build gotchas" above for the general
-lesson now folded in there.** After adding four `target_*` calls to `CMakeLists.txt` (new
-sources, the JSON include dir, the `Diligent-JSON` link, two compile defs) in one sitting,
-`cmake --build --preset windows-debug` forced a reconfigure and got most of the way through
-a full DiligentCore/Tools/FX rebuild before failing on `binding_io.cpp(6,10): fatal error:
-'nlohmann/json.hpp' file not found`. The file exists exactly where the new include dir
-points (confirmed on disk); the actual cause, found by extracting the real compiler
-invocation from `compile_commands.json`, was that **the include dir (and the two new
-compile defs) were simply absent from the generated command**: despite `CMakeLists.txt` on
-disk having all four edits, confirmed via a fresh `Read` immediately before the build.
-Grepping the generated `build.ninja` directly for the new content confirmed zero matches:
-the implicit reconfigure genuinely hadn't processed those lines, even though it *had*
-picked up the new source-file list (the three new `.cpp`s did compile). Root cause not
-fully isolated: `build.ninja`/`compile_commands.json`'s timestamps were only 2 seconds
-after `CMakeLists.txt`'s own last-write time, so this reads as the implicit
-regenerate-if-stale check running, but CMake's own configure pass not fully applying every
-`target_*` call from the edited file. **Fix: an *explicit* `cmake --preset windows-debug`
-reconfigure** (not `--build`) picked up all twelve new references immediately (confirmed via
-the same `build.ninja` grep), and the subsequent build succeeded.
+**Hit the "implicit reconfigure under-applies a `CMakeLists.txt` edit" gotcha for real**:
+four new `target_*` calls (new sources, the JSON include dir, the `Diligent-JSON` link, two
+compile defs) landed on disk but only the source-file list took effect until an explicit
+`cmake --preset windows-debug` reconfigure ran; see "Build gotchas" above for the general
+lesson this incident produced. Full incident write-up in ARCHIVE.md.
 
-**Verified:**
-- **Clean build** (`cmake --preset windows-debug` then `cmake --build`, exit 0, 663/663
-  steps) after the reconfigure fix above.
-- **Persistence round-trip: the strongest evidence available without live input.** First
-  launch printed `Bindings saved: .../assets/input.json` (the file didn't exist before);
-  reading it back confirmed the exact expected schema: `camera.fly.up` bound to E/Q,
-  `camera.orbit.x/y` present as gamepad-only axes, no `gizmo.*`/`app.quit` keys anywhere.
-  This exercises `RegisterDefaultEditorBindings` → `GetContext` → `BindingIO::Load` (miss)
-  → `BindingIO::Save`, the action-map's binding→JSON serialization, and the
-  `Diligent-JSON` link, all in one observable artifact, not just "it compiled."
-- **Launch + `PrintWindow` screenshot** (cold-start wait, DPI-aware capture, see
-  "Screenshotting the window" below): the full scene rendered normally at 144 FPS (helmet,
-  cube+satellite, sphere, torus, ground, gizmo, all panels), confirming the moved
-  `BeginFrame` and the new startup load/save path didn't crash or hang. The Debug panel's
-  new Camera-section lines rendered correctly, including the conditional gamepad-count
-  text, which read as *connected* on this machine. Cross-checked via `Get-PnpDevice`: the
-  only matching HID entries are "HID-compliant system controller" collections under Razer/
-  keyboard vendor IDs, which look like a peripheral's extra HID interface rather than a
-  dedicated controller, reported as an unconfirmed, likely-benign detection, not a
-  verified real gamepad.
-- **Graceful close**: `CloseMainWindow()` + `WaitForExit` returned within 5s, no hang, no
-  abort dialog (the ImGui shutdown-order fix from "Dear ImGui integration" above is
-  untouched by this change).
-- **Blocked, reported as such rather than glossed over:** live interactive behavior (does a
-  held key actually fly the camera, does editing `assets/input.json` change the feel) can't
-  be driven synthetically here (`SendInput` reaches no window in this environment, see the
-  `verify` skill), and there's no confirmed physical gamepad to test the new stick bindings
-  against. Both need a manual check on the user's own machine.
+**Verified:** clean build (663/663 steps); `assets/input.json` round-tripped through
+save-then-load with the exact expected binding schema (E/Q fly, gamepad-only orbit axes, no
+dead `gizmo.*`/`app.quit` keys); launch + screenshot showed no crash/hang; graceful close.
+**Not verified:** live interactive feel (a held key actually flying the camera,
+`assets/input.json` edits changing behavior) and the new gamepad stick bindings against a
+real controller, both blocked by this environment's lack of live input (see the `verify`
+skill) and needing a manual check. Full verification log, including the gamepad-detection
+side investigation, in ARCHIVE.md.
 
 **Still deferred** (see the "Editor camera + input" update above): F-focus on the selected
 entity, an interactive in-editor rebind panel (rebinding today is edit-the-JSON-and-
@@ -1337,22 +1253,14 @@ decides that, keeping the browser decoupled from scene/serializer semantics. Doc
 split off the bottom ~28% of the remaining pass-through center (after the existing
 Hierarchy/Inspector/Debug splits), so the 3D viewport shrinks but nothing else moves.
 
-**Verified:** clean build (after the CMakeLists.txt reconfigure gotcha below). Screenshot
-comparison, not just a compile check: cropped the captured `icon.png` row's thumbnail out of
-a full-window `PrintWindow` capture and compared it directly against the source file: same
-upright orientation, same brightness, confirming both bug fixes above actually took. Graceful
-shutdown was also genuinely exercised despite the no-synthetic-input limitation (see the
-`verify` skill): `PostMessage(hwnd, WM_CLOSE, ...)` is a direct Win32 message post, not
-`SendInput`-based injection, so it isn't subject to that limitation: GLFW's win32 backend
-handles `WM_CLOSE` in its window procedure regardless of focus state. The process exited
-cleanly in ~2s with nothing in the Application event log: stronger evidence than one captured
-frame rendering fine, since it confirms `FileBrowser::Shutdown` and the new
-`Impl::textures.clear()` are ordered correctly across teardown. **Still blocked:** clicking a
-row to check the preview pane, double-clicking a folder to navigate, and double-clicking a
-`.scene` file to confirm the load all need synthetic input this environment doesn't have. The
-last one is also untestable for an unrelated reason: no `.scene` file exists yet in a fresh
-`assets/scenes/` (nobody has clicked "Save Scene" in this build), so even a manual check needs
-that done first.
+**Verified:** clean build; a cropped thumbnail compared directly against its source PNG
+confirmed both bug fixes above. Graceful shutdown was also genuinely exercised despite the
+no-synthetic-input limitation: `PostMessage(hwnd, WM_CLOSE, ...)` is a direct Win32 message
+post, not `SendInput`-based injection, so GLFW's win32 backend still handles it regardless
+of focus state (a reusable technique for this environment's testing limits, see the
+`verify` skill). **Still blocked:** click-to-preview, double-click-navigate, and
+double-click-to-load-scene all need live input this environment doesn't have. Full
+verification log in ARCHIVE.md.
 
 **CMakeLists.txt gotcha, hit again:** adding a source file (`src/ui/file_browser.cpp`) and a
 new define (`TOON_ASSETS_DIR`) forced the exact reconfigure-needs-the-VS-env failure mode in
@@ -1452,19 +1360,12 @@ outside Playing/Step). `CreateScripts(scene)` fires once, at both places a Play 
 begins (the Play button from Editing, and Step from Editing), alongside the existing
 `sceneBackup = scene`.
 
-Verified non-interactively (no synthetic input reaches this environment; see the
-`verify` skill): clean build. A temporary default-to-`Playing` build captured two
-screenshots 5s apart and showed the Cube's rotation advance from
-`(123.186°, 246.372°, 0°)` to `(212.856°, 425.712°, 0°)`, an exact 2:1 X:Y ratio matching
-its `{0.5, 1.0, 0}` axis and a magnitude consistent with 0.6 rad/s given normal
-wall-clock capture slop, with the visual cube, its shadow, and the parented Satellite all
-rotating in the screenshots too. A second temporary block (removed after use, like the
-first) exercised the copy constructor and the save/load round-trip directly by calling
-them from `main()` and dumping results to stderr: the copy produced a *different* script
-pointer with *identical* field values (a genuine deep clone, not aliased), and a
-save-then-load round trip preserved all 8 entities including the Cube's script and its
-exact field values. Both temporary instrumentation blocks were fully removed and the
-final build reconfirmed clean (identical warning count to the pre-instrumentation build).
+Verified non-interactively (no synthetic input reaches this environment; see the `verify`
+skill): clean build; a temporary forced-Playing build confirmed the Cube's rotation
+advancing at the correct rate along its authored axis; a second temporary test confirmed
+the copy constructor deep-clones scripts (not aliased) and that save/load round-trips
+every entity's script and field values correctly. Both temporary instrumentation blocks
+were fully removed before the final build. Full verification log in ARCHIVE.md.
 
 Deferred, named so they aren't forgotten: EnTT/ECS (revisit only when entity count or
 a profiled hotspot demands it); Lua scripting (the script slot is shaped for a
@@ -1474,16 +1375,6 @@ consistent with Jolt's own `SaveState`/`RestoreState` rollback model); UI compon
 inspector "Add Script" UI (scripts attach in code for now); `OnDestroy` actually firing;
 the fast binary rollback snapshot path; the cross-platform FP determinism audit; a
 non-real-time (`OnAction`) `Script` sibling for a future turn-based/card game.
-
-Docs sync done in a follow-up `tidy-md` pass, not folded into the implementation
-session: pruned the M1 roadmap entry out of CLAUDE.md, added `core/script.{h,cpp}` +
-`core/scripts/` to its source layout (attempted inline during implementation, but
-reverted then, since it pushed the file 2 lines past its hard 200-line cap; the `tidy-md`
-pass found a line to trim instead), and rewrote `docs/architecture.md`'s "Where new
-systems plug in" from speculative future tense into a descriptive account of what
-actually got built, plus a new "Scripts" subsection under "The scene model" documenting
-the `Entity`-copy-constructor consequence. README's Highlights gained a native-scripting
-bullet.
 
 ## Physics + Collision (Roadmap M2.1)
 
@@ -1680,16 +1571,6 @@ continuous collision detection; a physics-settings panel (gravity/substeps); the
 "Euler hint" polish (Phase A); non-uniform-scale collider approximation beyond baking; Jolt
 `SaveState`/`RestoreState` for a fast binary rollback snapshot; the cross-platform FP
 determinism audit.
-
-Docs sync folded into this same `tidy-md` pass: pruned the M2.1 roadmap entry out of
-CLAUDE.md (folding its shipped capabilities into Current State instead), added its two named
-follow-ups (mouse-pick raycast, contact events → scripts) to the M2 roadmap list, added
-`core/physics.{h,cpp}` to CLAUDE.md's and `docs/architecture.md`'s source layouts, and
-rewrote `docs/architecture.md`'s "Where new systems plug in" physics paragraph from
-speculative future tense into a descriptive account of what actually got built (plus a new
-"The physics abstraction layer" section, `Transform`'s vocabulary entry, the `Entity` struct's two new
-fields, the frame loop's physics step, and the Play/Stop section, all updated to match).
-README's Highlights gained a physics bullet.
 
 ## Audio (Roadmap M2.2)
 
@@ -1968,6 +1849,49 @@ correctly-shaped soft-edged shadow, shifted between captures consistent with `Sp
 continued to animate the objects, confirming the shadow recomputes live each frame rather than
 being cached.
 
+## Shader Hot-Reload (Roadmap #10)
+
+Diligent's `IRenderStateCache` (`DiligentCore/Graphics/GraphicsTools/interface/RenderStateCache.h`)
+wraps `CreateShader`/`CreateGraphicsPipelineState`. Every shader/PSO in `renderer.cpp` (toon
+fill/outline, model fill/outline, shadow, tonemap, wireframe) now routes through
+`Renderer::Impl::stateCache` instead of the raw `IRenderDevice*`, in **every** build, so no call
+site branches on whether hot-reload is actually enabled. `stateCache` is created via
+`CreateRenderStateCache` with `FileHashMode = RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT`,
+needing `LoadAndGetArchiverFactory()` (`Diligent-ArchiverInterface`, already linked). Only
+`EnableHotReload` and the file watcher below differ between Debug and Release.
+
+**Debug-only pieces, gated on `TOON_SHADER_HOT_RELOAD` (set in `CMakeLists.txt`):**
+- **efsw** (new submodule, pinned to tag **1.5.0**, not master: master needs CMake ≥3.27, this
+  environment has 3.25.1), a small cross-platform file-system watcher, watches
+  `TOON_SHADERS_DIR` non-recursively (every `.hlsl` lives flat in one directory).
+  `ShaderReloadListener::handleFileAction` runs on efsw's own watch thread, so it does the
+  minimum: flip `Impl::shadersDirty` (`std::atomic<bool>`, relaxed ordering, a flag rather than
+  a value anything depends on seeing immediately). `BeginFrame` is the one reader, once per
+  frame, calling `stateCache->Reload()` when set.
+- **React to `Modified`, `Add`, *and* `Moved`, not `Modified` alone.** Many editors (confirmed
+  directly against this repo's own tooling) save atomically: a temp file, then a rename over
+  the original, which the OS reports as the old name disappearing and the new content arriving
+  under the original name again, not a plain `Modified` event. `Modified`-only would have
+  silently never fired on a real save. `Delete` is deliberately excluded (nothing to reload
+  from a file that's mid-rename and briefly gone).
+- **`efsw::FileWatchListener::handleFileAction`'s `oldFilename` parameter is by-value
+  (`std::string`) in efsw 1.5.0**, not `const&` like current efsw master. Match the pinned
+  version's signature exactly: a mismatched parameter type silently turns the override into a
+  non-overriding hide of the pure-virtual base instead of a compile error (caught here by the
+  `-Woverride` diagnostic, not by inspection).
+- A **"Reload Now" button** in the Settings panel (also `TOON_SHADER_HOT_RELOAD`-gated) calls
+  the same `Renderer::ReloadShaders()` the watcher calls internally: a manual fallback
+  alongside the automatic per-frame path. `EditorState::shaderReloadStatus` echoes its last
+  result count the same way `sceneStatus` already does for scene save/load.
+
+**Release builds** link neither efsw nor define `TOON_SHADER_HOT_RELOAD`: `ReloadShaders()`
+becomes a real no-op (`return 0`), matching Diligent's own guidance to keep hot-reload out of
+production builds. `stateCache` itself still exists in Release (every shader still routes
+through it), just without `EnableHotReload` or a watcher driving it.
+
+Verified live: edited `toon_fill.hlsl` while the Debug build was running (no restart) and
+confirmed both the stderr reload log and a visible on-screen shading change.
+
 ## Temporal Ghosting Fixes (Post-Ship Hardening)
 
 A visible ghost/trail followed spinning and camera-moved objects for a stretch after the
@@ -2131,18 +2055,6 @@ so the folder can be deleted once they land without losing anything:**
   (roadmap M3), `ToonEngineOld/` can be deleted wholesale: nothing in it carries further
   value at that point. As of 2026-07-20, M3 has not shipped, so the folder stays.
 
-**Shader hot-reload (roadmap item, not yet wired):** Diligent already provides this; don't
-hand-roll a file-watcher. The interface is `Diligent::IRenderStateCache`
-(`DiligentCore/Graphics/GraphicsTools/interface/RenderStateCache.h`). Create it with
-`EnableHotReload = true` (requires the default `RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT`
-hash mode), route shader/PSO creation through its `CreateShader()`/
-`CreateGraphicsPipelineState()` instead of the raw device calls, then call `cache->Reload()`
-to recompile whatever source files changed (a manual trigger, a UI button/hotkey, not
-polled every frame, per Diligent's `Tutorial26_StateCache`). `RenderStateCacheImpl.cpp`
-builds unconditionally into the already-linked `Diligent-GraphicsTools`; the only extra
-requirement is `Diligent-ArchiverInterface`, and the Archiver DLL already ships. Zero new
-deps.
-
 ## Architecture Decisions
 
 ### Renderer Abstraction Layer: Data Encapsulation, Not a Virtual `IRenderer`
@@ -2220,6 +2132,7 @@ purely for when someone explicitly asks for the full history behind something.
 - **2026-07-16**: physics + collision (M2.1); `src/` reorganized into subsystem folders
   (`core/rendering/`, `core/scene/`, `core/physics/`, `core/camera/`), `main.cpp`'s ~1600
   lines extracted into `app/` + `ui/panels/` (down to ~90 lines of init/loop glue).
-- **2026-07-20**: audio (M2.2); mouse-pick via raycast (M2.3); roadmap-skill reorg (shipped-
-  item promotion moved from `tidy-md` to `update-roadmap`) plus two Steam-release-gap roadmap
-  items (Steamworks bootstrap, controller-navigable UI).
+- **2026-07-20**: audio (M2.2); mouse-pick via raycast (M2.3); contact events to scripts (#9);
+  shader hot-reload (#10); roadmap-skill reorg (shipped-item promotion moved from `tidy-md` to
+  `update-roadmap`) plus two Steam-release-gap roadmap items (Steamworks bootstrap,
+  controller-navigable UI).

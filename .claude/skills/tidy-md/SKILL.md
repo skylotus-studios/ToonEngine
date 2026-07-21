@@ -1,6 +1,6 @@
 ---
 name: tidy-md
-description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/roadmap.md, docs/**) accurate and current. Keeps CLAUDE.md under its hard 200-line cap, keeps README.md a portfolio-quality feature showcase (including a new highlight when a shipped item earns one), and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Moving a shipped item into docs/roadmap.md's Shipped section, and keeping README's duplicate roadmap mermaid diagram in sync with docs/roadmap.md's, are both `update-roadmap`'s job, not this skill's. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, or right after a roadmap item ships (for the README/architecture side effects, not the roadmap-list bookkeeping itself).
+description: Keep ToonEngine's markdown docs (CLAUDE.md, README.md, docs/architecture.md, docs/roadmap.md, docs/**) accurate and current. Keeps CLAUDE.md under its hard 200-line cap, keeps README.md a portfolio-quality feature showcase (including a new highlight when a shipped item earns one), and keeps docs/architecture.md in sync with the actual abstraction-layer/pipeline/system boundaries. Also keeps MEMORY.md itself from bloating: migrates any section that's drifted into a narrative to ARCHIVE.md verbatim and leaves a compressed, still-useful technical summary in its place, so MEMORY.md stays a cheap read and ARCHIVE.md stays the complete record. Moving a shipped item into docs/roadmap.md's Shipped section, and keeping README's duplicate roadmap mermaid diagram in sync with docs/roadmap.md's, are both `update-roadmap`'s job, not this skill's. Never touches a file marked `<!-- tidy-md:locked -->`. Use when the user asks to tidy, update, or refresh documentation, right after a roadmap item ships (for the README/architecture side effects, not the roadmap-list bookkeeping itself), or when MEMORY.md is getting long and needs bloat carried to ARCHIVE.md.
 ---
 
 # tidy-md: Keep ToonEngine's Markdown Docs Accurate, Current, and Right-Sized
@@ -66,23 +66,30 @@ chronological diary) into sections by system/feature, each with its own heading,
 short `## History` section at the end that is just a one-line-per-entry pointer list, not a
 narrative. `ARCHIVE.md` holds the material demoted out of that: the full original History
 log verbatim, complete multi-round debugging narratives, and survey documents whose subject
-matter has since shipped. Nothing in `ARCHIVE.md` needs to be read for routine engineering;
-it exists purely for when the user explicitly asks for the full history behind something.
-Keep both files honoring this split whenever a pass touches either one:
+matter has since shipped, kept byte-for-byte so no detail is actually lost. Nothing in
+`ARCHIVE.md` needs to be read for routine engineering; it exists purely for when the user
+explicitly asks for the full history behind something. Keep both files honoring this split
+whenever a pass touches either one:
 
 - A newly-shipped feature (whether written up by this skill, by `update-roadmap`'s "Promote
   Anything That's Actually Shipped" step, or by the implementation session itself) gets its
-  own topical section in `MEMORY.md` — never a fresh paragraph appended to `## History`.
-  Only add a single new one-line entry to `## History` pointing at that section.
-- A multi-round debugging saga, a superseded approach, or any other narrative whose value is
-  the journey rather than the current state belongs in `ARCHIVE.md`, with `MEMORY.md` keeping
-  only the distilled, durable conclusion (see MEMORY.md's "Temporal ghosting fixes" section
-  for the pattern: four short bullets of root cause + fix, with a pointer to `ARCHIVE.md` for
-  the full round-by-round journey).
-- If `## History` or any topical section in `MEMORY.md` starts accumulating long narrative
-  paragraphs again (a "Verified: ..." block running more than a few sentences, a session
-  play-by-play), that's the same anti-pattern recurring: move the full narrative to
-  `ARCHIVE.md` and leave a short, factual summary in `MEMORY.md`.
+  own topical section in `MEMORY.md`, never a fresh paragraph appended to `## History`. Only
+  add a single new one-line entry to `## History` pointing at that section.
+- **Every pass, scan every topical section in `MEMORY.md` for bloat**, not just the section
+  you came in to edit: a multi-round debugging saga told session-by-session (dead ends and
+  misdiagnoses included), a superseded approach kept "for reference," a "Verified: ..." block
+  running more than a few sentences, or any section that reads like a diary instead of a
+  reference. Line count alone isn't the signal; staying technical and dense is fine at any
+  length. "Temporal ghosting fixes" runs long precisely because it's four dense
+  root-cause-and-fix write-ups with the narrative journey already stripped out.
+- **When you find bloat, carry the full text to `ARCHIVE.md` before compressing anything.**
+  Copy it verbatim into its own heading there first (nothing gets thinned or summarized on the
+  way; that copy exists to hold literally everything), then cut `MEMORY.md`'s copy down to the
+  durable conclusion: root cause, fix, current state, in whatever form stays technically dense
+  but drops the play-by-play. "Temporal ghosting fixes" is the calibration target for the
+  compressed side, not a one-paragraph summary. Aim for something the next session can read in
+  passing without it costing much context, but that still stands on its own without the
+  archive; a stub too thin to be useful is its own failure mode.
 - Fix any cross-reference that assumes full narrative detail still lives in `MEMORY.md`
   itself (e.g. "see MEMORY.md's 2026-07-11 entry for the full story") to point at
   `ARCHIVE.md` instead, once that detail has actually moved there.
@@ -199,8 +206,12 @@ rather than duplicating them.
 - Re-check every relative markdown link you touched (`[text](path)`) still resolves to a
   real file.
 - `wc -l CLAUDE.md`: confirm it's 200 lines or fewer.
+- If you migrated any `MEMORY.md` section to `ARCHIVE.md`, confirm the `ARCHIVE.md` copy is
+  verbatim and the `MEMORY.md` copy left behind still reads as a usable reference on its own,
+  not a stub.
 - Summarize what moved where: what left CLAUDE.md, what (if anything) landed in MEMORY.md or
-  README.md, what changed in docs/architecture.md or docs/roadmap.md (prose/staleness fixes
-  only; ship/unship bookkeeping is `update-roadmap`'s job), what in the rest of docs/** you
+  README.md, what moved from MEMORY.md to ARCHIVE.md and how it was compressed, what changed
+  in docs/architecture.md or docs/roadmap.md (prose/staleness fixes only; ship/unship
+  bookkeeping is `update-roadmap`'s job), what in the rest of docs/** you
   verified-but-left-alone vs. actually changed, and any file you newly marked
   `tidy-md:locked`.
