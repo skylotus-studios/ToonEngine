@@ -135,8 +135,8 @@ flowchart LR
     direction TB
     S8["Mouse-pick via raycast"]
     S9["Contact events to scripts"]
-    N10["Shader hot-reload"]
-    S8 --> S9 --> N10
+    S10["Shader hot-reload"]
+    S8 --> S9 --> S10
   end
 
   subgraph V04["v0.4: Characters &amp; World"]
@@ -178,7 +178,7 @@ flowchart LR
 
   classDef v01 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
   classDef v02 fill:#6B9C8C,stroke:#4a7062,color:#EAF6F1;
-  classDef v03 fill:#FF6B4A,stroke:#c94e33,color:#2B0A00;
+  classDef v03 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
   classDef v04 fill:#FF9F40,stroke:#c97927,color:#2B1400;
   classDef v05 fill:#F4C542,stroke:#c99e28,color:#2B2100;
   classDef v10 fill:#4FA8D8,stroke:#2f7fac,color:#00202E;
@@ -187,8 +187,7 @@ flowchart LR
 
   class S1,S2,S3,S4 v01
   class S5,S6,S7 v02
-  class S8,S9 shipped
-  class N10 v03
+  class S8,S9,S10 v03
   class N11,N12,N13 v04
   class N14,N15,N16,N17 v05
   class N18,N19,N20,N21,N22 v10
