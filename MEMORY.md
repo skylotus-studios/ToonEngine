@@ -210,7 +210,7 @@ Fix: embed a `GLFW_ICON` resource. `src/icon.rc.in` (one line: `GLFW_ICON ICON
 "@TOON_ICON_ICO_PATH@"`) is `configure_file`'d by `CMakeLists.txt` into
 `${CMAKE_CURRENT_BINARY_DIR}/icon.rc` and attached via `target_sources`. Windows-only,
 guarded on `WIN32`; needs `enable_language(RC)` called once near the top of the file.
-`assets/icon.ico` wraps the existing `assets/icon.png` in a minimal ICO container: a
+`assets/icons/icon.ico` wraps the existing `assets/sprites/icon.png` in a minimal ICO container: a
 22-byte ICONDIR + ICONDIRENTRY header prepended directly to the PNG's own bytes. A single
 PNG-compressed frame is valid ICO content, supported since Windows Vista (no need for the
 older multi-resolution uncompressed-BMP format); built by hand in PowerShell since neither
@@ -747,6 +747,103 @@ per primitive bind `Materials[prim.MaterialId].Attribs.BaseColorFactor` + base-c
 `DrawIndexed(IndexCount, FirstIndexLocation = GetFirstIndexLocation()+prim.FirstIndex,
 BaseVertex = GetBaseVertex()+prim.FirstVertex)`. Verified: helmet renders cel-shaded with its
 albedo, SSAO/bloom apply, motion from the spin, clean exit. (Vendored API 256018/019.)
+
+## Skeletal Animation (Roadmap #11)
+
+Samples every animated model's bone pose through Diligent's own
+`GLTF::Model::ComputeTransforms`, not a port of `ToonEngineOld`'s `animator.cpp`: that file
+turned out to implement the identical keyframe/hierarchy/inverse-bind algorithm and nothing
+more, so there was nothing left to port. A new `AnimationState` carries a clip index plus
+current/previous time into `DrawModel`/`DrawModelShadow`, which sample it twice (this frame,
+last frame) for nodes with a glTF skin and upload the resulting joint-matrix palette into a
+growable `StructuredBuffer`, skinned in the vertex shader.
+
+A skinned node draws through a dedicated fill/outline/shadow PSO trio
+(`model_fill_skinned.hlsl`, `model_outline_skinned.hlsl`, `model_shadow_depth_skinned.hlsl`,
+sharing a `SampleSkin` helper in `joints_common.hlsli`) rather than a runtime branch in the
+existing model PSOs, matching this file's existing "different vertex layout gets its own PSO"
+precedent from the procedural-vs-model shadow split. An unskinned model's draw path is
+untouched byte-for-byte: a null `AnimationState*` is the pre-#11 default at every call site.
+
+`AnimationComponent` (`core/scene`) is a new optional entity component holding a clip index
+plus playing/looping flags. Its time advances in the fixed 60 Hz sim tick alongside
+physics/scripts, gated on Playing/Step like everything else there, and reverts for free
+through the existing Play/Stop scene-backup mechanism since it holds no runtime handle: the
+palette is recomputed from the model and time at draw time, so there's nothing to rebuild on
+Play or leave stale on Stop. The Properties panel exposes an Add/Remove Animation section with
+a clip combo, offered only for models with an actual skin.
+
+Demo: `assets/models/fox.glb` (the Khronos Fox test asset, previously unused) loads as a new
+Fox entity playing its first clip.
+
+**Two real bugs, root-caused during verification:**
+1. `SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR` needed to be applied uniformly across all
+   three skinned shader compile sites; missing it on one left `g_Joints` misinterpreted and
+   the model rendered solid black.
+2. `fox.glb` ships with no NORMAL accessor at all, which Diligent's loader leaves zero-filled
+   rather than generating. Fixed with a screen-space-derivative flat-normal fallback in the
+   fill pixel shader, plus a zero-length guard in the outline vertex/pixel shaders (skip the
+   extrude, since `normalize()` of a zero vector is NaN, not a harmless zero).
+
+Verified live: Play mode shows the fox animating with a shadow that tracks the animated pose
+and an outline that follows the silhouette; Stop reverts to bind pose; the helmet's existing
+static draw is unaffected.
+
+## 2D Sprites (Roadmap #13)
+
+A flat, textured, alpha-blended quad carried by an entity (`SpriteComponent`: texture path +
+runtime `TextureHandle`, tint, an atlas UV rect, flip X/Y), transform-oriented like any other
+entity, no billboarding. `Renderer::DrawSprite` draws it into the still-bound HDR G-buffer,
+between the opaque `DrawMesh`/`DrawModel` loop and `EndScene()`, not after: a sprite needs to
+be occluded by opaque geometry in front of it and to go through the same tone-map/bloom
+resolve everything else gets. Its PSO shares the opaque pass's 3-target MRT shape (color +
+normal + motion), since a PSO's declared render targets must match whatever's actually bound
+when it draws, but sets `DepthWriteEnable = False` and enables standard
+SrcAlpha/InvSrcAlpha blending on the color target only; the normal and motion targets are
+write-masked to `COLOR_MASK_NONE` so an unlit, blended sprite can't corrupt the SSAO or
+motion-vector G-buffer.
+
+**Draw order is correctness, not a performance nicety.** With depth writes off,
+`RenderFrame` (`app/editor_render.cpp`) gathers every sprite-bearing entity and sorts it
+back-to-front by *view-space* depth (`Dot(worldPos - eye, camForward)`, from
+`CameraWorldBasis`), not raw distance to the camera: the former matches the axis the depth
+buffer itself measures along, so the sort agrees with what occlusion would decide. Flip X/Y
+is applied by the app layer, negating the relevant axis of the UV rect passed to
+`DrawSprite`, not a shader branch (`ToonEngineOld`'s convention).
+
+**Texture loading reuses `Renderer::LoadTexture`'s existing `srgb` parameter**, but a sprite
+is the first caller to pass `true`: an asset-browser thumbnail (`srgb = false`) composites in
+ImGui's own gamma space, but a sprite composites into this engine's linear HDR scene like
+every other draw and needs the linearize-on-sample an sRGB view gives it. `g_SpriteTex` binds
+`SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC` on one shared SRB, re-`Set` per sprite, the same
+per-draw-varying-texture shape `model_fill.hlsl`'s `g_Albedo` already established, not a
+per-texture SRB cache; its immutable sampler is linear-**clamp**, not `g_Albedo`'s wrap,
+since a sprite's UV rect is often an atlas sub-rect and wrapping would bleed the linear
+filter into a neighboring cell at the rect's edge.
+
+`SpriteComponent::texturePath` is a bare filename relative to a new `TOON_SPRITES_DIR`
+(`assets/sprites/`), not a full baked-in path like `modelPath`/`AudioSource::clip`;
+`SpriteTexturePath` (`core/scene/scene.h`) joins the two at every load site (the demo seed,
+the Properties panel's Load button, serializer rehydration), so authoring a sprite never
+needs a full path typed in by hand. `assets/icon.png`/`assets/icon.ico` moved to
+`assets/sprites/icon.png`/`assets/icons/icon.ico` as part of this (the demo sprite reuses the
+window icon rather than adding a new binary asset just to have one).
+
+**Mouse-pick integration is real geometry, not the generic fallback box.** `picking.cpp`'s
+`EntityWorldBounds` transforms a sprite's own local quad extent (`-0.5..0.5` XY, a thin
+`kSpriteQuadHalfThickness` Z, `picking.h`) by its `worldMatrix`, the same treatment a
+mesh/model gets, so it's picked via bounds that actually match what's on screen. Both the
+generic pick-marker-box loop (`editor_render.cpp`) and the fallback-box path (`picking.cpp`)
+exclude a sprite entity for the same reason: it already has real bounds and is already
+visible, so a disconnected marker box would just be noise.
+
+Serializes as one line ("sprite <texturePath|-> <tint xyzw> <uvRect xyzw> <flipX> <flipY>"),
+the runtime `texture` handle deliberately not written, rebuilt from `texturePath` on load like
+`AudioSource::handle`/`modelPath` already are.
+
+Demo: a Sprite entity reusing the window icon texture, positioned above the cube/satellite
+pair; orbiting the camera past its edge visibly thins it to a line, proof it isn't secretly
+billboarding to face the camera.
 
 ## Scene Graph (Phase B)
 
@@ -1849,6 +1946,45 @@ correctly-shaped soft-edged shadow, shifted between captures consistent with `Sp
 continued to animate the objects, confirming the shadow recomputes live each frame rather than
 being cached.
 
+## Grid and Sky Gradient Backdrop (Roadmap #12)
+
+Two independent passes, both gated by new Settings > Environment toggles (`showGrid`/
+`showSky`), added because the demo scene had no ground/horizon reference and every other
+visual feature is easier to judge by eye with one.
+
+**Sky** (`Renderer::DrawSky`) is a small custom fullscreen pass (`sky_gradient.hlsl`): a
+two-color vertical gradient lerped by the *world-space* view ray's Y direction, not screen Y,
+so the horizon stays level as the camera pitches. It draws into the offscreen HDR G-buffer
+`BeginFrame` already bound, before any entity `DrawMesh`/`DrawModel` call, so opaque geometry
+draws over it; depth writing is off (`DepthEnable = False`), since the sky always fully covers
+the frame and leaving depth alone preserves `BeginFrame`'s far-plane clear for every pixel
+opaque geometry doesn't later cover. `sky_gradient.hlsl`'s `SkyConstants` cbuffer
+(`invViewProj` + top/bottom colors) mirrors a C++ `SkyConstants` struct, the same pattern
+every other shader constant buffer in this file uses.
+
+**Grid** (`Renderer::DrawGrid`) is DiligentFX's own `CoordinateGridRenderer`
+(`external/DiligentFX/Components`, the same library `ShadowMapManager` lives in), not a
+hand-port of `ToonEngineOld`'s `grid.frag`, per the build-on-Diligent guiding principle:
+per-pixel ray/plane intersection against the XZ (Y=0) plane, antialiased multi-LOD lines,
+colored X/Z axes. Unlike `DrawWireframe`, it occludes itself by *reading* the finished scene
+depth buffer rather than writing its own, so it must run after `EndScene()` resolves that
+depth, the same call-timing contract as `DrawWireframe`, not during the main pass where
+`sceneDepth` is still bound as a write target.
+
+**Gotchas:**
+- `CoordinateGridRenderer::Render` binds only the color target it's given and unbinds every
+  render target again before returning, unlike every other pass in this file, which leaves
+  its bound targets in place for the next call. `DrawGrid` rebinds the back buffer itself
+  afterward so `DrawWireframe` and the ImGui overlay right after it still have a target,
+  preserving `EndScene`'s "leaves the back buffer bound" contract.
+- `RunPostFX` (inside `EndScene`) only fills `postCamera` when at least one post effect is
+  enabled, but the grid needs it regardless of post-effect state, so `DrawGrid` calls
+  `FillCameraAttribs` itself rather than assuming `EndScene` already did.
+- `CoordinateGridRenderer`'s own `.cpp` includes `BasicStructures.fxh` the same nested
+  `namespace Diligent { namespace HLSL { ... } }` way the PostFX family does, unlike
+  `ShadowMapManager`'s bare-namespace form above, so it doesn't need the `#undef` workaround
+  the cascaded-shadow-maps namespace collision required.
+
 ## Shader Hot-Reload (Roadmap #10)
 
 Diligent's `IRenderStateCache` (`DiligentCore/Graphics/GraphicsTools/interface/RenderStateCache.h`)
@@ -1996,64 +2132,21 @@ smaller screen pushed the dock layout's right column off-screen even in the real
 `PrintWindow` also **intermittently returns an all-white frame** (a race with the swap-chain
 present), the render is fine; just re-run the capture.
 
-## ToonEngineOld: Carry-Over Reference (Roadmap: Renderer → Engine)
+## ToonEngineOld: Carry-Over Reference (Deleted 2026-07-21)
 
-`ToonEngineOld/` (untracked, **gitignored**, temporary, slated for deletion once fully
-ported; `src` + `assets` only) is the old from-scratch **OpenGL 4.1** engine, kept as a
-porting reference. Its abstraction layer is low-level (`BindShader`/`SetUniform`/immediate
-binds/framebuffers) and does not map onto Diligent's PSO/SRB model, so its `renderer.cpp`
-and `main.cpp` are reference-only; the value is everything built above that layer. Most of
-that "above the layer" material has already shipped and is documented in its own section
-above (see each roadmap item's write-up): scene graph, editor camera, input system, gizmos,
-serialization, the file browser/thumbnails/themes, glTF loading, and cascaded shadow maps.
-The full original carry-over survey (per-system porting notes, plus the 2026-07-11 audit of
-which items Diligent already has vs. genuinely needs hand-rolling) is preserved in
-**[ARCHIVE.md](ARCHIVE.md)** for anyone tracing exactly what a shipped system started from.
-
-**What's left to port (grid/sky, sprites, skeletal animation — roadmap M3), captured here
-so the folder can be deleted once they land without losing anything:**
-
-- **Grid pass.** `ToonEngineOld/src/*/grid.frag` reconstructs a world-space ray from the
-  inverse view-proj, intersects it with the Y=0 plane, and draws two line scales (minor +
-  major every 5th line) via `abs(fract(coord - 0.5) - 0.5) / fwidth(coord)`, with distance
-  fade. It writes `gl_FragDepth` only where a grid line is actually visible, so the plane
-  stays transparent between lines and doesn't occlude scene geometry below Y=0 or corrupt an
-  edge/SSAO pass with bogus depth. Porting needs `gl_FragDepth` → `SV_Depth`;
-  `fwidth`/`dFdx`/`dFdy` are named identically in HLSL; the manual NDC depth reconstruction
-  (`(far+near - 2*near*far/hitT) / (far-near)`, then `*0.5+0.5`) is GL-convention and must be
-  rederived for Diligent's `[0,1]`, the same way the shipped CSM math already was.
-- **Skeletal animation.** `ToonEngineOld/src/*/animator.cpp` (keyframe sampling + hierarchy
-  evaluation) is portable line-for-line modulo glm→Diligent math. Two non-obvious
-  correctness details worth keeping verbatim as reference: un-animated joints fall back to
-  **bind-pose local TRS** (not identity) so they don't collapse, and the joint hierarchy is
-  walked **topologically** (iterate until every joint's parent is resolved) because glTF does
-  not guarantee parent-before-child node order. The glTF *extraction* side of the old loader
-  (cgltf) is superseded by DiligentTools' `GLTF::Model`, which parses skins/animations
-  itself, but the old **ufbx FBX path has no current-engine equivalent at all**, so it's the
-  only reference if FBX/skeleton import is ever wanted (only `dragon.fbx` needs it;
-  `dragon.gltf` already loads through the normal path).
-- **Sprites.** The design is a real per-entity component, not just the two shader files.
-  `ShadingMode::Sprite` (old `scene.h`) carries `spriteTint` (vec4), `spriteUVRect`
-  (xy=offset, zw=scale, an atlas/sub-texture rect), and `spriteFlipX`/`spriteFlipY`, all
-  round-tripped through the old serializer and editable in the old inspector. Rendering is a
-  **separate transparent pass** after the opaque toon pass: one shared unit quad (pos+uv, 6
-  vertices, built once) drawn per sprite entity, alpha `discard` below 0.01. Every sprite
-  entity is collected into a list each frame and **sorted back-to-front by view-space
-  depth** (the dot product of (entity world position minus camera position) against the
-  camera's forward vector, not raw distance to camera), so overlapping alpha-blended sprites
-  composite correctly regardless of viewing angle. Porting notes: the flip is applied by
-  negating the UV rect's offset/scale in C++ before upload, not in the shader; the quad is
-  one shared mesh reused per draw via its own MVP, not one mesh per sprite instance.
-- **`toon.frag` is a fidelity upgrade**, not a required port: cel-shades with up to 8 lights
-  (directional + point with quadratic attenuation), a hard toon Blinn-Phong specular
-  (`smoothstep` over `pow(NdotH, shininess)`), a Fresnel rim term, derivative-based normal
-  mapping (TBN from `dFdx`/`dFdy`, no tangent attribute needed), and tints the non-highlight
-  cel bands when a fragment is in shadow. A near-direct GLSL→HLSL port if this fidelity is
-  ever wanted; every `glUniform` call collapses into the engine's existing `Constants`
-  cbuffer.
-- **Deletion trigger.** Once grid+sky, skeletal animation, and sprites have all shipped
-  (roadmap M3), `ToonEngineOld/` can be deleted wholesale: nothing in it carries further
-  value at that point. As of 2026-07-20, M3 has not shipped, so the folder stays.
+`ToonEngineOld/` (was untracked and **gitignored**, `src` + `assets` only) was the old
+from-scratch **OpenGL 4.1** engine, kept as a porting reference for three specific systems:
+grid/sky, skeletal animation, and sprites. Its abstraction layer was low-level
+(`BindShader`/`SetUniform`/immediate binds/framebuffers) and never mapped onto Diligent's
+PSO/SRB model, so only "above the abstraction layer" material ever had lasting value; that
+value is fully captured in this file's own sections (see "Grid and Sky Gradient Backdrop,"
+"Skeletal Animation," "2D Sprites," and every other roadmap item's write-up above) and in
+**[ARCHIVE.md](ARCHIVE.md)**'s full original carry-over survey (per-system porting notes,
+plus the 2026-07-11 audit of which items Diligent already has vs. genuinely needs
+hand-rolling). All three tracked ports shipped (grid/sky #12, skeletal animation #11,
+sprites #13, all 2026-07-21), meeting this section's own deletion trigger, so the folder
+(and its `ToonEngine-backup/ToonEngineOld` backing copy) was deleted the same day. Nothing
+here needs it anymore; treat this section as historical record only.
 
 ## Architecture Decisions
 
@@ -2136,3 +2229,9 @@ purely for when someone explicitly asks for the full history behind something.
   shader hot-reload (#10); roadmap-skill reorg (shipped-item promotion moved from `tidy-md` to
   `update-roadmap`) plus two Steam-release-gap roadmap items (Steamworks bootstrap,
   controller-navigable UI).
+- **2026-07-21**: skeletal animation (#11, see "Skeletal animation"); grid + sky gradient
+  backdrop (#12, see "Grid and sky gradient backdrop"); 2D sprites (#13, see "2D sprites");
+  roadmap rebalanced into 0.1-increment milestones through a 1.0 "Official Release" boundary,
+  Lua scripting + 2D editor mode added, the "Researched, Not Yet Ranked" holding bucket
+  removed in favor of ranking everything directly; `ToonEngineOld/` deleted, all three
+  tracked ports having shipped (see "ToonEngineOld: Carry-Over Reference").

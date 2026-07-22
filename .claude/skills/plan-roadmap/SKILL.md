@@ -1,14 +1,13 @@
 ---
 name: plan-roadmap
-description: Research and plan the next unshipped CLAUDE.md roadmap item before implementing it: checks for prior art in ToonEngineOld, checks what Diligent Engine's own modules already provide per the guiding principle, researches Diligent docs and engine-architecture best practices online, then explains the design and trade-offs in genuinely verbose, basic-CS-plus-analogy ELI5 depth before asking the user to decide. Use when the user asks to plan, scope, or design the next roadmap item, or names a specific item to plan.
+description: Research and plan the next unshipped CLAUDE.md roadmap item before implementing it: checks what Diligent Engine's own modules already provide per the guiding principle, researches Diligent docs and engine-architecture best practices online, then explains the design and trade-offs in genuinely verbose, basic-CS-plus-analogy ELI5 depth before asking the user to decide. Use when the user asks to plan, scope, or design the next roadmap item, or names a specific item to plan. (ToonEngineOld, the old-engine porting reference this skill used to check first, was deleted 2026-07-21 once its three tracked ports shipped; see MEMORY.md.)
 ---
 
 # plan-roadmap: Research and Plan the Next Roadmap Item
 
-Turns one CLAUDE.md roadmap bullet into a decision-ready plan: what already exists (in
-ToonEngineOld, in Diligent), what the wider ecosystem does, and a concrete design with its
-trade-offs explained in plain language, so the user knows exactly what they are signing up
-for before approving it. The output is a plan, not engine code. This skill ends at
+Turns one CLAUDE.md roadmap bullet into a decision-ready plan: what Diligent already
+provides, what the wider ecosystem does, and a concrete design with its trade-offs explained
+in plain language, so the user knows exactly what they are signing up for before approving it. The output is a plan, not engine code. This skill ends at
 `ExitPlanMode`; implementation is separate, later work.
 
 ## Enter Plan Mode
@@ -44,23 +43,18 @@ comparisons in the explain step need to argue in terms of this codebase's real t
 
 ## Research the Item, in Parallel
 
-Four independent checks. Launch them as parallel `Agent` calls in one message rather than
-one at a time. The local checks (a, b) are fast enough to run directly if you would rather;
-the web checks (c, d) benefit from a `fork` (or a fresh general-purpose agent) so the raw
-search and fetch output does not fill this session's context.
+Four checks, (a) now retired (see below) so effectively three. Launch the active ones as
+parallel `Agent` calls in one message rather than one at a time. The local check (b) is fast
+enough to run directly if you would rather; the web checks (c, d) benefit from a `fork` (or a
+fresh general-purpose agent) so the raw search and fetch output does not fill this session's
+context.
 
-**a. Prior info in ToonEngineOld** (`C:/dev/ToonEngine/ToonEngineOld`, untracked,
-gitignored, the old OpenGL 4.1 engine kept only as a porting reference; see its own
-`CLAUDE.md` for its layout). Check MEMORY.md's "ToonEngineOld: Carry-Over Reference"
-section first: it already maintains a system-by-system map and a "Port Gotchas for the
-Un-Shipped Systems" note, so if the item is covered there, that is a previous session's
-vetted answer, not something to re-derive. Then independently `Glob`/`Grep`
-`ToonEngineOld/src/**` for the item's own keywords. The carry-over survey was written for
-the three ToonEngineOld ports (skeletal animation, grid/sky, sprites) and says nothing about
-items outside that scope. If something turns up, say what it would cost to adapt
-(ToonEngineOld used glm and vcpkg; this engine uses hand-rolled `core/math.h` and no ECS),
-not only that it exists. An item with no ToonEngineOld counterpart at all is a legitimate
-result.
+**a. Prior info in ToonEngineOld — retired.** `ToonEngineOld` (the old OpenGL 4.1 engine kept
+as a porting reference for exactly three systems: skeletal animation, grid/sky, and sprites)
+was deleted 2026-07-21 once all three had shipped; see MEMORY.md's "ToonEngineOld:
+Carry-Over Reference" section for what it covered and where that material lives now. There
+is no folder left to check. Skip this lens entirely unless the folder somehow exists again
+(it won't); go straight to (b).
 
 **b. What Diligent Engine already provides.** The load-bearing check, per CLAUDE.md's
 "Guiding principle" section: build on Diligent, don't reinvent it. MEMORY.md has real

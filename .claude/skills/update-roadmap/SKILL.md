@@ -23,10 +23,14 @@ Before researching anything new, read what's already true:
 
 - `docs/roadmap.md` (CLAUDE.md's `## Roadmap` section is just a pointer to it) for the
   current list: a single sequence, shipped items first, then everything left ranked from
-  most to least important. There's no milestone grouping and no separate lower-priority
-  bucket for infra: every unshipped item, gameplay or otherwise, already sits at a specific
-  rank, and any new or reprioritized candidate needs a specific rank too, not a vague "later"
-  bucket.
+  most to least important. There's no separate lower-priority bucket for infra: every
+  unshipped item, gameplay or otherwise, already sits at a specific rank, and any new or
+  reprioritized candidate needs a specific rank too, not a vague "later" bucket. The mermaid
+  diagram's `v0.1`-`v1.0` (then post-1.0) subgraphs are a balanced-pacing visualization layered
+  on top of that same flat sequence, evenly chunking it into version-sized groups (2026-07-21
+  rebalance); they are not a structural split of the ranked list itself, and `v1.0` marking the
+  "official release" boundary doesn't create a second bucket either, just a label on where in
+  the one sequence that boundary currently falls.
 - `grep '^## ' MEMORY.md` plus the tail of its `## History` section, for what's shipped
   recently and any "Not done / deliberately deferred" notes already recorded in a topic
   section: those are prior sessions' own gap lists and count as research, not something to
@@ -66,10 +70,21 @@ reasons about the real not-yet-shipped list:
    `MEMORY.md`'s "Temporal ghosting fixes" section and `ARCHIVE.md`'s "Temporal ghosting: the
    full debugging saga" section demonstrate.
 2. Move the item out of "What's Next" and into "Shipped," at the end of that section (it
-   joins in the order things actually landed), and renumber every item below it so the list
-   still reads as one unbroken sequence with no gaps. Re-check whether anything ranked below
-   it should move up: a rank was often justified by what was still outstanding above it, and
-   that reasoning can go stale the moment something ships.
+   joins in the order things actually landed). If the promoted item(s) were already the
+   top-ranked entry (or entries) of "What's Next" — the common case, since something worth
+   shipping soon is usually already ranked near the top — **nothing below them needs
+   renumbering**: their own numbers already continue the sequence correctly the moment
+   Shipped's count catches up to them, so only the text block moves, not any digit.
+   Renumbering is only needed when the promotion leaves an actual gap: an item promoted out of
+   the *middle* of "What's Next" (everything still unshipped that was ranked below it needs to
+   shift up by one to close the hole), not the ordinary top-of-list case. Getting this
+   backwards, shifting the remaining list down as if closing a gap when none exists, silently
+   double-assigns numbers: a real incident on 2026-07-21 did exactly this twice in a row
+   (items 11-13 each ended up naming two different features) before a sequence-integrity check
+   caught it — see the verification command in "Keep README's Diagram in Sync" below; run it
+   after every promotion, not just after a genuine mid-list renumber. Re-check whether anything
+   ranked below it should move up: a rank was often justified by what was still outstanding
+   above it, and that reasoning can go stale the moment something ships.
 3. Recompute the progress line (`Shipped X / Y items`) at the top of the file.
 4. Update the mermaid diagram: rename the item's node id from its `N`-prefixed id to the
    `S`-prefixed id matching its new position in the Shipped count (the 8th item to ship
@@ -104,6 +119,16 @@ trying to reverse-engineer "what changed" from a diff is exactly how the two dri
 before. Verify after every diagram edit: `grep -oE '[SN][0-9]+' docs/roadmap.md README.md`
 should report the identical id set (same ids, same S/N split) in both files, and every
 `classDef`/`class` line should match structurally (colors, groupings) between the two.
+
+**Also verify the numbering itself, not just cross-file sync.** A diagram-sync check alone can
+pass while the list is still internally broken, since both files can be renumbered the same
+wrong way and still match each other. After any promotion or insertion, confirm the prose
+sequence is exactly 1..N with no gaps or repeats:
+`grep -oE '^[0-9]+\.' docs/roadmap.md | tr -d '.' | sort -n | uniq -c | awk '$1>1{print}'` must
+print nothing, and the highest number must equal the total item count (Shipped + What's Next).
+Then confirm the mermaid `S`/`N` ids match those same prose numbers 1:1
+(`grep -oE '[SN][0-9]+' docs/roadmap.md | sed 's/[SN]//' | sort -nu`), not merely that the two
+files agree with each other.
 
 ## Research the Three Lenses, in Parallel
 
@@ -163,24 +188,45 @@ paragraph: what it is, which lens it came from, the concrete rule or gap that ju
 (name the cpp-style-guide rule, the Steam requirement, or the MEMORY.md deferred-item note),
 and exactly which existing item it would slot above or below and why.
 
-Present that list to the user before touching any file. Use `AskUserQuestion` with
-`multiSelect: true` to let them pick which candidates actually go on the list, and confirm
-the proposed rank for each one picked; don't assume every researched candidate should be
-added, and don't assume a proposed rank is final without confirmation, since re-ranking
-shifts where every item below it sits.
+**Every candidate that clears this bar gets a real numeric rank when it's written into the
+file.** There is no separate "researched but not yet ranked" holding section — a past version
+of this document had one, and it was removed on 2026-07-21 by explicit user instruction: an
+unranked bucket is exactly the kind of separate infra bucket CLAUDE.md's Roadmap section
+already promises this list doesn't have. If a candidate genuinely doesn't clear the bar, drop
+it and say why in the summary; don't park it in the file for later.
+
+Present that list to the user before touching any file, but **default to deciding the rank
+yourself** using the reasoning above, the same way every existing item's position is already
+justified, rather than routing each placement back to the user as a question. Making that
+judgment call is this skill's job; asking about it by default defeats the point of having done
+the research (explicit user correction, 2026-07-21: "prioritize based on importance, do not
+ask me, always make a judgment call"). Reserve `AskUserQuestion` for a genuinely different kind
+of decision than "where does this rank": whether a *presented* candidate should be added at
+all (a real accept/reject choice on a specific finding, not its placement), or a
+structural/strategic call the evidence itself can't settle (e.g. whether a milestone rebalance
+should reshuffle already-shipped groupings or only the unshipped tail — the user's own
+preference, not something researchable). When genuinely unsure which kind of decision it is,
+decide it yourself and state the reasoning plainly in the summary: a wrong rank is a one-line
+fix on the next pass, and stopping to ask about something you already have enough evidence to
+judge trains the user to expect friction from this skill that a competent pass shouldn't need.
 
 ## Write the Result
 
 Only after the user has picked:
 
-1. Update `docs/roadmap.md`: insert each chosen item at its confirmed rank in the single
+1. Update `docs/roadmap.md`: insert each chosen item at its decided rank in the single
    "What's Next" sequence, renumbering everything below it so the list still reads as one
    unbroken sequence from most to least important, with the reasoning paragraph the synthesis
    step already drafted. Recompute the progress line at the top of the file. Add the new
-   item(s) to the mermaid diagram too (a new node in the right milestone subgraph, renumbering
-   every `N`-id after it), and mirror that same diagram edit into README.md's copy in the same
-   step (see "Keep README's Diagram in Sync" above) — a new candidate is exactly as much a
-   sync point as a shipped-item promotion is.
+   item(s) to the mermaid diagram too (a new node in the right `v0.X` milestone subgraph,
+   renumbering every `N`-id after it), and mirror that same diagram edit into README.md's copy
+   in the same step (see "Keep README's Diagram in Sync" above) — a new candidate is exactly as
+   much a sync point as a shipped-item promotion is. **Keep the milestone subgraphs roughly
+   balanced in item count** (the reason for the 2026-07-21 full rebalance in the first place):
+   if inserting a candidate would make one `v0.X` bucket noticeably larger than its neighbors,
+   shift the boundary instead, moving its now-excess tail item into the next bucket (renumbering
+   that bucket's own id as needed) rather than letting one milestone silently balloon while
+   others stay small the way `v1.0: Ship` did before.
 2. Update CLAUDE.md's `## Roadmap` section only if it no longer accurately describes the
    list; it stays a short pointer, not a second copy of the detail. Re-check the 200-line cap
    after editing.
