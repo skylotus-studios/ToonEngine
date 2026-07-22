@@ -88,6 +88,33 @@ namespace toon {
         bool looping = true;
     };
 
+    // A flat, textured, alpha-blended quad carried by an entity (roadmap #13: 2D & sprites),
+    // drawn transform-oriented (no billboarding) in a separate transparent pass after the
+    // opaque toon pass; see Renderer::DrawSprite. Splits data the same way AudioSource above
+    // does: `texturePath` is a FILENAME relative to TOON_SPRITES_DIR (not a full path, unlike
+    // modelPath/AudioSource::clip), serialized; `texture` is the runtime handle rebuilt from
+    // it on load via SpriteTexturePath below (never serialized, harmless to copy as a plain
+    // id -- same reasoning as AudioSource::handle). `uvRect` is an atlas sub-rect (xy =
+    // offset, zw = scale, default the full [0,1] texture); `flipX`/`flipY` mirror it by
+    // negating the relevant axis's offset/scale (applied by the app layer before DrawSprite,
+    // ToonEngineOld's convention, not branched in the shader).
+    struct SpriteComponent {
+        std::string texturePath;
+        TextureHandle texture = TextureHandle::Invalid;
+        Vec4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
+        Vec4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
+        bool flipX = false;
+        bool flipY = false;
+    };
+
+    // Resolves a sprite's user-facing texture filename (SpriteComponent::texturePath, what
+    // the Properties panel's Texture field holds and what's saved to a .scene file, e.g.
+    // "icon.png") against TOON_SPRITES_DIR, the one base directory every sprite texture
+    // loads from -- so authoring a sprite never needs a full path typed in by hand.
+    inline std::string SpriteTexturePath(const std::string &relativePath) {
+        return std::string(TOON_SPRITES_DIR) + "/" + relativePath;
+    }
+
     // One node in the scene. It renders either a procedural primitive (`mesh` set) or a loaded
     // glTF model (`model` set); `material` is the primitive's material, or the model's
     // style/tint. `transform == nullopt` marks a pure grouping/anchor node (the root) that
@@ -131,6 +158,11 @@ namespace toon {
         // playing, and when; see AnimationComponent above. Only meaningful when `model` is
         // set and Renderer::ModelHasSkin(model) is true.
         std::optional<AnimationComponent> animation;
+
+        // 2D sprite (roadmap #13): a flat textured quad at this entity's transform,
+        // independent of mesh/model (nothing stops an entity from carrying both, though the
+        // demo scene never does). See SpriteComponent above.
+        std::optional<SpriteComponent> sprite;
 
         // Attached native scripts (core/scene/script.h): per-tick gameplay hooks (M1.3). A
         // std::unique_ptr member makes ScriptComponent, and therefore Entity, NOT implicitly

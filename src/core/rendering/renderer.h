@@ -78,6 +78,15 @@ namespace toon {
         float nearZ = 0.1f;
         float farZ = 100.0f;
 
+        // 2D editor mode (roadmap #14): true locks the viewport to an orthographic,
+        // sprite-facing view (SetCamera branches its projection build on this) instead of
+        // the perspective view above. orthoHeight is the orthographic analog of fovY: since
+        // nothing shrinks with distance in an orthographic projection, it directly names the
+        // world-space vertical extent the view shows, and zoom (CameraZoom) scales it instead
+        // of distance while this is set.
+        bool orthographic = false;
+        float orthoHeight = 10.0f;
+
         // Editor-control tuning (used by core/camera.h, not read by the renderer).
         float lookSensitivity = 0.005f; // radians per pixel (orbit)
         float panSensitivity = 0.0015f; // world units per pixel, per unit of distance (pan)
@@ -309,11 +318,13 @@ namespace toon {
         void DrawModel(ModelHandle model, const Mat4 &world, const Mat4 &prevWorld, const Material &style,
                        const AnimationState *anim = nullptr);
 
-        // --- Textures (editor UI: asset thumbnails/previews) --------------------
-        // Not part of the toon draw path (materials don't carry textures yet); this exists
-        // so editor UI (the asset browser) can decode an image file and display it with
-        // ImGui::Image. Decodes PNG/JPG/BMP/TGA via DiligentTools' TextureLoader.
-        TextureHandle LoadTexture(const char *path); // TextureHandle::Invalid on failure
+        // --- Textures (editor UI: asset thumbnails/previews; also sprite textures) ---
+        // Decodes PNG/JPG/BMP/TGA via DiligentTools' TextureLoader. `srgb` selects the
+        // texture's source color space: false (default) for an asset browser thumbnail,
+        // composited by ImGui's own gamma-space shader; true for a sprite texture (see
+        // DrawSprite below), which composites into the linear HDR scene like every other
+        // draw and needs the linearize-on-sample an sRGB view gives it.
+        TextureHandle LoadTexture(const char *path, bool srgb = false); // TextureHandle::Invalid on failure
         void DestroyTexture(TextureHandle texture);
 
         // An opaque id ImGui::Image can draw (cast to ImTextureID at the call site; this
@@ -322,6 +333,24 @@ namespace toon {
 
         // Pixel dimensions, for sizing a preview. Left untouched (0) for an invalid handle.
         void GetTextureSize(TextureHandle texture, uint32_t &width, uint32_t &height) const;
+
+        // --- 2D sprites (roadmap #13) --------------------------------------------
+        // Draw a flat, textured, alpha-blended quad at `world` (transform-oriented -- no
+        // billboarding), unlit. `prevWorld` is the quad's placement LAST frame, for its
+        // motion vector (same convention as DrawMesh/DrawModel; pass the same value for a
+        // static sprite). `tint` multiplies the sampled texel (straight alpha; a pixel
+        // under 0.01 alpha is discarded). `uvRect` is an atlas sub-rect (xy = offset, zw =
+        // scale; {0,0,1,1} = the whole texture); apply flipX/flipY (SpriteComponent, core/
+        // scene/scene.h) by negating the relevant axis's offset/scale before calling this,
+        // not here. Depth-tested against opaque geometry, writes depth + its own G-buffer
+        // normal/roughness/motion (so later depth- and G-buffer-reading passes -- the editor
+        // grid, SSR/SSAO/TAA -- see the sprite, not whatever it occludes), color alpha-
+        // blended: call once per sprite, entities pre-sorted back-to-front (farthest first)
+        // by the caller -- see docs/architecture.md's "Transparent sprite pass". Call AFTER
+        // the opaque DrawMesh/DrawModel calls and BEFORE EndScene() (needs the still-bound
+        // G-buffer + scene depth); a TextureHandle::Invalid is silently skipped.
+        void DrawSprite(const Mat4 &world, const Mat4 &prevWorld, TextureHandle texture, const Vec4 &tint,
+                        const Vec4 &uvRect);
 
         // Post-processing. Set params, then EndScene() resolves the HDR scene to the
         // back buffer (call after the DrawMesh calls, before the UI overlay).
@@ -376,6 +405,7 @@ namespace toon {
         bool CreateWireframePipeline();                               // debug line-list PSO (DrawWireframe)
         bool CreateSkyPipeline();                                     // sky-gradient fullscreen PSO (DrawSky)
         bool CreateGridRenderer();                                    // DiligentFX CoordinateGridRenderer (DrawGrid)
+        bool CreateSpritePipeline();                                  // transparent textured-quad PSO (DrawSprite)
 
         // Roadmap #11 (skeletal animation): grow the shared skinning joints buffer (never
         // shrink it) to hold at least `neededElements` bone matrices, re-pointing every

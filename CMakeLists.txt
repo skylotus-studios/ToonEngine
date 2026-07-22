@@ -158,10 +158,10 @@ add_executable(ToonEngine
 # named exactly GLFW_ICON when it registers the window class (see
 # external/glfw/src/win32_window.c) and falls back to the generic system icon if it can't
 # find one; that fallback is what the taskbar/Alt-Tab/shell were showing even though the
-# runtime call had already fixed the title bar. assets/icon.ico wraps assets/icon.png in a
+# runtime call had already fixed the title bar. assets/icons/icon.ico wraps assets/sprites/icon.png in a
 # minimal ICO container (a single PNG-compressed frame, supported since Windows Vista).
 if(WIN32)
-    set(TOON_ICON_ICO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.ico")
+    set(TOON_ICON_ICO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/icon.ico")
     configure_file(src/icon.rc.in ${CMAKE_CURRENT_BINARY_DIR}/icon.rc @ONLY)
     target_sources(ToonEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/icon.rc)
 endif()
@@ -258,7 +258,8 @@ target_compile_definitions(ToonEngine PRIVATE
     TOON_SHADERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders"
     TOON_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
     TOON_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
-    TOON_ICON_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png"
+    TOON_SPRITES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/sprites"
+    TOON_ICON_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/sprites/icon.png"
     TOON_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes"
     TOON_AUDIO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/audio"
     TOON_INPUT_JSON="${CMAKE_CURRENT_SOURCE_DIR}/assets/input.json"

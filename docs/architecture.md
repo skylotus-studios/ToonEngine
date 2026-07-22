@@ -306,15 +306,16 @@ src/
 CMake bakes several absolute path macros into the binary (`target_compile_definitions` in
 `CMakeLists.txt`), so the app finds its assets regardless of the working directory:
 
-| Macro | Points at |
-|---|---|
-| `TOON_SHADERS_DIR` | `assets/shaders`: the HLSL shader source root |
-| `TOON_MODELS_DIR` | `assets/models`: glTF/GLB/FBX test models |
-| `TOON_FONTS_DIR` | `assets/fonts`: editor UI fonts |
-| `TOON_ICON_PATH` | `assets/icon.png`: runtime window icon |
-| `TOON_SCENES_DIR` | `assets/scenes`: saved `.scene` files |
-| `TOON_INPUT_JSON` | `assets/input.json`: saved input bindings |
-| `TOON_ASSETS_DIR` | `assets`: the asset browser's root |
+| Macro              | Points at                                      |
+|--------------------|------------------------------------------------|
+| `TOON_SHADERS_DIR` | `assets/shaders`: the HLSL shader source root  |
+| `TOON_MODELS_DIR`  | `assets/models`: glTF/GLB/FBX test models      |
+| `TOON_FONTS_DIR`   | `assets/fonts`: editor UI fonts                |
+| `TOON_SPRITES_DIR` | `assets/sprites`: game sprites                 |
+| `TOON_ICON_PATH`   | `assets/sprites/icon.png`: runtime window icon |
+| `TOON_SCENES_DIR`  | `assets/scenes`: saved `.scene` files          |
+| `TOON_INPUT_JSON`  | `assets/input.json`: saved input bindings      |
+| `TOON_ASSETS_DIR`  | `assets`: the asset browser's root             |
 
 A shipped build would copy these directories next to the executable and switch to relative
 paths; today they're dev-convenience absolute paths into the source tree.
@@ -332,6 +333,7 @@ paths; today they're dev-convenience absolute paths into the source tree.
 | `model_shadow_depth.hlsl` | Depth-only pass for glTF models into a shadow cascade. |
 | `tonemap.hlsl` | Full-screen HDR resolve: AO/SSR composite, exposure, ACES tone map, optional sRGB encode. No vertex buffer. The triangle is generated from `SV_VertexID`. |
 | `wireframe.hlsl` | Collider debug overlay (M2.1): flat-color line-list draw for `DrawWireframe`, no lighting/shadow/G-buffer output. |
+| `sprite.hlsl` | Transparent textured quad (roadmap #13): unlit, atlas-UV-rect + tint, alpha-discard below 0.01, for `DrawSprite`. |
 
 ## The Frame Loop
 
@@ -609,6 +611,63 @@ color = toneMap ? ACESFilm(hdr) : saturate(hdr)
 `EndScene` leaves the back buffer bound afterward so the ImGui overlay draws directly on top,
 and copies the current depth into `prevSceneDepth` for next frame's reprojection history.
 
+### Transparent Sprite Pass (roadmap #13)
+
+`DrawSprite` draws a flat, textured, alpha-blended quad (`SpriteComponent`, see "The Scene
+Model" -> "Sprites" below), transform-oriented like any other entity (no billboarding).
+Unlike the collider wireframe below, it runs **before** `EndScene()`, not after: a sprite
+needs to be occluded by opaque geometry in front of it and to compositing through the same
+tone-map/bloom resolve everything else gets, so it draws into the still-bound HDR G-buffer,
+between the opaque `DrawMesh`/`DrawModel` loop and `EndScene()` (`app/editor_render.cpp`'s
+`RenderFrame`). Its PSO shares the opaque pass's 3-target MRT shape (color + normal +
+motion) and `DSVFormat` for that reason -- a PSO's declared render targets must match
+whatever is actually bound when it draws -- with SrcAlpha/InvSrcAlpha blending on the color
+target only.
+
+Two choices here look like standard transparent-pass practice to invert, and both were, in
+the first shipped version -- each produced a real, user-visible see-through bug, because
+this engine has passes and effects that consume the depth/G-buffer *after* the sprite draw:
+
+- **Depth writes are ON** (`DepthWriteEnable = True`), unlike a typical alpha-blended pass.
+  The editor grid (`DrawGrid`) occludes itself after `EndScene` by *sampling* the finished
+  scene depth as an SRV, not by depth-testing a draw -- a sprite that never wrote depth was
+  invisible to that check, so the grid drew straight through every sprite. The back-to-front
+  sprite sort still composites overlapping sprites correctly with depth writes on (a nearer
+  sprite's `LESS_EQUAL` test passes over a farther one's depth).
+- **The normal/roughness and motion targets are really written, not write-masked off.**
+  Masking them left the *occluded* object's normals, roughness, and motion in the G-buffer
+  under every sprite pixel, so the screen-space effects that read those buffers at resolve
+  time composited the hidden surface's lighting response on top of the sprite -- most
+  visibly SSR, which painted reflections of actual scene objects onto sprites covering the
+  reflective ground ("I can see objects through the sprite"), and SSAO, which darkened
+  sprites with AO computed from stale normals. `sprite.hlsl` now writes the quad's real
+  facing normal with **roughness pinned to 1.0** in `.w` -- above DiligentFX SSR's
+  `RoughnessThreshold` (0.2 default), whose stencil mask (`IsReflectionSample`,
+  `SSR_Common.fxh`) then excludes sprite pixels from SSR entirely -- and the sprite's own
+  motion vector (`DrawSprite` takes a `prevWorld` like `DrawMesh`/`DrawModel`), so temporal
+  effects (TAA, SSAO's temporal denoise) reproject the sprite instead of dragging the
+  background across it.
+
+With depth writes off, draw order is what actually composites overlapping sprites
+correctly, not just a performance nicety: `RenderFrame` gathers every sprite-bearing entity
+and sorts it back-to-front by **view-space depth** (`Dot(worldPos - eye, camForward)`, from
+`core/camera/camera.h`'s `CameraWorldBasis`), not raw distance to the camera -- the former
+matches the axis the depth buffer itself measures along, so the sort agrees with what
+occlusion would decide. This is a per-object sort; two sprites that actually intersect can
+still composite in the wrong order, the same accepted limitation every engine's
+back-to-front transparency has. Flip X/Y is applied by the app layer, negating the relevant
+axis of the UV rect passed to `DrawSprite`, before the draw -- not a shader branch.
+
+`g_SpriteTex` binds `SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC` on one shared SRB, re-`Set` per
+sprite: the same per-draw-varying-texture shape `model_fill.hlsl`'s `g_Albedo`/`modelSRB`
+already established (see "The Toon Two-Pass Draw" above), not a per-texture SRB cache. Its
+immutable sampler is linear-**clamp**, not `g_Albedo`'s wrap: a sprite's UV rect is often an
+atlas sub-rect, and wrapping would bleed the linear filter into a neighboring cell at the
+rect's edge. `Renderer::LoadTexture` takes an `srgb` parameter for this reason too: an asset
+browser thumbnail (`srgb = false`) composites in ImGui's own gamma space, but a sprite
+texture (`srgb = true`) composites into this engine's linear HDR scene like every other
+draw and needs the linearize-on-sample an sRGB view gives it.
+
 ### Collider Debug Wireframe (M2.1)
 
 `DrawWireframe` (see "The physics abstraction layer" above for `ColliderWireframe`, the
@@ -763,6 +822,24 @@ non-uniform scale in exactly, one axis at a time, but `Sphere`/`Capsule` (1-2 de
 freedom) approximate it with the largest relevant axis and log a one-time warning naming the
 entity.
 
+### Sprites (roadmap #13)
+
+`SpriteComponent` (tint, an atlas UV rect, flip X/Y, a texture path + runtime `TextureHandle`)
+is another independent `std::optional` field on `Entity`, the same grain as `AudioSource`
+above, with one deliberate difference: `texturePath` is a bare FILENAME relative to
+`TOON_SPRITES_DIR` (e.g. `"icon.png"`), not a full path baked in with the directory macro the
+way `modelPath`/`AudioSource::clip` are -- `SpriteTexturePath` (`core/scene/scene.h`) joins
+the two at every load site (`app/editor_init.cpp`'s demo seed, the Properties panel's Load
+button, and serializer rehydration below), so authoring a sprite never needs a full path typed
+by hand, just a filename dropped into `assets/sprites/`. `texture` is rebuilt from
+`SpriteTexturePath(texturePath)` on load (`core/scene/serializer.h`'s `LoadScene`, the same
+`renderer.LoadTexture` rehydration `modelPath` -> `model` already uses) and never serialized.
+Unlike `AudioSource`'s clip,
+which only needs to exist once a Play session starts (`BuildAudioWorld`), a sprite renders
+continuously in every `EditorMode`, so its texture has no lazy Play-time build step -- the
+Properties panel's "Load" button populates `texture` immediately, in Editing mode. See "The
+Rendering Pipeline" -> "Transparent Sprite Pass" above for how it draws.
+
 ## The Editor Layer
 
 Everything in this section is Diligent-free; it only ever reaches the GPU across the
@@ -791,17 +868,22 @@ from their runtime physics raycast.
 plane) and direction. `PickEntity` (`app/picking.cpp`) then walks every transformed entity
 (skipping the root), building each one's world-space axis-aligned bounding box: a mesh or
 model entity transforms its local bounds (`Renderer::GetMeshBounds`/`GetModelBounds`, swept
-once at creation/load time) by its `worldMatrix`; anything else (a light, an empty anchor) gets
-a fixed-size box centered on its world position instead, so it's still clickable with no mesh
-of its own. A standard ray-vs-AABB slab test picks the nearest hit and writes it to
-`scene.selected`. `DoMousePicking` gates the whole thing behind a click-vs-drag distance check
-(`ImGui::GetMouseDragDelta`) and `io.WantCaptureMouse`/`ImGuizmo::IsOver()`/`IsUsing()`, so a
-gizmo drag or a panel click never triggers a pick.
+once at creation/load time) by its `worldMatrix`; a sprite entity (roadmap #13) transforms its
+own local quad extents (`-0.5..0.5` in XY, a thin `kSpriteQuadHalfThickness` in Z) the same
+way, so it's picked via bounds that actually match its visible quad, not a generic marker;
+anything else (a light, an empty anchor) gets a fixed-size box centered on its world position
+instead, so it's still clickable with no mesh or sprite of its own. A standard ray-vs-AABB slab
+test picks the nearest hit and writes it to `scene.selected`. `DoMousePicking` gates the whole
+thing behind a click-vs-drag distance check (`ImGui::GetMouseDragDelta`) and
+`io.WantCaptureMouse`/`ImGuizmo::IsOver()`/`IsUsing()`, so a gizmo drag or a panel click never
+triggers a pick.
 
 The fixed-size fallback box (`picking.h`'s `kPickBoxHalfExtent`) is drawn as a wireframe marker
 in `app/editor_render.cpp`'s existing `DrawWireframe` overlay (see "The rendering pipeline"'s
-"Collider debug wireframe" below) for every collider-less entity, so a light or empty anchor
-reads as clickable instead of a dead zone.
+"Collider debug wireframe" below) for every entity with no mesh/model/sprite bounds of its own,
+so a light or empty anchor reads as clickable instead of a dead zone; a sprite is excluded from
+this loop (it already has real bounds above, and is already visible), so it never gets a
+disconnected marker box drawn around it.
 
 ### Procedural Primitives
 

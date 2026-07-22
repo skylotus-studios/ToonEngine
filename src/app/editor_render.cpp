@@ -7,6 +7,7 @@
 #include "app/physics_glue.h"
 #include "app/picking.h"
 
+#include <algorithm>
 #include <vector>
 
 namespace toon {
@@ -76,13 +77,54 @@ namespace toon {
             }
         }
 
+        // Transparent sprite pass (roadmap #13): after opaque geometry, before EndScene
+        // resolves the HDR scene -- DrawSprite needs the still-bound G-buffer + scene depth
+        // (see its own call-timing contract). Gathered and sorted back-to-front (farthest
+        // first) by VIEW-SPACE depth -- the distance along the camera's forward axis, not
+        // raw distance to the camera -- so draw order matches what the depth buffer would
+        // decide; a straight-line sort can mis-order two sprites at equal radial distance but
+        // different screen positions. Depth WRITES are off (CreateSpritePipeline), so this
+        // draw order is what actually composites overlapping sprites correctly, not just a
+        // performance nicety.
+        {
+            Vec3 eye, forward, up;
+            CameraWorldBasis(state.camera, eye, forward, up);
+
+            std::vector<const Entity *> spriteEntities;
+            for (const Entity &e : scene.entities) {
+                if (e.sprite && e.sprite->texture != TextureHandle::Invalid) { spriteEntities.push_back(&e); }
+            }
+            std::sort(spriteEntities.begin(), spriteEntities.end(), [&](const Entity *a, const Entity *b) {
+                const Vec3 posA{a->worldMatrix.m[12], a->worldMatrix.m[13], a->worldMatrix.m[14]};
+                const Vec3 posB{b->worldMatrix.m[12], b->worldMatrix.m[13], b->worldMatrix.m[14]};
+                return Dot(posA - eye, forward) > Dot(posB - eye, forward); // farthest first
+            });
+
+            for (const Entity *e : spriteEntities) {
+                // Flip by negating the relevant axis's offset/scale (ToonEngineOld's
+                // convention), not a shader branch -- see SpriteComponent's own comment.
+                Vec4 uvRect = e->sprite->uvRect;
+                if (e->sprite->flipX) {
+                    uvRect.x += uvRect.z;
+                    uvRect.z = -uvRect.z;
+                }
+                if (e->sprite->flipY) {
+                    uvRect.y += uvRect.w;
+                    uvRect.w = -uvRect.w;
+                }
+                renderer.DrawSprite(e->worldMatrix, e->prevWorldMatrix, e->sprite->texture, e->sprite->tint, uvRect);
+            }
+        }
+
         // Resolve the HDR scene to the back buffer (post effects + exposure + tone map).
         renderer.EndScene();
 
         // Ground grid (roadmap #12) -- after EndScene, before the UI overlay (see
         // Renderer::DrawGrid's call-timing contract: it occludes itself by reading the
-        // now-finished scene depth buffer, so it can't run any earlier).
-        if (state.showGrid) { renderer.DrawGrid(); }
+        // now-finished scene depth buffer, so it can't run any earlier). An authoring aid,
+        // not world content: stays out of Playing AND Paused (still a Play session, just
+        // frozen), the same "editor-only" scope as the collider wireframes below.
+        if (state.showGrid && state.mode == EditorMode::Editing) { renderer.DrawGrid(); }
 
         // Collider debug wireframes (M2.1) -- after EndScene, before the UI overlay (see
         // Renderer::DrawWireframe's call-timing contract). A fixed yellow-ish color for every
@@ -107,17 +149,21 @@ namespace toon {
             }
         }
 
-        // Mouse-pick markers (roadmap #8): a light or empty anchor has no mesh/model bounds, so
-        // it'd otherwise be a dead zone for click-to-select (see app/picking.cpp's
+        // Mouse-pick markers (roadmap #8): a light or empty anchor has no mesh/model/sprite
+        // bounds, so it'd otherwise be a dead zone for click-to-select (see app/picking.cpp's
         // kPickBoxHalfExtent fallback box). Reuses ColliderWireframe's Box case rather than a new
         // cube generator -- same shape, sized to exactly match what PickEntity actually tests.
+        // A sprite entity (roadmap #13) is excluded: it's already visible (DrawSprite) and
+        // picked via its own quad-shaped bounds (picking.cpp's EntityWorldBounds), so a
+        // generic marker box floating around it would just be visual noise disconnected from
+        // what's actually on screen.
         {
             const Color markerColor{0.3f, 0.7f, 1.0f, 1.0f};
             const Vec3 markerExtents{kPickBoxHalfExtent, kPickBoxHalfExtent, kPickBoxHalfExtent};
             const std::vector<Vec3> markerWireframe = ColliderWireframe(ColliderShape::Box, markerExtents);
             for (const Entity &e : scene.entities) {
-                const bool isRenderable = e.mesh != MeshHandle::Invalid || e.model != ModelHandle::Invalid;
-                if (isRenderable || !e.transform) { continue; }
+                const bool hasOwnBounds = e.mesh != MeshHandle::Invalid || e.model != ModelHandle::Invalid || e.sprite;
+                if (hasOwnBounds || !e.transform) { continue; }
                 const Mat4 world = ComposeWorldMatrix(e.transform->position, e.transform->rotation, {1.0f, 1.0f, 1.0f});
                 renderer.DrawWireframe(world, markerWireframe.data(), static_cast<uint32_t>(markerWireframe.size()),
                                        markerColor);

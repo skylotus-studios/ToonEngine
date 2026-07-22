@@ -47,6 +47,12 @@ namespace toon {
         Scene sceneBackup;
         Camera camera;
         Camera cameraDefault; // for the "Reset camera" button
+        // 2D editor mode (roadmap #14): the 3D yaw/pitch saved when entering 2D mode
+        // (app/editor_tick.h's SetEditorMode2D), restored when leaving it, so toggling back
+        // to 3D returns to the angle you left rather than resetting it. Defaults match
+        // Camera's own yaw/pitch defaults, for a sensible value before 2D mode is ever entered.
+        float saved3DYaw = 0.0f;
+        float saved3DPitch = 0.25f;
 
         // Style shared by every object each frame: band count + ambient floor (a global shading
         // look). Outline color/width are per-object (Entity::material), but this scales all of

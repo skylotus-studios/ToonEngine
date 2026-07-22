@@ -328,6 +328,15 @@ namespace toon {
         float4 skyBottom;
     };
 
+    // GPU mirror of sprite.hlsl's Constants cbuffer (roadmap #13: 2D & sprites).
+    struct SpriteConstants {
+        float4x4 worldViewProj;
+        float4x4 prevWorldViewProj; // previous frame, for the sprite's own motion vectors
+        float4x4 world;             // for the quad's world-space normal (G-buffer)
+        float4 tint;
+        float4 uvRect; // xy = offset, zw = scale
+    };
+
     // GPU mirror of {model_fill,model_outline}_skinned.hlsl's SkinConstants cbuffer
     // (roadmap #11: skeletal animation). Padded to 16 bytes (a uniform buffer's minimum
     // alignment) even though only the first field is used.
@@ -474,6 +483,10 @@ namespace toon {
         RefCntAutoPtr<IShaderResourceBinding> tonemapSRB;
         RefCntAutoPtr<IBuffer> postConstants;
         bool outputSRGB = false; // back buffer is a non-sRGB UNORM
+        // 2D editor mode (roadmap #14): mirrors Camera::orthographic, set each SetCamera call.
+        // DrawGrid reads it to pick its plane flags -- DrawGrid takes no Camera parameter of
+        // its own, so this is how it learns the current mode.
+        bool orthographic = false;
 
         // Debug wireframe overlay (M2.1's collider visualization, DrawWireframe) -- drawn
         // directly onto the resolved back buffer, same "1 RTV, no depth" shape as the
@@ -492,6 +505,18 @@ namespace toon {
         RefCntAutoPtr<IBuffer> skyConstants;
         std::unique_ptr<CoordinateGridRenderer> gridRenderer;
         HLSL::CoordinateGridAttribs gridAttribs{};
+
+        // 2D sprites (roadmap #13): a transparent textured-quad pass drawn into the HDR
+        // G-buffer after opaque geometry, before EndScene (see CreateSpritePipeline/
+        // DrawSprite). g_SpriteTex is DYNAMIC on one shared SRB, re-Set per draw -- the same
+        // "one texture varies every call" shape as the model fill PSOs' g_Albedo/modelSRB
+        // above, not a per-texture SRB cache. spriteQuadVB is a single IMMUTABLE unit quad
+        // (pos+uv, 6 verts, -0.5..0.5 XY) shared by every sprite draw; only the world
+        // matrix/tint/UV-rect constants differ per sprite.
+        RefCntAutoPtr<IPipelineState> spritePSO;
+        RefCntAutoPtr<IShaderResourceBinding> spriteSRB;
+        RefCntAutoPtr<IBuffer> spriteConstants;
+        RefCntAutoPtr<IBuffer> spriteQuadVB;
 
         // DiligentFX post effects (Bloom + SSAO) share a PostFXContext. It requires
         // depth + motion + camera to reach its "PSOs ready" gate (which both effects
@@ -902,6 +927,18 @@ namespace toon {
         IEngineFactoryVk *factory = GetEngineFactoryVk();
 
         EngineVkCreateInfo engineCI;
+        // Requested, not left to default (DEVICE_FEATURE_STATE_DISABLED): CreateSpritePipeline
+        // (roadmap #13) sets BlendDesc.IndependentBlendEnable = True unconditionally, with no
+        // fallback if the underlying Vulkan device feature isn't actually enabled -- without
+        // this, vkCreateGraphicsPipelines throws a real validation error (VUID-VkPipeline-
+        // ColorBlendStateCreateInfo-pAttachments-00605) every launch, since the sprite PSO's
+        // RT0 (alpha-blended color) and RT1/RT2 (write-masked off) are genuinely different
+        // per-target blend states. Diligent's own D3D and WebGPU factories already default
+        // this to ENABLED in their own engine creation; Vulkan leaves it to the app to request.
+        // independentBlend is core Vulkan 1.0 and near-universally supported, so ENABLED
+        // (hard-required) rather than OPTIONAL matches what the sprite PSO already assumes,
+        // instead of silently degrading back into the bug this fixes on exotic hardware.
+        engineCI.Features.IndependentBlend = DEVICE_FEATURE_STATE_ENABLED;
         factory->CreateDeviceAndContextsVk(engineCI, &m_impl->device, &m_impl->context);
         if (!m_impl->device) {
             std::fprintf(stderr, "Renderer: failed to create Vulkan render device\n");
@@ -1014,6 +1051,11 @@ namespace toon {
 
         if (!CreateGridRenderer()) {
             std::fprintf(stderr, "Renderer: failed to create grid renderer\n");
+            return false;
+        }
+
+        if (!CreateSpritePipeline()) {
+            std::fprintf(stderr, "Renderer: failed to create sprite pipeline\n");
             return false;
         }
 
@@ -1531,6 +1573,161 @@ namespace toon {
         gridCI.PackMatrixRowMajor = true;
         m_impl->gridRenderer = std::make_unique<CoordinateGridRenderer>(m_impl->device, gridCI);
         return m_impl->gridRenderer != nullptr;
+    }
+
+    // Transparent textured-quad pipeline (roadmap #13: 2D & sprites). Same 3-target HDR
+    // G-buffer shape as the toon/sky PSOs (the sprite pass runs while BeginFrame's targets
+    // are still bound, between the opaque loop and EndScene -- see DrawSprite), but with
+    // depth WRITES off (test stays on) and alpha blending enabled on color only: the
+    // normal/motion targets are write-masked to COLOR_MASK_NONE so an unlit, blended sprite
+    // never corrupts the SSAO/motion G-buffer the way writing zeros there (like the sky's
+    // fullscreen PSO, which fully covers the frame and owns those pixels outright) would.
+    bool Renderer::CreateSpritePipeline() {
+        IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this, not `device`
+
+        {
+            BufferDesc cbDesc;
+            cbDesc.Name = "sprite constants";
+            cbDesc.Size = sizeof(SpriteConstants);
+            cbDesc.Usage = USAGE_DYNAMIC;
+            cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
+            cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            device->CreateBuffer(cbDesc, nullptr, &m_impl->spriteConstants);
+            if (!m_impl->spriteConstants) { return false; }
+        }
+        {
+            // Shared unit quad (pos+uv), -0.5..0.5 in XY, Z=0: every sprite draw reuses this
+            // one buffer, only the constants (world/tint/UV-rect) differ (ToonEngineOld's
+            // gSpriteQuad, ported). Two triangles, CCW when seen from +Z, matching this
+            // engine's front-face winding (RasterizerDesc.FrontCounterClockwise below).
+            //
+            // V is flipped relative to the old engine's OpenGL quad: OpenGL's texture origin
+            // is bottom-left (V=0 = bottom row), so gSpriteQuad mapped the quad's bottom edge
+            // to V=0; Diligent/Vulkan (like D3D) has a TOP-left origin -- CreateTextureFromFile
+            // uploads the source image's row 0 (its top row) to V=0 -- so the same V=0-at-
+            // bottom mapping here would show the image upside down. Bottom edge -> V=1, top
+            // edge -> V=0 is what actually reproduces the source image right-side up.
+            // clang-format off
+            const float quad[] = {
+                -0.5f, -0.5f, 0.0f,  0.0f, 1.0f,
+                 0.5f, -0.5f, 0.0f,  1.0f, 1.0f,
+                 0.5f,  0.5f, 0.0f,  1.0f, 0.0f,
+                -0.5f, -0.5f, 0.0f,  0.0f, 1.0f,
+                 0.5f,  0.5f, 0.0f,  1.0f, 0.0f,
+                -0.5f,  0.5f, 0.0f,  0.0f, 0.0f,
+            };
+            // clang-format on
+            BufferDesc vbDesc;
+            vbDesc.Name = "sprite quad VB";
+            vbDesc.Usage = USAGE_IMMUTABLE;
+            vbDesc.BindFlags = BIND_VERTEX_BUFFER;
+            vbDesc.Size = sizeof(quad);
+            BufferData vbData{quad, vbDesc.Size};
+            device->CreateBuffer(vbDesc, &vbData, &m_impl->spriteQuadVB);
+            if (!m_impl->spriteQuadVB) { return false; }
+        }
+
+        IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
+        auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "sprite VS", "sprite.hlsl", "VSMain");
+        auto ps = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "sprite PS", "sprite.hlsl", "PSMain");
+        if (!vs || !ps) { return false; }
+
+        LayoutElement layoutElems[] = {
+            LayoutElement{0, 0, 3, VT_FLOAT32, False}, // ATTRIB0 position
+            LayoutElement{1, 0, 2, VT_FLOAT32, False}, // ATTRIB1 uv
+        };
+
+        GraphicsPipelineStateCreateInfo ci;
+        ci.PSODesc.Name = "sprite PSO";
+        ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+        GraphicsPipelineDesc &gp = ci.GraphicsPipeline;
+        gp.NumRenderTargets = 3;
+        gp.RTVFormats[0] = kHDRFormat;
+        gp.RTVFormats[1] = kNormalFormat;
+        gp.RTVFormats[2] = kMotionFormat;
+        gp.DSVFormat = kSceneDepthFormat;
+        gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        gp.RasterizerDesc.CullMode = CULL_MODE_NONE; // a sprite is visible from both sides
+        gp.DepthStencilDesc.DepthEnable = True; // occluded by opaque geometry in front
+        // WRITES depth (unlike a typical alpha-blended pass): Renderer::DrawGrid runs after
+        // EndScene and occludes ITSELF by sampling the finished scene depth as an SRV, not by
+        // depth-testing its own draw -- a sprite that never wrote depth was invisible to that
+        // check, so the editor grid drew straight through every sprite regardless of its
+        // actual opacity (roadmap #13 post-ship fix). The back-to-front sort (DrawSprite's
+        // caller) still gives correct sprite-over-sprite compositing with writes on -- a
+        // nearer sprite's LESS_EQUAL test still passes over a farther one's already-written
+        // depth. The trade-off: a genuinely translucent (not just alpha-tested) sprite now
+        // occludes the grid/SSAO/TAA/DoF/SSR at its OWN depth rather than the true depth
+        // behind it, same as any other depth-writing partially-transparent surface.
+        gp.DepthStencilDesc.DepthWriteEnable = True;
+        gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+
+        // Alpha-blend on the COLOR target only; the normal/motion targets stay BlendEnable =
+        // False (plain overwrite), which is exactly what they need: sprite.hlsl writes the
+        // quad's REAL facing normal (+ roughness 1 = matte in .w) and REAL motion vector.
+        // The first version write-masked RT1/RT2 off instead, and that was the "I can see
+        // objects through the sprite" bug: the OCCLUDED object's normals/roughness/motion
+        // stayed in the G-buffer under every sprite pixel, so the screen-space effects that
+        // read those buffers at resolve time (SSR above all -- the ground's 0.05 roughness
+        // made it paint reflections of the scene onto sprites covering it -- plus SSAO and
+        // TAA/temporal reprojection) composited the hidden surface's lighting response on
+        // top of the sprite. Same "depth-unaware later pass" failure shape as the
+        // DepthWriteEnable fix above, one abstraction level up.
+        gp.BlendDesc.IndependentBlendEnable = True;
+        RenderTargetBlendDesc &rt0 = gp.BlendDesc.RenderTargets[0];
+        rt0.BlendEnable = True;
+        rt0.SrcBlend = BLEND_FACTOR_SRC_ALPHA;
+        rt0.DestBlend = BLEND_FACTOR_INV_SRC_ALPHA;
+        rt0.BlendOp = BLEND_OPERATION_ADD;
+        rt0.SrcBlendAlpha = BLEND_FACTOR_ONE;
+        rt0.DestBlendAlpha = BLEND_FACTOR_INV_SRC_ALPHA;
+        rt0.BlendOpAlpha = BLEND_OPERATION_ADD;
+
+        gp.InputLayout.LayoutElements = layoutElems;
+        gp.InputLayout.NumElements = sizeof(layoutElems) / sizeof(layoutElems[0]);
+
+        ci.pVS = vs;
+        ci.pPS = ps;
+
+        // Constants is shared STATIC (set once below); g_SpriteTex is DYNAMIC -- DrawSprite
+        // re-Sets it per sprite on the one shared spriteSRB, the same pattern model_fill's
+        // g_Albedo/modelSRB uses for a per-draw-varying texture (see CreateModelPipeline).
+        ShaderResourceVariableDesc vars[] = {
+            {SHADER_TYPE_VERTEX, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "g_SpriteTex", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+        };
+        ci.PSODesc.ResourceLayout.Variables = vars;
+        ci.PSODesc.ResourceLayout.NumVariables = sizeof(vars) / sizeof(vars[0]);
+
+        // CLAMP, not model_fill's WRAP: a sprite's UV rect is often an atlas sub-rect, and
+        // wrapping would bleed the filter into a neighboring cell at the rect's edge under
+        // linear filtering.
+        SamplerDesc linClamp;
+        linClamp.MinFilter = FILTER_TYPE_LINEAR;
+        linClamp.MagFilter = FILTER_TYPE_LINEAR;
+        linClamp.MipFilter = FILTER_TYPE_LINEAR;
+        linClamp.AddressU = TEXTURE_ADDRESS_CLAMP;
+        linClamp.AddressV = TEXTURE_ADDRESS_CLAMP;
+        linClamp.AddressW = TEXTURE_ADDRESS_CLAMP;
+        ImmutableSamplerDesc immSamplers[] = {
+            {SHADER_TYPE_PIXEL, "g_SpriteTex", linClamp},
+        };
+        ci.PSODesc.ResourceLayout.ImmutableSamplers = immSamplers;
+        ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
+
+        cache->CreateGraphicsPipelineState(ci, &m_impl->spritePSO);
+        if (!m_impl->spritePSO) { return false; }
+        if (auto *v = m_impl->spritePSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) {
+            v->Set(m_impl->spriteConstants);
+        }
+        if (auto *p = m_impl->spritePSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "Constants")) {
+            p->Set(m_impl->spriteConstants);
+        }
+        m_impl->spritePSO->CreateShaderResourceBinding(&m_impl->spriteSRB, true);
+        return m_impl->spriteSRB != nullptr;
     }
 
     bool Renderer::CreatePostFX() {
@@ -2247,8 +2444,14 @@ namespace toon {
         const float4x4 view = float4x4::Translation(-cam.pivot.x, -cam.pivot.y, -cam.pivot.z) *
                               float4x4::RotationY(cam.yaw) * float4x4::RotationX(cam.pitch) *
                               float4x4::Translation(0.0f, 0.0f, cam.distance);
-        // NegativeOneToOneZ = false -> [0,1] depth range for Vulkan/D3D.
-        float4x4 proj = float4x4::Projection(cam.fovY, aspect, cam.nearZ, cam.farZ, false);
+        // NegativeOneToOneZ = false -> [0,1] depth range for Vulkan/D3D. 2D editor mode
+        // (roadmap #14) swaps in an orthographic matrix: orthoHeight names the world-space
+        // vertical extent directly (there's no field-of-view equivalent once nothing shrinks
+        // with distance), width follows from the same aspect ratio the perspective branch uses.
+        float4x4 proj = cam.orthographic
+            ? float4x4::Ortho(cam.orthoHeight * aspect, cam.orthoHeight, cam.nearZ, cam.farZ, false)
+            : float4x4::Projection(cam.fovY, aspect, cam.nearZ, cam.farZ, false);
+        m_impl->orthographic = cam.orthographic; // DrawGrid reads this to pick its plane flags
 
         // TAA: jitter the projection by a sub-pixel offset so accumulated frames cover
         // different sample positions. GetJitterOffset returns 0 until TAA is ready (and
@@ -2385,9 +2588,11 @@ namespace toon {
         m_impl->context->Draw(draw);
     }
 
-    // Infinite ground grid on the XZ (Y=0) plane, built on DiligentFX's CoordinateGridRenderer
-    // (see CreateGridRenderer). Unlike DrawWireframe, it occludes itself by READING the
-    // finished scene depth buffer rather than writing its own -- so it must run after
+    // Infinite grid on the XZ (Y=0) ground plane, or the XY sprite plane while 2D editor mode
+    // (roadmap #14) is active (see the FeatureFlags branch below), built on DiligentFX's
+    // CoordinateGridRenderer (see CreateGridRenderer). Unlike DrawWireframe, it occludes
+    // itself by READING the finished scene depth buffer rather than writing its own -- so it
+    // must run after
     // EndScene() resolves that depth (same call-timing contract as DrawWireframe) rather than
     // during the main pass, where sceneDepth is still bound as the write target, not readable
     // as a texture.
@@ -2412,9 +2617,14 @@ namespace toon {
         attribs.pColorRTV = m_impl->swapChain->GetCurrentBackBufferRTV();
         attribs.pDepthSRV = m_impl->sceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         attribs.pCamera = &m_impl->postCamera;
-        attribs.FeatureFlags = CoordinateGridRenderer::FEATURE_FLAG_RENDER_PLANE_XZ |
-                               CoordinateGridRenderer::FEATURE_FLAG_RENDER_AXIS_X |
-                               CoordinateGridRenderer::FEATURE_FLAG_RENDER_AXIS_Z;
+        // 2D editor mode (roadmap #14): the sprite plane is XY (facing +Z), not the ground's
+        // XZ, so the grid switches which plane/axes it draws to match -- the XZ grid would
+        // appear edge-on (collapsed to a single line) from a camera locked to face sprites.
+        attribs.FeatureFlags = m_impl->orthographic
+            ? (CoordinateGridRenderer::FEATURE_FLAG_RENDER_PLANE_XY | CoordinateGridRenderer::FEATURE_FLAG_RENDER_AXIS_X |
+               CoordinateGridRenderer::FEATURE_FLAG_RENDER_AXIS_Y)
+            : (CoordinateGridRenderer::FEATURE_FLAG_RENDER_PLANE_XZ | CoordinateGridRenderer::FEATURE_FLAG_RENDER_AXIS_X |
+               CoordinateGridRenderer::FEATURE_FLAG_RENDER_AXIS_Z);
         if (m_impl->outputSRGB) { attribs.FeatureFlags |= CoordinateGridRenderer::FEATURE_FLAG_CONVERT_TO_SRGB; }
         attribs.pAttribs = &m_impl->gridAttribs;
 
@@ -2422,6 +2632,49 @@ namespace toon {
 
         ITextureView *rtv = m_impl->swapChain->GetCurrentBackBufferRTV();
         m_impl->context->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    }
+
+    // --- 2D sprites (roadmap #13) -------------------------------------------------
+
+    // A no-op on an invalid handle (see the header's own comment): lets the app layer skip
+    // its own "texture still loading/failed" check and just always call this for every
+    // sprite entity. g_SpriteTex is re-Set on the one shared spriteSRB every call, the same
+    // per-draw-varying-texture pattern DrawModel uses for g_Albedo (see CreateModelPipeline).
+    // `prevWorld` feeds the sprite's own motion vector (see CreateSpritePipeline's blend
+    // comment for why the sprite writes real G-buffer data); viewProj/prevViewProj are the
+    // same (TAA-jittered, when enabled) matrices every other draw uses, so temporal
+    // reprojection sees the sprite move consistently with the rest of the scene.
+    void Renderer::DrawSprite(const Mat4 &world, const Mat4 &prevWorld, TextureHandle texture, const Vec4 &tint,
+                              const Vec4 &uvRect) {
+        const uint32_t idx = static_cast<uint32_t>(texture);
+        if (idx == 0 || idx > m_impl->textures.size() || !m_impl->textures[idx - 1] || !m_impl->spritePSO) {
+            return;
+        }
+
+        {
+            MapHelper<SpriteConstants> cb(m_impl->context, m_impl->spriteConstants, MAP_WRITE, MAP_FLAG_DISCARD);
+            cb->worldViewProj = ToFloat4x4(world) * m_impl->viewProj;
+            cb->prevWorldViewProj = ToFloat4x4(prevWorld) * m_impl->prevViewProj;
+            cb->world = ToFloat4x4(world);
+            cb->tint = float4(tint.x, tint.y, tint.z, tint.w);
+            cb->uvRect = float4(uvRect.x, uvRect.y, uvRect.z, uvRect.w);
+        }
+
+        IBuffer *vbs[] = {m_impl->spriteQuadVB};
+        const Uint64 offsets[] = {0};
+        m_impl->context->SetVertexBuffers(0, 1, vbs, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                                          SET_VERTEX_BUFFERS_FLAG_RESET);
+
+        ITextureView *srv = m_impl->textures[idx - 1]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        if (auto *v = m_impl->spriteSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_SpriteTex")) { v->Set(srv); }
+
+        m_impl->context->SetPipelineState(m_impl->spritePSO);
+        m_impl->context->CommitShaderResources(m_impl->spriteSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+        DrawAttribs draw;
+        draw.NumVertices = 6; // the shared unit quad (CreateSpritePipeline), two triangles
+        draw.Flags = DRAW_FLAG_VERIFY_ALL;
+        m_impl->context->Draw(draw);
     }
 
     // --- Cascaded shadow maps ----------------------------------------------------
@@ -2946,21 +3199,27 @@ namespace toon {
         DrawModel(handle, ToMat4(WorldFromTransform(t)), ToMat4(WorldFromTransform(prevT)), style, anim);
     }
 
-    // --- Textures (editor UI: asset thumbnails/previews) ------------------------
+    // --- Textures (editor UI: asset thumbnails/previews; also sprite textures) ---
 
     // Decodes an image file straight to GPU via DiligentTools' loader (PNG/JPG/BMP/TGA).
-    // Default TextureLoadInfo is exactly right here: IMMUTABLE + BIND_SHADER_RESOURCE, mips
-    // generated, and (load-bearing) IsSRGB = false. ImGui's own shader treats a bound
-    // texture's samples and its per-vertex colors (authored in gamma space by the editor
-    // themes) as the same color space; an sRGB-sampled texture would linearize on read while
-    // the UI around it doesn't, so every thumbnail would come out too dark. CreateTextureFromFile
+    // Default TextureLoadInfo is otherwise exactly right here: IMMUTABLE + BIND_SHADER_RESOURCE,
+    // mips generated; only IsSRGB is caller-selected (`srgb`, see the header's own comment) --
+    // load-bearing in both directions, not just the false case: ImGui's own shader treats a
+    // bound texture's samples and its per-vertex colors (authored in gamma space by the editor
+    // themes) as the same color space, so an sRGB-sampled thumbnail would linearize on read
+    // while the UI around it doesn't, and every thumbnail would come out too dark (srgb=false);
+    // a sprite (roadmap #13, DrawSprite) composites into the linear HDR scene like every other
+    // draw, so its texture DOES need that linearize-on-sample (srgb=true). CreateTextureFromFile
     // is device-only (uploads mips as immutable initial data, no immediate-context work), so
     // this never touches m_impl->context.
-    TextureHandle Renderer::LoadTexture(const char *path) {
+    TextureHandle Renderer::LoadTexture(const char *path, bool srgb) {
         if (!path) { return TextureHandle::Invalid; }
 
         TextureLoadInfo info;
         info.Name = path;
+        info.IsSRGB = srgb; // false (thumbnails): ImGui's own gamma-space shader expects it;
+                            // true (sprites): composites into the linear HDR scene, so the
+                            // view must linearize on sample like every other draw's textures
         RefCntAutoPtr<ITexture> tex;
         CreateTextureFromFile(path, info, m_impl->device, &tex);
         if (!tex) { return TextureHandle::Invalid; } // failure leaves the out-pointer null, not a throw

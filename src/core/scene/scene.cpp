@@ -188,7 +188,8 @@ namespace toon {
         : name(other.name), parent(other.parent), transform(other.transform), prevSimTransform(other.prevSimTransform),
           worldMatrix(other.worldMatrix), prevWorldMatrix(other.prevWorldMatrix), mesh(other.mesh), model(other.model),
           material(other.material), primitive(other.primitive), modelPath(other.modelPath), light(other.light),
-          collider(other.collider), body(other.body), audioSource(other.audioSource), animation(other.animation) {
+          collider(other.collider), body(other.body), audioSource(other.audioSource), animation(other.animation),
+          sprite(other.sprite) {
         scripts.reserve(other.scripts.size());
         for (const ScriptComponent &src : other.scripts) {
             ScriptComponent dup;

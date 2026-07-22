@@ -198,6 +198,22 @@ namespace toon {
                     e.animation = anim;
                 }
             }
+            // Sprite (roadmap #13): reuses the window icon (already on disk under
+            // TOON_SPRITES_DIR, which doubles as TOON_ICON_PATH's directory) as a demo
+            // texture rather than adding a new binary asset just for this. Sits above the
+            // cube/satellite pair, transform-oriented (identity rotation, no billboard -- the
+            // roadmap item's scope): orbiting the camera past its edge visibly thins it to a
+            // line, proof it isn't secretly facing the camera.
+            {
+                const int i = AddEntity(scene, 0, "Sprite");
+                Entity &e = scene.entities[i];
+                e.transform->position = {-1.4f, 1.6f, 0.0f};
+                e.transform->scale = {1.2f, 1.2f, 1.2f};
+                SpriteComponent sprite;
+                sprite.texturePath = "icon.png"; // relative to TOON_SPRITES_DIR
+                sprite.texture = renderer.LoadTexture(SpriteTexturePath(sprite.texturePath).c_str(), /*srgb=*/true);
+                e.sprite = sprite;
+            }
             // Sun: a directional light entity (no mesh/model, so the draw loop's isMesh/isModel
             // check skips it). Aimed by rotation (MakeLightTransform), reproducing the scene's old
             // fixed light direction exactly, so the default render is unchanged.

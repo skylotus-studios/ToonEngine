@@ -4,6 +4,7 @@
 #include "ui/panels/settings_panel.h"
 
 #include "app/editor_state.h"
+#include "app/editor_tick.h" // SetEditorMode2D
 #include "core/input/input_system.h"
 
 namespace toon {
@@ -63,6 +64,12 @@ namespace toon {
             ImGui::TextDisabled("Rebind: edit assets/input.json, then relaunch.");
             ImGui::SliderAngle("FOV", &state.camera.fovY, 20.0f, 100.0f);
             if (ImGui::Button("Reset camera")) { state.camera = state.cameraDefault; }
+            // 2D editor mode (roadmap #14): locks the viewport to an orthographic view facing
+            // the sprite plane, for working on sprite-heavy scenes. Routed through
+            // SetEditorMode2D (app/editor_tick.h), not a direct write to camera.orthographic,
+            // so the 3D angle save/restore always happens together with the flag.
+            bool orthographic2D = state.camera.orthographic;
+            if (ImGui::Checkbox("2D Mode", &orthographic2D)) { SetEditorMode2D(state, orthographic2D); }
             ImGui::Checkbox("Run Scripts", &state.runScripts);
 
             ImGui::SeparatorText("Physics");

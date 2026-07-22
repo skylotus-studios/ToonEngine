@@ -172,7 +172,12 @@ namespace toon {
             using M = Input::MouseButton;
             float mdx = 0.0f, mdy = 0.0f;
             Input::MouseDelta(mdx, mdy);
-            if (Input::IsMouseDown(M::Right)) {
+            // Orbit/fly rotate the camera; both are inert in 2D editor mode (roadmap #14),
+            // which locks the view to a fixed angle facing the sprite plane (see
+            // SetEditorMode2D) -- rotating away from that angle would defeat the point. Pan,
+            // zoom, and focus below are unaffected: they move/frame the view without touching
+            // its angle, and work the same in either mode.
+            if (!state.camera.orthographic && Input::IsMouseDown(M::Right)) {
                 CameraOrbit(state.camera, -mdx, -mdy);
                 // Fly axes go through the action map (camera.fly.*) so keyboard AND a gamepad
                 // stick drive the same names; see action_map.cpp's RegisterDefaultEditorBindings.
@@ -195,10 +200,11 @@ namespace toon {
             // Gamepad orbit (right stick): a new capability the action map adds; ungated (unlike
             // the keyboard-sourced queries above) since a physical stick is never ambiguous with
             // ImGui text entry. Scaled by dt so the turn rate is frame-rate independent, unlike the
-            // per-frame pixel deltas CameraOrbit otherwise expects from a mouse drag.
+            // per-frame pixel deltas CameraOrbit otherwise expects from a mouse drag. Gated on
+            // orthographic for the same reason the mouse-driven orbit above is.
             const float gpOrbitX = Input::GetAxis("camera.orbit.x");
             const float gpOrbitY = Input::GetAxis("camera.orbit.y");
-            if (gpOrbitX != 0.0f || gpOrbitY != 0.0f) {
+            if (!state.camera.orthographic && (gpOrbitX != 0.0f || gpOrbitY != 0.0f)) {
                 // Pixel-equivalents/sec at full stick deflection. An untested starting point: no
                 // controller in this environment to feel-tune it against (see the verify skill);
                 // adjust if a full stick push turns too fast or too slow.
@@ -222,6 +228,28 @@ namespace toon {
         float lightIntensity = 1.0f;
         GetActiveLight(state.scene, lightDir, lightColor, lightIntensity);
         state.renderer.SetLight(lightDir, lightColor, lightIntensity);
+    }
+
+    void SetEditorMode2D(EditorState &state, bool on2D) {
+        Camera &cam = state.camera;
+        if (on2D && !cam.orthographic) {
+            state.saved3DYaw = cam.yaw;
+            state.saved3DPitch = cam.pitch;
+            // Face the sprite plane's front (eye on the +Z side, looking toward -Z):
+            // sprite.hlsl's quad is wound CCW as seen from +Z (CreateSpritePipeline), and
+            // CameraBasis's forward points from eye toward the pivot, so yaw = pi (pitch 0)
+            // is the angle that shows sprites right-side-up rather than mirrored -- verified
+            // against a screenshot, since getting this backwards is a visible, easy-to-catch
+            // bug, not a silent one.
+            constexpr float kPi = 3.14159265f;
+            cam.yaw = kPi;
+            cam.pitch = 0.0f;
+            cam.orthographic = true;
+        } else if (!on2D && cam.orthographic) {
+            cam.yaw = state.saved3DYaw;
+            cam.pitch = state.saved3DPitch;
+            cam.orthographic = false;
+        }
     }
 
 } // namespace toon

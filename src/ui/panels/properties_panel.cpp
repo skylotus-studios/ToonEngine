@@ -249,6 +249,43 @@ namespace toon {
                     }
                 }
 
+                // Sprite (roadmap #13): a true optional component (core/scene/scene.h), same
+                // Add/Remove idiom as Light/Audio Source/Animation above. Unlike Audio
+                // Source's Clip field (rebuilt lazily when a Play session starts), a sprite
+                // renders continuously in EVERY mode, including Editing, so its texture must
+                // be live immediately -- hence the explicit "Load" button rather than a
+                // Play-time build step.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Sprite");
+                    if (e.sprite) {
+                        if (ImGui::Button("Remove Sprite")) {
+                            e.sprite.reset();
+                        } else {
+                            char pathBuf[256];
+                            std::snprintf(pathBuf, sizeof(pathBuf), "%s", e.sprite->texturePath.c_str());
+                            if (ImGui::InputText("Texture", pathBuf, sizeof(pathBuf))) { e.sprite->texturePath = pathBuf; }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Load")) {
+                                // srgb=true: a sprite composites into the linear HDR scene
+                                // (Renderer::LoadTexture's own comment), unlike a thumbnail.
+                                // texturePath is relative to TOON_SPRITES_DIR (SpriteTexturePath).
+                                e.sprite->texture =
+                                    state.renderer.LoadTexture(SpriteTexturePath(e.sprite->texturePath).c_str(), true);
+                            }
+                            if (e.sprite->texture == TextureHandle::Invalid) {
+                                ImGui::TextDisabled("(no texture loaded)");
+                            }
+                            ImGui::ColorEdit4("Tint", &e.sprite->tint.x);
+                            ImGui::DragFloat4("UV Rect", &e.sprite->uvRect.x, 0.01f);
+                            ImGui::Checkbox("Flip X", &e.sprite->flipX);
+                            ImGui::SameLine();
+                            ImGui::Checkbox("Flip Y", &e.sprite->flipY);
+                        }
+                    } else {
+                        if (ImGui::Button("Add Sprite")) { e.sprite = SpriteComponent{}; }
+                    }
+                }
+
                 // Scripts (core/scene/script.h): a vector, not a single optional component;
                 // an entity can carry several independent scripts at once (e.g. a Health
                 // script alongside a PlayerMovement script), so each attached script gets its
