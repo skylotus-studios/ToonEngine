@@ -65,9 +65,18 @@ namespace toon {
     }
 
     void CameraZoom(Camera &cam, float scrollNotches) {
-        // Geometric zoom: each notch scales the distance, so it feels even across the range.
-        cam.distance *= std::pow(1.0f - cam.zoomSpeed, scrollNotches);
-        cam.distance = std::max(cam.distance, 0.05f);
+        // Geometric zoom: each notch scales by the same factor, so it feels even across the
+        // range. 2D editor mode (roadmap #14) scales orthoHeight instead of distance: moving
+        // an orthographic camera closer/farther doesn't change apparent size (that's the
+        // definition of orthographic), so "zoom" has to mean shrinking/growing the visible
+        // world-space extent instead.
+        if (cam.orthographic) {
+            cam.orthoHeight *= std::pow(1.0f - cam.zoomSpeed, scrollNotches);
+            cam.orthoHeight = std::max(cam.orthoHeight, 0.1f);
+        } else {
+            cam.distance *= std::pow(1.0f - cam.zoomSpeed, scrollNotches);
+            cam.distance = std::max(cam.distance, 0.05f);
+        }
     }
 
     void CameraFly(Camera &cam, float dt, float fwd, float right, float up) {

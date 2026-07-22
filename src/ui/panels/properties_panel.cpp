@@ -194,6 +194,98 @@ namespace toon {
                     }
                 }
 
+                // Skeletal animation (roadmap #11): a true optional component (core/scene/
+                // scene.h), same Add/Remove idiom as the sections above. Only offered when the
+                // entity actually has a SKINNED model (Renderer::ModelHasSkin) -- a procedural
+                // mesh or an unskinned model (e.g. the helmet) has no clip list to pick from.
+                // The clip combo reads names straight from the loaded model (Renderer::
+                // GetModelAnimationCount/Name), so it always matches the actual file; nothing
+                // here is authored data beyond which clip/playing/looping to use (see
+                // AnimationComponent's own comment on why time/prevTime aren't editable here).
+                if (e.transform && !isRoot && e.model != ModelHandle::Invalid && state.renderer.ModelHasSkin(e.model)) {
+                    ImGui::SeparatorText("Animation");
+                    if (e.animation) {
+                        if (ImGui::Button("Remove Animation")) {
+                            e.animation.reset();
+                        } else {
+                            const uint32_t clipCount = state.renderer.GetModelAnimationCount(e.model);
+                            if (clipCount == 0) {
+                                ImGui::TextDisabled("(model has a skin but no animation clips)");
+                            } else {
+                                const int clampedIdx = std::clamp(e.animation->clipIndex, 0,
+                                                                  static_cast<int>(clipCount) - 1);
+                                std::string currentName =
+                                    state.renderer.GetModelAnimationName(e.model, static_cast<uint32_t>(clampedIdx));
+                                if (currentName.empty()) { currentName = "Clip " + std::to_string(clampedIdx); }
+                                if (ImGui::BeginCombo("Clip", currentName.c_str())) {
+                                    for (uint32_t ci = 0; ci < clipCount; ++ci) {
+                                        std::string name = state.renderer.GetModelAnimationName(e.model, ci);
+                                        if (name.empty()) { name = "Clip " + std::to_string(ci); }
+                                        const bool isSelected = (static_cast<int>(ci) == e.animation->clipIndex);
+                                        if (ImGui::Selectable(name.c_str(), isSelected)) {
+                                            e.animation->clipIndex = static_cast<int>(ci);
+                                            e.animation->time = 0.0f;
+                                            e.animation->prevTime = 0.0f;
+                                        }
+                                        if (isSelected) { ImGui::SetItemDefaultFocus(); }
+                                    }
+                                    ImGui::EndCombo();
+                                }
+                            }
+                            ImGui::Checkbox("Playing", &e.animation->playing);
+                            ImGui::SameLine();
+                            ImGui::Checkbox("Looping", &e.animation->looping);
+                        }
+                    } else {
+                        if (ImGui::Button("Add Animation")) {
+                            // Preselect clip 0 rather than leaving the generic "-1 = none"
+                            // sentinel (see AnimationComponent's own comment): adding the
+                            // component should show something moving immediately, not a
+                            // combo that looks active over a still-static bind pose.
+                            AnimationComponent a;
+                            if (state.renderer.GetModelAnimationCount(e.model) > 0) { a.clipIndex = 0; }
+                            e.animation = a;
+                        }
+                    }
+                }
+
+                // Sprite (roadmap #13): a true optional component (core/scene/scene.h), same
+                // Add/Remove idiom as Light/Audio Source/Animation above. Unlike Audio
+                // Source's Clip field (rebuilt lazily when a Play session starts), a sprite
+                // renders continuously in EVERY mode, including Editing, so its texture must
+                // be live immediately -- hence the explicit "Load" button rather than a
+                // Play-time build step.
+                if (e.transform && !isRoot) {
+                    ImGui::SeparatorText("Sprite");
+                    if (e.sprite) {
+                        if (ImGui::Button("Remove Sprite")) {
+                            e.sprite.reset();
+                        } else {
+                            char pathBuf[256];
+                            std::snprintf(pathBuf, sizeof(pathBuf), "%s", e.sprite->texturePath.c_str());
+                            if (ImGui::InputText("Texture", pathBuf, sizeof(pathBuf))) { e.sprite->texturePath = pathBuf; }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Load")) {
+                                // srgb=true: a sprite composites into the linear HDR scene
+                                // (Renderer::LoadTexture's own comment), unlike a thumbnail.
+                                // texturePath is relative to TOON_SPRITES_DIR (SpriteTexturePath).
+                                e.sprite->texture =
+                                    state.renderer.LoadTexture(SpriteTexturePath(e.sprite->texturePath).c_str(), true);
+                            }
+                            if (e.sprite->texture == TextureHandle::Invalid) {
+                                ImGui::TextDisabled("(no texture loaded)");
+                            }
+                            ImGui::ColorEdit4("Tint", &e.sprite->tint.x);
+                            ImGui::DragFloat4("UV Rect", &e.sprite->uvRect.x, 0.01f);
+                            ImGui::Checkbox("Flip X", &e.sprite->flipX);
+                            ImGui::SameLine();
+                            ImGui::Checkbox("Flip Y", &e.sprite->flipY);
+                        }
+                    } else {
+                        if (ImGui::Button("Add Sprite")) { e.sprite = SpriteComponent{}; }
+                    }
+                }
+
                 // Scripts (core/scene/script.h): a vector, not a single optional component;
                 // an entity can carry several independent scripts at once (e.g. a Health
                 // script alongside a PlayerMovement script), so each attached script gets its

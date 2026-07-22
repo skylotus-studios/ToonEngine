@@ -12,6 +12,9 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace toon {
 
     void TickEditor(EditorState &state) {
@@ -61,6 +64,27 @@ namespace toon {
                 // is the new baseline it continues from on resume, instead of snapping back to
                 // where an absolute clock-based formula would say it "should" be.
                 if (state.runScripts) { UpdateScripts(state.scene, static_cast<float>(kFixedDt)); }
+
+                // Skeletal animation (roadmap #11): advance every playing clip by this tick.
+                // Gated only on runFixedStepsThisFrame (Playing/Step), the same as physics
+                // below and unlike scripts -- no separate "run animations" toggle, matching
+                // physics's own precedent ("nothing in the roadmap called for one"), since
+                // this has no gameplay-logic implications to gate on runScripts for. Looping
+                // wraps at the clip's own duration (Renderer::GetModelAnimationDuration);
+                // a non-looping clip clamps to its end instead of replaying from zero.
+                for (Entity &e : state.scene.entities) {
+                    if (!e.animation || !e.animation->playing || e.animation->clipIndex < 0) { continue; }
+                    e.animation->time += static_cast<float>(kFixedDt);
+                    const float duration = state.renderer.GetModelAnimationDuration(
+                        e.model, static_cast<uint32_t>(e.animation->clipIndex));
+                    if (duration > 0.0f) {
+                        if (e.animation->looping) {
+                            e.animation->time = std::fmod(e.animation->time, duration);
+                        } else {
+                            e.animation->time = std::min(e.animation->time, duration);
+                        }
+                    }
+                }
 
                 // Physics (M2.1): push this tick's static/kinematic transforms into Jolt (so a
                 // gizmo-dragged wall, say, is reflected before the step that would otherwise
@@ -148,7 +172,12 @@ namespace toon {
             using M = Input::MouseButton;
             float mdx = 0.0f, mdy = 0.0f;
             Input::MouseDelta(mdx, mdy);
-            if (Input::IsMouseDown(M::Right)) {
+            // Orbit/fly rotate the camera; both are inert in 2D editor mode (roadmap #14),
+            // which locks the view to a fixed angle facing the sprite plane (see
+            // SetEditorMode2D) -- rotating away from that angle would defeat the point. Pan,
+            // zoom, and focus below are unaffected: they move/frame the view without touching
+            // its angle, and work the same in either mode.
+            if (!state.camera.orthographic && Input::IsMouseDown(M::Right)) {
                 CameraOrbit(state.camera, -mdx, -mdy);
                 // Fly axes go through the action map (camera.fly.*) so keyboard AND a gamepad
                 // stick drive the same names; see action_map.cpp's RegisterDefaultEditorBindings.
@@ -171,10 +200,11 @@ namespace toon {
             // Gamepad orbit (right stick): a new capability the action map adds; ungated (unlike
             // the keyboard-sourced queries above) since a physical stick is never ambiguous with
             // ImGui text entry. Scaled by dt so the turn rate is frame-rate independent, unlike the
-            // per-frame pixel deltas CameraOrbit otherwise expects from a mouse drag.
+            // per-frame pixel deltas CameraOrbit otherwise expects from a mouse drag. Gated on
+            // orthographic for the same reason the mouse-driven orbit above is.
             const float gpOrbitX = Input::GetAxis("camera.orbit.x");
             const float gpOrbitY = Input::GetAxis("camera.orbit.y");
-            if (gpOrbitX != 0.0f || gpOrbitY != 0.0f) {
+            if (!state.camera.orthographic && (gpOrbitX != 0.0f || gpOrbitY != 0.0f)) {
                 // Pixel-equivalents/sec at full stick deflection. An untested starting point: no
                 // controller in this environment to feel-tune it against (see the verify skill);
                 // adjust if a full stick push turns too fast or too slow.
@@ -198,6 +228,28 @@ namespace toon {
         float lightIntensity = 1.0f;
         GetActiveLight(state.scene, lightDir, lightColor, lightIntensity);
         state.renderer.SetLight(lightDir, lightColor, lightIntensity);
+    }
+
+    void SetEditorMode2D(EditorState &state, bool on2D) {
+        Camera &cam = state.camera;
+        if (on2D && !cam.orthographic) {
+            state.saved3DYaw = cam.yaw;
+            state.saved3DPitch = cam.pitch;
+            // Face the sprite plane's front (eye on the +Z side, looking toward -Z):
+            // sprite.hlsl's quad is wound CCW as seen from +Z (CreateSpritePipeline), and
+            // CameraBasis's forward points from eye toward the pivot, so yaw = pi (pitch 0)
+            // is the angle that shows sprites right-side-up rather than mirrored -- verified
+            // against a screenshot, since getting this backwards is a visible, easy-to-catch
+            // bug, not a silent one.
+            constexpr float kPi = 3.14159265f;
+            cam.yaw = kPi;
+            cam.pitch = 0.0f;
+            cam.orthographic = true;
+        } else if (!on2D && cam.orthographic) {
+            cam.yaw = state.saved3DYaw;
+            cam.pitch = state.saved3DPitch;
+            cam.orthographic = false;
+        }
     }
 
 } // namespace toon

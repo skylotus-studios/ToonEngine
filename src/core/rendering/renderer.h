@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "core/math.h" // toon::Vec3/Quat (plain, Diligent-free)
 
@@ -77,6 +78,15 @@ namespace toon {
         float nearZ = 0.1f;
         float farZ = 100.0f;
 
+        // 2D editor mode (roadmap #14): true locks the viewport to an orthographic,
+        // sprite-facing view (SetCamera branches its projection build on this) instead of
+        // the perspective view above. orthoHeight is the orthographic analog of fovY: since
+        // nothing shrinks with distance in an orthographic projection, it directly names the
+        // world-space vertical extent the view shows, and zoom (CameraZoom) scales it instead
+        // of distance while this is set.
+        bool orthographic = false;
+        float orthoHeight = 10.0f;
+
         // Editor-control tuning (used by core/camera.h, not read by the renderer).
         float lookSensitivity = 0.005f; // radians per pixel (orbit)
         float panSensitivity = 0.0015f; // world units per pixel, per unit of distance (pan)
@@ -105,6 +115,20 @@ namespace toon {
         Vec3 position = {0.0f, 0.0f, 0.0f};
         Quat rotation;
         Vec3 scale = {1.0f, 1.0f, 1.0f};
+    };
+
+    // Which of a skinned model's animations to sample, and when, for one DrawModel/
+    // DrawModelShadow call. `clipIndex` indexes the model's own animation list (see
+    // GetModelAnimationCount/Name); -1 plays no animation (bind pose). `time`/`prevTime`
+    // are seconds into the clip, this frame and last -- both are needed because motion
+    // vectors on an animated character depend on the bone motion, not just the object's
+    // own world-matrix motion (see Renderer::DrawModel). A null AnimationState* (the
+    // default at every call site) means "not animated": DrawModel/DrawModelShadow fall
+    // back to the model's ordinary (possibly unskinned) draw path unchanged.
+    struct AnimationState {
+        int32_t clipIndex = -1;
+        float time = 0.0f;
+        float prevTime = 0.0f;
     };
 
     // HDR resolve / tone-mapping controls. The scene renders to an offscreen HDR
@@ -259,29 +283,48 @@ namespace toon {
         uint32_t BeginShadowPass();
         void BeginShadowCascade(uint32_t cascadeIndex);
         void DrawMeshShadow(MeshHandle mesh, const Mat4 &world);
-        void DrawModelShadow(ModelHandle model, const Mat4 &world);
+        void DrawModelShadow(ModelHandle model, const Mat4 &world, const AnimationState *anim = nullptr);
         void EndShadowPass();
 
         // --- Scene: glTF models -------------------------------------------------
         // Load a glTF/GLB model via DiligentTools' loader (Diligent::GLTF::Model owns the
-        // GPU buffers + textures). Returns ModelHandle::Invalid on failure.
+        // GPU buffers + textures). Returns ModelHandle::Invalid on failure. Every model is
+        // loaded requesting the same vertex attributes (position/normal/uv, plus joints/
+        // weights in a second buffer slot); a file with no skin simply leaves that second
+        // buffer unread by its (unskinned) draw path -- see ModelHasSkin.
         ModelHandle LoadModel(const char *path);
 
-        // Draw a loaded model cel-shaded (textured fill; no inverted-hull outline yet).
-        // `style` supplies the shared look (bands / ambient / roughness) and its
-        // `baseColor` is a global tint over each primitive's glTF base color (default white
-        // = untinted). Motion vectors come from transform vs prevTransform, like DrawMesh.
+        // True if the loaded model has at least one skin (glTF's rigging data) -- i.e. it's
+        // eligible to be drawn animated. Gates the Properties panel's "Add Animation" button.
+        bool ModelHasSkin(ModelHandle model) const;
+
+        // A model's own animation clip list, for a UI picker (e.g. Properties panel). Index
+        // is what AnimationState::clipIndex selects. False/0/"" for an invalid handle or an
+        // out-of-range index.
+        uint32_t GetModelAnimationCount(ModelHandle model) const;
+        std::string GetModelAnimationName(ModelHandle model, uint32_t index) const;
+        float GetModelAnimationDuration(ModelHandle model, uint32_t index) const;
+
+        // Draw a loaded model cel-shaded (textured fill; inverted-hull outline for a skinned
+        // model too, once animated -- see AnimationState). `style` supplies the shared look
+        // (bands / ambient / roughness) and its `baseColor` is a global tint over each
+        // primitive's glTF base color (default white = untinted). Motion vectors come from
+        // transform vs prevTransform (object motion) and, when `anim` is non-null, from the
+        // bone motion between anim->time and anim->prevTime too.
         void DrawModel(ModelHandle model, const Transform &transform, const Transform &prevTransform,
-                       const Material &style);
+                       const Material &style, const AnimationState *anim = nullptr);
 
         // Draw a loaded model with a pre-composed world matrix (see DrawMesh's Mat4 overload).
-        void DrawModel(ModelHandle model, const Mat4 &world, const Mat4 &prevWorld, const Material &style);
+        void DrawModel(ModelHandle model, const Mat4 &world, const Mat4 &prevWorld, const Material &style,
+                       const AnimationState *anim = nullptr);
 
-        // --- Textures (editor UI: asset thumbnails/previews) --------------------
-        // Not part of the toon draw path (materials don't carry textures yet); this exists
-        // so editor UI (the asset browser) can decode an image file and display it with
-        // ImGui::Image. Decodes PNG/JPG/BMP/TGA via DiligentTools' TextureLoader.
-        TextureHandle LoadTexture(const char *path); // TextureHandle::Invalid on failure
+        // --- Textures (editor UI: asset thumbnails/previews; also sprite textures) ---
+        // Decodes PNG/JPG/BMP/TGA via DiligentTools' TextureLoader. `srgb` selects the
+        // texture's source color space: false (default) for an asset browser thumbnail,
+        // composited by ImGui's own gamma-space shader; true for a sprite texture (see
+        // DrawSprite below), which composites into the linear HDR scene like every other
+        // draw and needs the linearize-on-sample an sRGB view gives it.
+        TextureHandle LoadTexture(const char *path, bool srgb = false); // TextureHandle::Invalid on failure
         void DestroyTexture(TextureHandle texture);
 
         // An opaque id ImGui::Image can draw (cast to ImTextureID at the call site; this
@@ -290,6 +333,24 @@ namespace toon {
 
         // Pixel dimensions, for sizing a preview. Left untouched (0) for an invalid handle.
         void GetTextureSize(TextureHandle texture, uint32_t &width, uint32_t &height) const;
+
+        // --- 2D sprites (roadmap #13) --------------------------------------------
+        // Draw a flat, textured, alpha-blended quad at `world` (transform-oriented -- no
+        // billboarding), unlit. `prevWorld` is the quad's placement LAST frame, for its
+        // motion vector (same convention as DrawMesh/DrawModel; pass the same value for a
+        // static sprite). `tint` multiplies the sampled texel (straight alpha; a pixel
+        // under 0.01 alpha is discarded). `uvRect` is an atlas sub-rect (xy = offset, zw =
+        // scale; {0,0,1,1} = the whole texture); apply flipX/flipY (SpriteComponent, core/
+        // scene/scene.h) by negating the relevant axis's offset/scale before calling this,
+        // not here. Depth-tested against opaque geometry, writes depth + its own G-buffer
+        // normal/roughness/motion (so later depth- and G-buffer-reading passes -- the editor
+        // grid, SSR/SSAO/TAA -- see the sprite, not whatever it occludes), color alpha-
+        // blended: call once per sprite, entities pre-sorted back-to-front (farthest first)
+        // by the caller -- see docs/architecture.md's "Transparent sprite pass". Call AFTER
+        // the opaque DrawMesh/DrawModel calls and BEFORE EndScene() (needs the still-bound
+        // G-buffer + scene depth); a TextureHandle::Invalid is silently skipped.
+        void DrawSprite(const Mat4 &world, const Mat4 &prevWorld, TextureHandle texture, const Vec4 &tint,
+                        const Vec4 &uvRect);
 
         // Post-processing. Set params, then EndScene() resolves the HDR scene to the
         // back buffer (call after the DrawMesh calls, before the UI overlay).
@@ -304,6 +365,21 @@ namespace toon {
         // AFTER EndScene() and BEFORE BeginUI(). No depth test: always on top of the scene,
         // so a collider is never hidden inside the mesh it belongs to.
         void DrawWireframe(const Mat4 &world, const Vec3 *points, uint32_t count, const Color &color);
+
+        // --- Editor backdrop: sky gradient + ground grid (roadmap #12) ----------
+        // Two-color vertical gradient behind the scene, lerped by the world-space view ray's
+        // Y direction (so the horizon stays level as the camera pitches, not tied to screen
+        // Y). Call AFTER BeginFrame and BEFORE the entity DrawMesh/DrawModel calls, so opaque
+        // geometry draws over it; it writes the full HDR G-buffer (color + zeroed normal/
+        // motion) at the far depth BeginFrame already cleared to.
+        void DrawSky(const Color &top, const Color &bottom);
+
+        // Infinite ground grid on the XZ (Y=0) plane, built on DiligentFX's
+        // CoordinateGridRenderer: per-pixel ray/plane intersection, antialiased multi-level-
+        // of-detail lines, colored X/Z axes. Occludes itself by READING the finished scene
+        // depth buffer (not by writing its own), so call AFTER EndScene() -- same call-timing
+        // contract as DrawWireframe -- and BEFORE BeginUI().
+        void DrawGrid();
 
         // --- Debug/editor UI (Dear ImGui) ---------------------------------------
         // Diligent's ImGui renderer backend (ImGuiImplDiligent) is confined to
@@ -321,11 +397,21 @@ namespace toon {
         // header stays Diligent-free.
         bool CreateToonPipeline();                                    // toon fill/outline PSOs + shared CB
         bool CreateModelPipeline();                                   // glTF model cel-fill PSO (+ albedo)
+        bool CreateSkinnedModelPipeline();                            // animated glTF model fill/outline PSOs
         bool CreatePostPipeline();                                    // HDR tone-map resolve PSO
         bool CreatePostFX();                                          // PostFXContext + Bloom + SSAO effects
         bool CreateOffscreenTargets(uint32_t width, uint32_t height); // HDR color + normal + depth + motion
         bool CreateShadowMap();                                       // ShadowMapManager + depth-only PSOs
         bool CreateWireframePipeline();                               // debug line-list PSO (DrawWireframe)
+        bool CreateSkyPipeline();                                     // sky-gradient fullscreen PSO (DrawSky)
+        bool CreateGridRenderer();                                    // DiligentFX CoordinateGridRenderer (DrawGrid)
+        bool CreateSpritePipeline();                                  // transparent textured-quad PSO (DrawSprite)
+
+        // Roadmap #11 (skeletal animation): grow the shared skinning joints buffer (never
+        // shrink it) to hold at least `neededElements` bone matrices, re-pointing every
+        // skinned draw's g_Joints binding at the new buffer when it actually grows. Called
+        // from DrawModel/DrawModelShadow before a skinned draw's own joint-matrix upload.
+        void EnsureJointsBufferCapacity(uint32_t neededElements);
 
         struct Impl; // defined in renderer.cpp; hides all Diligent types
         Impl *m_impl = nullptr;

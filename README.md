@@ -114,85 +114,124 @@ list of what's next.
 
 ```mermaid
 flowchart LR
-  subgraph V01["v0.1: Foundation"]
+  subgraph V01["v0.1"]
     direction TB
     S1["Vulkan renderer &amp; toon pipeline"]
     S2["Dear ImGui editor"]
     S3["Editor camera &amp; input"]
-    S4["Scene graph &amp; serialization"]
-    S1 --> S2 --> S3 --> S4
+    S1 --> S2 --> S3
   end
 
-  subgraph V02["v0.2: Simulation"]
+  subgraph V02["v0.2"]
     direction TB
+    S4["Scene graph &amp; serialization"]
     S5["Fixed-timestep simulation"]
     S6["Physics: Jolt"]
-    S7["Audio: miniaudio"]
-    S5 --> S6 --> S7
+    S4 --> S5 --> S6
   end
 
-  subgraph V03["v0.3: Interaction"]
+  subgraph V03["v0.3"]
     direction TB
+    S7["Audio: miniaudio"]
     S8["Mouse-pick via raycast"]
     S9["Contact events to scripts"]
-    N10["Shader hot-reload"]
-    S8 --> S9 --> N10
+    S7 --> S8 --> S9
   end
 
-  subgraph V04["v0.4: Characters &amp; World"]
+  subgraph V04["v0.4"]
     direction TB
-    N11["Skeletal animation"]
-    N12["Grid &amp; sky gradient"]
-    N13["2D &amp; sprites"]
-    N11 --> N12 --> N13
+    S10["Shader hot-reload"]
+    S11["Skeletal animation"]
+    S12["Grid &amp; sky gradient"]
+    S10 --> S11 --> S12
   end
 
-  subgraph V05["v0.5: Scale &amp; Tools"]
+  subgraph V05["v0.5"]
     direction TB
-    N14["Instancing"]
-    N15["Frustum culling"]
-    N16["Prefabs"]
-    N17["Particles &amp; VFX"]
-    N14 --> N15 --> N16 --> N17
+    S13["2D &amp; sprites"]
+    N14["2D editor mode"]
+    N15["Lua scripting"]
+    S13 --> N14 --> N15
   end
 
-  subgraph V10["v1.0: Ship"]
+  subgraph V06["v0.6"]
     direction TB
-    N18["Steamworks SDK bootstrap"]
-    N19["Settings menu"]
-    N20["Controller UI &amp; Steam Deck keyboard"]
-    N21["Crash reporting"]
-    N22["Asset packaging"]
-    N18 --> N19 --> N20 --> N21 --> N22
+    N16["Player save system"]
+    N17["Instancing"]
+    N18["Frustum culling"]
+    N16 --> N17 --> N18
   end
 
-  subgraph V11["v1.1: Platform Expansion"]
+  subgraph V07["v0.7"]
     direction TB
-    N23["Linux support"]
-    N24["macOS support"]
-    N25["Re-enable D3D11"]
-    N23 --> N24 --> N25
+    N19["Prefabs"]
+    N20["Particles &amp; VFX"]
+    N19 --> N20
   end
 
-  V01 --> V02 --> V03 --> V04 --> V05 --> V10 --> V11
+  subgraph V08["v0.8"]
+    direction TB
+    N21["Steamworks SDK bootstrap"]
+    N22["Settings menu"]
+    N21 --> N22
+  end
+
+  subgraph V09["v0.9"]
+    direction TB
+    N23["Controller UI &amp; Steam Deck keyboard"]
+    N24["Crash reporting"]
+    N23 --> N24
+  end
+
+  subgraph V10["v1.0: Official Release"]
+    direction TB
+    N25["Asset packaging"]
+    N26["SteamPipe depot upload"]
+    N25 --> N26
+  end
+
+  subgraph V11["v1.1: Post-1.0 Polish"]
+    direction TB
+    N27["Achievements &amp; Steam Input glyphs"]
+  end
+
+  subgraph V12["v1.2: Platform Expansion"]
+    direction TB
+    N28["Linux support"]
+    N29["macOS support"]
+    N30["Re-enable D3D11"]
+    N28 --> N29 --> N30
+  end
+
+  V01 --> V02 --> V03 --> V04 --> V05 --> V06 --> V07 --> V08 --> V09 --> V10 --> V11 --> V12
 
   classDef v01 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
   classDef v02 fill:#6B9C8C,stroke:#4a7062,color:#EAF6F1;
-  classDef v03 fill:#FF6B4A,stroke:#c94e33,color:#2B0A00;
-  classDef v04 fill:#FF9F40,stroke:#c97927,color:#2B1400;
-  classDef v05 fill:#F4C542,stroke:#c99e28,color:#2B2100;
-  classDef v10 fill:#4FA8D8,stroke:#2f7fac,color:#00202E;
+  classDef v03 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
+  classDef v04 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
+  classDef v05 fill:#FF9F40,stroke:#c97927,color:#2B1400;
+  classDef v06 fill:#F4C542,stroke:#c99e28,color:#2B2100;
+  classDef v07 fill:#F2835C,stroke:#c25f3a,color:#2B0D00;
+  classDef v08 fill:#4FB8A8,stroke:#2f8a7c,color:#00201C;
+  classDef v09 fill:#4FA8D8,stroke:#2f7fac,color:#00202E;
+  classDef v10 fill:#E8B84F,stroke:#b8872f,color:#2B1D00;
   classDef v11 fill:#8A7CFF,stroke:#6357cc,color:#160B3E;
+  classDef v12 fill:#B39DDB,stroke:#8672b0,color:#1F1730;
   classDef shipped fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
 
-  class S1,S2,S3,S4 v01
-  class S5,S6,S7 v02
-  class S8,S9 shipped
-  class N10 v03
-  class N11,N12,N13 v04
-  class N14,N15,N16,N17 v05
-  class N18,N19,N20,N21,N22 v10
-  class N23,N24,N25 v11
+  class S1,S2,S3 v01
+  class S4,S5,S6 v02
+  class S7,S8,S9 v03
+  class S10,S11,S12 v04
+  class S13 shipped
+  class N14,N15 v05
+  class N16,N17,N18 v06
+  class N19,N20 v07
+  class N21,N22 v08
+  class N23,N24 v09
+  class N25,N26 v10
+  class N27 v11
+  class N28,N29,N30 v12
 ```
 
 ## License

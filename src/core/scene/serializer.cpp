@@ -79,6 +79,29 @@ namespace toon {
             f << buf;
         }
 
+        // "animation <clipIndex> <playing> <looping>". `time`/`prevTime` are deliberately NOT
+        // written: unlike `transform` (an authored pose), they're a transient playback cursor
+        // that only means anything mid-session -- same "runtime state, not scene data"
+        // treatment as RigidBodyComponent::handle/AudioSource::handle above, just without an
+        // actual handle to skip. A loaded entity always starts its clip fresh, from time 0.
+        void WriteAnimation(std::ofstream &f, const AnimationComponent &a) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "  animation %d %d %d\n", a.clipIndex, a.playing ? 1 : 0, a.looping ? 1 : 0);
+            f << buf;
+        }
+
+        // "sprite <texturePath|-> <tint xyzw> <uvRect xyzw> <flipX> <flipY>". `texture` (the
+        // runtime handle) is deliberately NOT written: like AudioSource::handle, it's rebuilt
+        // from `texturePath` on load, not part of the saved scene's data. `texturePath` is
+        // written as a single whitespace-free token, same convention as `model`/audio's clip.
+        void WriteSpriteComponent(std::ofstream &f, const SpriteComponent &s) {
+            char buf[384];
+            std::snprintf(buf, sizeof(buf), "  sprite %s %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d %d\n",
+                          s.texturePath.empty() ? "-" : s.texturePath.c_str(), s.tint.x, s.tint.y, s.tint.z, s.tint.w,
+                          s.uvRect.x, s.uvRect.y, s.uvRect.z, s.uvRect.w, s.flipX ? 1 : 0, s.flipY ? 1 : 0);
+            f << buf;
+        }
+
         // One line per PrimitiveKind, since each generator takes a different param list (see
         // PrimitiveDesc's field comments in primitives.h for the kind -> field mapping).
         void WritePrimitive(std::ofstream &f, const PrimitiveDesc &d) {
@@ -170,6 +193,8 @@ namespace toon {
             if (e.collider) { WriteCollider(f, *e.collider); }
             if (e.body) { WriteRigidBody(f, *e.body); }
             if (e.audioSource) { WriteAudioSource(f, *e.audioSource); }
+            if (e.animation) { WriteAnimation(f, *e.animation); }
+            if (e.sprite) { WriteSpriteComponent(f, *e.sprite); }
 
             // One line per script: "script <Name> <field...>"; the name resolves through
             // the registry on load (see below); the fields are whatever that script's own
@@ -339,6 +364,29 @@ namespace toon {
                 a.spatial = spatialInt != 0;
                 a.stream = streamInt != 0;
                 cur->audioSource = a;
+            } else if (key == "animation") {
+                AnimationComponent a;
+                int playingInt = 0, loopingInt = 0;
+                ss >> a.clipIndex >> playingInt >> loopingInt;
+                a.playing = playingInt != 0;
+                a.looping = loopingInt != 0;
+                cur->animation = a; // time/prevTime stay 0 -- see WriteAnimation's own comment
+            } else if (key == "sprite") {
+                SpriteComponent s;
+                std::string texPath;
+                int flipXInt = 0, flipYInt = 0;
+                ss >> texPath >> s.tint.x >> s.tint.y >> s.tint.z >> s.tint.w >> s.uvRect.x >> s.uvRect.y >>
+                    s.uvRect.z >> s.uvRect.w >> flipXInt >> flipYInt;
+                s.texturePath = (texPath == "-") ? std::string() : texPath;
+                s.flipX = flipXInt != 0;
+                s.flipY = flipYInt != 0;
+                // srgb=true: a sprite composites into the linear HDR scene (see LoadTexture's
+                // own comment), unlike the asset-browser thumbnails this loader otherwise
+                // serves. texturePath is relative to TOON_SPRITES_DIR (SpriteTexturePath).
+                if (!s.texturePath.empty()) {
+                    s.texture = renderer.LoadTexture(SpriteTexturePath(s.texturePath).c_str(), true);
+                }
+                cur->sprite = s;
             } else if (key == "script") {
                 std::string scriptName;
                 ss >> scriptName;

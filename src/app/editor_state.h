@@ -47,6 +47,12 @@ namespace toon {
         Scene sceneBackup;
         Camera camera;
         Camera cameraDefault; // for the "Reset camera" button
+        // 2D editor mode (roadmap #14): the 3D yaw/pitch saved when entering 2D mode
+        // (app/editor_tick.h's SetEditorMode2D), restored when leaving it, so toggling back
+        // to 3D returns to the angle you left rather than resetting it. Defaults match
+        // Camera's own yaw/pitch defaults, for a sensible value before 2D mode is ever entered.
+        float saved3DYaw = 0.0f;
+        float saved3DPitch = 0.25f;
 
         // Style shared by every object each frame: band count + ambient floor (a global shading
         // look). Outline color/width are per-object (Entity::material), but this scales all of
@@ -86,6 +92,12 @@ namespace toon {
         bool runScripts = true;
         // M2.1: overlay each collider-bearing entity's shape as a wireframe (Settings panel).
         bool showColliders = false;
+        // Roadmap #12: editor backdrop toggles + sky colors (Settings panel). Defaults match
+        // ToonEngineOld's grid.frag (skyTop/skyBottom).
+        bool showGrid = true;
+        bool showSky = true;
+        Color skyTop{0.35f, 0.55f, 0.80f, 1.0f};
+        Color skyBottom{0.15f, 0.15f, 0.20f, 1.0f};
         // M2.2: master volume + mute (Settings panel) -- applied via AudioEngine::SetMasterVolume.
         float masterVolume = 1.0f;
         bool audioMuted = false;

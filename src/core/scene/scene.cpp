@@ -188,7 +188,8 @@ namespace toon {
         : name(other.name), parent(other.parent), transform(other.transform), prevSimTransform(other.prevSimTransform),
           worldMatrix(other.worldMatrix), prevWorldMatrix(other.prevWorldMatrix), mesh(other.mesh), model(other.model),
           material(other.material), primitive(other.primitive), modelPath(other.modelPath), light(other.light),
-          collider(other.collider), body(other.body), audioSource(other.audioSource) {
+          collider(other.collider), body(other.body), audioSource(other.audioSource), animation(other.animation),
+          sprite(other.sprite) {
         scripts.reserve(other.scripts.size());
         for (const ScriptComponent &src : other.scripts) {
             ScriptComponent dup;
@@ -248,6 +249,10 @@ namespace toon {
     void SnapshotSimState(Scene &scene) {
         for (Entity &e : scene.entities) {
             if (e.transform) { e.prevSimTransform = e.transform; }
+            // Roadmap #11 (skeletal animation): same "snapshot before this tick advances it"
+            // treatment as transform above, so Renderer::DrawModel's AnimationState carries a
+            // real previous pose for motion vectors, not last tick's time reused twice.
+            if (e.animation) { e.animation->prevTime = e.animation->time; }
         }
     }
 
