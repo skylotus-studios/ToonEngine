@@ -22,7 +22,7 @@ namespace toon {
     }
 
     void DrawGizmoOverlay(EditorState &state) {
-        Scene &scene = state.scene;
+        Scene &scene = state.runtime.scene;
         if (scene.selected > 0 && scene.selected < static_cast<int>(scene.entities.size()) &&
             scene.entities[scene.selected].transform) {
             const ImGuiIO &io = ImGui::GetIO();
@@ -30,8 +30,8 @@ namespace toon {
             // conventions are transposes, so the raw 16 floats already match, no explicit
             // transpose needed.
             Mat4 view, proj;
-            state.renderer.GetViewProj(view, proj);
-            ImGuizmo::SetOrthographic(state.camera.orthographic);
+            state.runtime.renderer.GetViewProj(view, proj);
+            ImGuizmo::SetOrthographic(state.runtime.camera.orthographic);
             ImGuizmo::AllowAxisFlip(false); // show true axis directions (don't auto-face camera)
             ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList());
             ImGuizmo::SetRect(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
@@ -47,7 +47,7 @@ namespace toon {
             // Position/Rotation/Scale fields stay fully editable regardless (matching Unity's
             // own 2D-mode behavior: the viewport handle loses the axis, the inspector doesn't).
             ImGuizmo::OPERATION op = state.gizmoOp;
-            if (state.camera.orthographic) {
+            if (state.runtime.camera.orthographic) {
                 op = static_cast<ImGuizmo::OPERATION>(
                     op & ~(ImGuizmo::TRANSLATE_Z | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::SCALE_Z));
             }

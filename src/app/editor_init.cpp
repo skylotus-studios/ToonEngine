@@ -48,8 +48,8 @@ namespace toon {
         // everything is a child of the root EXCEPT the satellite, which is parented to the cube
         // to demonstrate hierarchy composition (it orbits the cube as the cube spins).
         void SeedDemoScene(EditorState &state) {
-            Renderer &renderer = state.renderer;
-            Scene &scene = state.scene;
+            Renderer &renderer = state.runtime.renderer;
+            Scene &scene = state.runtime.scene;
             EnsureSceneRoot(scene);
 
             // Ground plane beneath the objects (catches their SSAO contact shadows; no spin/outline).
@@ -231,10 +231,10 @@ namespace toon {
     } // namespace
 
     bool InitEditor(EditorState &state, GLFWwindow *window) {
-        state.window = window;
+        state.runtime.window = window;
         SetWindowIcon(window, TOON_ICON_PATH);
 
-        if (!state.renderer.Init(window)) {
+        if (!state.runtime.renderer.Init(window)) {
             std::fprintf(stderr, "Renderer init failed\n");
             return false;
         }
@@ -242,12 +242,12 @@ namespace toon {
         // Physics (M2.1): Jolt's process-global setup (allocator/factory/type registry) happens
         // once here, alongside the renderer's own Init -- the world stays empty (no bodies)
         // until a Play/Step session calls BuildPhysicsWorld (app/physics_glue.h).
-        if (!state.physicsWorld.Init()) { std::fprintf(stderr, "PhysicsWorld init failed\n"); }
+        if (!state.runtime.physicsWorld.Init()) { std::fprintf(stderr, "PhysicsWorld init failed\n"); }
 
         // Audio (M2.2): miniaudio's engine + its own device/audio thread, alongside physics'
         // own one-time setup above -- the audio world stays silent (no autoplay emitters
         // started) until a Play/Step session calls BuildAudioWorld (app/audio_glue.h).
-        if (!state.audio.Init()) { std::fprintf(stderr, "AudioEngine init failed\n"); }
+        if (!state.runtime.audio.Init()) { std::fprintf(stderr, "AudioEngine init failed\n"); }
 
         // Install input callbacks BEFORE InitUI, so ImGui's GLFW backend chains ours instead of
         // overwriting them (see core/input/input_system.h's Init banner).
@@ -264,9 +264,9 @@ namespace toon {
             }
         }
 
-        if (!state.renderer.InitUI(window)) {
+        if (!state.runtime.renderer.InitUI(window)) {
             std::fprintf(stderr, "Renderer UI init failed\n");
-            state.renderer.Shutdown();
+            state.runtime.renderer.Shutdown();
             return false;
         }
 
@@ -303,7 +303,7 @@ namespace toon {
         ApplyTheme(state.uiTheme, state.uiScale, window);
 
         // Route framebuffer resizes to the renderer's swap chain.
-        glfwSetWindowUserPointer(window, &state.renderer);
+        glfwSetWindowUserPointer(window, &state.runtime.renderer);
         glfwSetFramebufferSizeCallback(window, [](GLFWwindow *w, int width, int height) {
             if (auto *r = static_cast<Renderer *>(glfwGetWindowUserPointer(w))) {
                 r->Resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
@@ -314,7 +314,7 @@ namespace toon {
 
         // Editor camera: driven by the mouse/keyboard in TickEditor (defaults: pivot at the
         // origin, distance 10, a slight downward pitch so the ground + its AO show).
-        state.cameraDefault = state.camera; // for the "Reset camera" button
+        state.cameraDefault = state.runtime.camera; // for the "Reset camera" button
 
         // Scene serialization (core/scene/serializer.h): path field + Save/Load buttons live in
         // the Settings panel. `sceneStatus` echoes the last op's result in the UI (SaveScene/
@@ -325,7 +325,7 @@ namespace toon {
         // main.cpp routes through LoadSceneInto when the activated file is a .scene.
         InitFileBrowser(state.assetBrowser, TOON_ASSETS_DIR);
 
-        state.lastTime = glfwGetTime();
+        state.runtime.lastTime = glfwGetTime();
 
         return true;
     }

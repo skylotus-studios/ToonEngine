@@ -11,6 +11,7 @@
 #include "app/editor_state.h"
 #include "app/editor_tick.h"
 #include "app/picking.h"
+#include "app/runtime_init.h" // --play: run the standalone runtime instead of the editor
 #include "app/scene_ops.h"
 #include "core/input/input_system.h"
 #include "ui/panels/dockspace.h"
@@ -31,12 +32,18 @@
 #include <iostream>
 #include <string>
 
-int main() {
+int main(int argc, char **argv) {
     // Diligent buffers its own logging through std::cout; a hang or a silent early-return
     // init failure can otherwise lose whatever it already printed (see MEMORY.md's glTF
     // loading gotchas). Unbuffered is negligible cost for a windowed editor's own startup
     // logging.
     std::cout.setf(std::ios::unitbuf);
+
+    // Roadmap #15: `ToonEngine.exe --play [scene]` runs the standalone runtime (no editor
+    // chrome) instead of the editor -- a dev convenience that exercises the same code path
+    // ToonPlayer.exe ships. Parsed here so the editor path below is untouched.
+    const bool runtimeMode = (argc > 1 && std::string(argv[1]) == "--play");
+    const char *runtimeScene = (argc > 2) ? argv[2] : TOON_SCENES_DIR "/default.scene";
 
     if (!glfwInit()) {
         std::fprintf(stderr, "GLFW init failed\n");
@@ -45,17 +52,29 @@ int main() {
 
     // We render with Vulkan, so tell GLFW not to create an OpenGL context.
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    // Start maximized so the editor fills the screen and the right-docked panels (Properties /
-    // Settings) stay on-screen on any monitor. Creating oversize (e.g. 3840x2160 on a smaller
-    // display) pushed the dock layout's right column off the visible area. The 1600x900 below
-    // is just the restored-down size.
-    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
+    // The editor starts maximized so its docked panels stay on-screen on any monitor; the
+    // runtime opens at the restored-down size (a game window, not an editor).
+    if (!runtimeMode) { glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE); }
 
     GLFWwindow *window = glfwCreateWindow(1600, 900, "ToonEngine", nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "Failed to create window\n");
         glfwTerminate();
         return 1;
+    }
+
+    if (runtimeMode) {
+        toon::RuntimeState rs;
+        if (!toon::InitRuntime(rs, window, runtimeScene)) {
+            glfwDestroyWindow(window);
+            glfwTerminate();
+            return 1;
+        }
+        toon::RunRuntimeLoop(rs);
+        toon::ShutdownRuntime(rs);
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return 0;
     }
 
     toon::EditorState state;
@@ -69,7 +88,7 @@ int main() {
         toon::TickEditor(state);
         toon::RenderFrame(state);
 
-        state.renderer.BeginUI();
+        state.runtime.renderer.BeginUI();
         toon::GizmoHotkeys(state);
         toon::DrawMenuBar(state);
         toon::SetupDockspace(state);
@@ -86,21 +105,21 @@ int main() {
         // param), so unlike the panels above, hiding it via the View menu has no in-panel
         // close button.
         if (state.showAssetBrowser) {
-            if (const std::string activated = toon::RenderFileBrowser(state.assetBrowser, state.renderer);
+            if (const std::string activated = toon::RenderFileBrowser(state.assetBrowser, state.runtime.renderer);
                 !activated.empty() && std::filesystem::path(activated).extension() == ".scene") {
                 toon::LoadSceneInto(state, activated.c_str());
             }
         }
 
-        state.renderer.EndUI();
-        state.renderer.EndFrame();
+        state.runtime.renderer.EndUI();
+        state.runtime.renderer.EndFrame();
     }
 
     toon::Input::Shutdown();
     toon::ShutdownFileBrowser(state.assetBrowser,
-                              state.renderer); // frees cached thumbnails; must run before the device does
-    state.physicsWorld.Shutdown();
-    state.renderer.Shutdown();
+                              state.runtime.renderer); // frees cached thumbnails; must run before the device does
+    state.runtime.physicsWorld.Shutdown();
+    state.runtime.renderer.Shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;

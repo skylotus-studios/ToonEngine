@@ -28,6 +28,22 @@ namespace toon {
         float intensity = 1.0f;
     };
 
+    // A camera carried by an entity (roadmap #15): the viewpoint the RUNTIME renders from (the
+    // editor uses its own orbit camera instead). Aimed by the entity's ROTATION exactly like
+    // LightComponent -- its local +Z axis in world space is the look direction -- and POSITIONED
+    // at the entity's world translation, so parenting a camera entity under a player entity is a
+    // follow rig with no extra machinery. Holds only projection params; the pose comes from the
+    // entity's worldMatrix (see GetActiveCamera), never duplicated here. The first entity whose
+    // camera is `primary`, in scene order, is the one that renders.
+    struct CameraComponent {
+        float fovY = 1.0472f;      // vertical field of view, radians (~60 deg); ignored when orthographic
+        float nearZ = 0.1f;
+        float farZ = 100.0f;
+        bool orthographic = false;
+        float orthoHeight = 10.0f; // world-space vertical extent when orthographic (the fovY analog)
+        bool primary = false;      // the view the runtime renders from; first primary in scene order wins
+    };
+
     // A collision shape carried by an entity (M2.1): the physics seam's ColliderShape/Vec3
     // vocabulary (core/physics/physics.h). An entity with a collider but no RigidBodyComponent is an
     // implicit static collider (a wall/floor); paired with one, it becomes a dynamic/kinematic
@@ -146,6 +162,10 @@ namespace toon {
 
         std::optional<LightComponent> light; // set -> this entity is a (directional) light
 
+        // Camera (roadmap #15): set -> this entity is a viewpoint the runtime can render from.
+        // Positioned/aimed by the entity's transform (see CameraComponent / GetActiveCamera).
+        std::optional<CameraComponent> camera;
+
         // Physics (M2.1): a collider alone is a static collider (see ColliderComponent above);
         // paired with a RigidBodyComponent, the entity becomes a dynamic/kinematic mover.
         std::optional<ColliderComponent> collider;
@@ -233,6 +253,13 @@ namespace toon {
     // Leaves the out-params untouched and returns false if the scene has no light entity.
     // Uses cached world matrices (call after UpdateWorldTransforms).
     bool GetActiveLight(const Scene &scene, Vec3 &dirToLight, Vec3 &color, float &intensity);
+
+    // Find the first entity carrying a `primary` CameraComponent and fill `out` with the view it
+    // defines: eye at the entity's world position, look direction its local +Z (same convention
+    // as GetActiveLight), plus the component's projection params. Leaves `out` untouched and
+    // returns false if the scene has no primary camera (the runtime then keeps its fallback
+    // view). Uses cached world matrices (call after UpdateWorldTransforms).
+    bool GetActiveCamera(const Scene &scene, Camera &out);
 
     // --- Hierarchy mutations (editor operations; defined in scene.cpp) ----------
     // All keep the parents-before-children invariant (re-ordering as needed) and fix up

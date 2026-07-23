@@ -19,11 +19,11 @@ namespace toon {
                 if (ImGui::MenuItem("Save Scene")) { SaveSceneFrom(state, state.scenePathBuf); }
                 if (ImGui::MenuItem("Save Scene As...")) { state.saveScenePopupRequested = true; }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Exit")) { glfwSetWindowShouldClose(state.window, GLFW_TRUE); }
+                if (ImGui::MenuItem("Exit")) { glfwSetWindowShouldClose(state.runtime.window, GLFW_TRUE); }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Edit")) {
-                Scene &scene = state.scene;
+                Scene &scene = state.runtime.scene;
                 if (ImGui::MenuItem("Add Entity")) { scene.selected = AddChildEntity(scene, 0, "Entity"); }
                 const bool hasSelection =
                     scene.selected > 0 && scene.selected < static_cast<int>(scene.entities.size());
@@ -53,7 +53,7 @@ namespace toon {
                     state.gizmoMode = (state.gizmoMode == ImGuizmo::LOCAL) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
                 }
                 ImGui::Separator();
-                ImGui::MenuItem("Run Scripts", nullptr, &state.runScripts);
+                ImGui::MenuItem("Run Scripts", nullptr, &state.runtime.runScripts);
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("View")) {
@@ -62,7 +62,7 @@ namespace toon {
                         const Theme t = static_cast<Theme>(i);
                         if (ImGui::MenuItem(ThemeName(t), nullptr, t == state.uiTheme)) {
                             state.uiTheme = t;
-                            ApplyTheme(state.uiTheme, state.uiScale, state.window);
+                            ApplyTheme(state.uiTheme, state.uiScale, state.runtime.window);
                         }
                     }
                     ImGui::EndMenu();

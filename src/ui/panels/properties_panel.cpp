@@ -13,7 +13,7 @@
 namespace toon {
 
     void DrawPropertiesPanel(EditorState &state) {
-        Scene &scene = state.scene;
+        Scene &scene = state.runtime.scene;
 
         // inspectorOpen captures the pre-Begin value: see objects_panel.cpp's hierarchyOpen
         // comment for why.
@@ -76,6 +76,32 @@ namespace toon {
                 } else {
                     ImGui::SeparatorText("Light");
                     if (ImGui::Button("Add Light")) { e.light = LightComponent{}; }
+                }
+
+                // Camera (roadmap #15): the viewpoint the runtime renders from. Same Add/Remove
+                // idiom as Light. Like a light, it has no direction field: eye = this entity's
+                // position, look = its local +Z, so aim it with the gizmo. `Primary` marks the
+                // one the player renders (first primary in scene order wins). Purely a runtime
+                // concern -- the editor keeps using its own orbit camera regardless.
+                if (e.camera) {
+                    ImGui::SeparatorText("Camera");
+                    if (ImGui::Button("Remove Camera")) {
+                        e.camera.reset();
+                    } else {
+                        ImGui::Checkbox("Primary", &e.camera->primary);
+                        ImGui::Checkbox("Orthographic", &e.camera->orthographic);
+                        if (e.camera->orthographic) {
+                            ImGui::DragFloat("Ortho Height", &e.camera->orthoHeight, 0.1f, 0.1f, 1000.0f, "%.2f");
+                        } else {
+                            ImGui::SliderAngle("FOV", &e.camera->fovY, 20.0f, 100.0f);
+                        }
+                        ImGui::DragFloat("Near", &e.camera->nearZ, 0.01f, 0.001f, 10.0f, "%.3f");
+                        ImGui::DragFloat("Far", &e.camera->farZ, 1.0f, 1.0f, 10000.0f, "%.1f");
+                        ImGui::TextDisabled("Aim: rotate this entity (gizmo R).");
+                    }
+                } else {
+                    ImGui::SeparatorText("Camera");
+                    if (ImGui::Button("Add Camera")) { e.camera = CameraComponent{}; }
                 }
 
                 // Collider and Rigid Body (M2.1): two fully independent optional
@@ -159,7 +185,7 @@ namespace toon {
                                                         (state.previewEntityIdx == scene.selected);
                             if (ImGui::Button(previewingThis ? "Stop Preview" : "Preview")) {
                                 if (state.previewHandle != SoundHandle::Invalid) {
-                                    state.audio.Stop(state.previewHandle);
+                                    state.runtime.audio.Stop(state.previewHandle);
                                     state.previewHandle = SoundHandle::Invalid;
                                     state.previewEntityIdx = -1;
                                 }
@@ -173,7 +199,7 @@ namespace toon {
                                     desc.stream = e.audioSource->stream;
                                     desc.maxDistance = e.audioSource->maxDistance;
                                     desc.position = {e.worldMatrix.m[12], e.worldMatrix.m[13], e.worldMatrix.m[14]};
-                                    state.previewHandle = state.audio.Play(desc);
+                                    state.previewHandle = state.runtime.audio.Play(desc);
                                     state.previewEntityIdx = scene.selected;
                                 }
                             }
@@ -202,24 +228,24 @@ namespace toon {
                 // GetModelAnimationCount/Name), so it always matches the actual file; nothing
                 // here is authored data beyond which clip/playing/looping to use (see
                 // AnimationComponent's own comment on why time/prevTime aren't editable here).
-                if (e.transform && !isRoot && e.model != ModelHandle::Invalid && state.renderer.ModelHasSkin(e.model)) {
+                if (e.transform && !isRoot && e.model != ModelHandle::Invalid && state.runtime.renderer.ModelHasSkin(e.model)) {
                     ImGui::SeparatorText("Animation");
                     if (e.animation) {
                         if (ImGui::Button("Remove Animation")) {
                             e.animation.reset();
                         } else {
-                            const uint32_t clipCount = state.renderer.GetModelAnimationCount(e.model);
+                            const uint32_t clipCount = state.runtime.renderer.GetModelAnimationCount(e.model);
                             if (clipCount == 0) {
                                 ImGui::TextDisabled("(model has a skin but no animation clips)");
                             } else {
                                 const int clampedIdx = std::clamp(e.animation->clipIndex, 0,
                                                                   static_cast<int>(clipCount) - 1);
                                 std::string currentName =
-                                    state.renderer.GetModelAnimationName(e.model, static_cast<uint32_t>(clampedIdx));
+                                    state.runtime.renderer.GetModelAnimationName(e.model, static_cast<uint32_t>(clampedIdx));
                                 if (currentName.empty()) { currentName = "Clip " + std::to_string(clampedIdx); }
                                 if (ImGui::BeginCombo("Clip", currentName.c_str())) {
                                     for (uint32_t ci = 0; ci < clipCount; ++ci) {
-                                        std::string name = state.renderer.GetModelAnimationName(e.model, ci);
+                                        std::string name = state.runtime.renderer.GetModelAnimationName(e.model, ci);
                                         if (name.empty()) { name = "Clip " + std::to_string(ci); }
                                         const bool isSelected = (static_cast<int>(ci) == e.animation->clipIndex);
                                         if (ImGui::Selectable(name.c_str(), isSelected)) {
@@ -243,7 +269,7 @@ namespace toon {
                             // component should show something moving immediately, not a
                             // combo that looks active over a still-static bind pose.
                             AnimationComponent a;
-                            if (state.renderer.GetModelAnimationCount(e.model) > 0) { a.clipIndex = 0; }
+                            if (state.runtime.renderer.GetModelAnimationCount(e.model) > 0) { a.clipIndex = 0; }
                             e.animation = a;
                         }
                     }
@@ -270,7 +296,7 @@ namespace toon {
                                 // (Renderer::LoadTexture's own comment), unlike a thumbnail.
                                 // texturePath is relative to TOON_SPRITES_DIR (SpriteTexturePath).
                                 e.sprite->texture =
-                                    state.renderer.LoadTexture(SpriteTexturePath(e.sprite->texturePath).c_str(), true);
+                                    state.runtime.renderer.LoadTexture(SpriteTexturePath(e.sprite->texturePath).c_str(), true);
                             }
                             if (e.sprite->texture == TextureHandle::Invalid) {
                                 ImGui::TextDisabled("(no texture loaded)");

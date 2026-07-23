@@ -190,6 +190,14 @@ namespace toon {
                 WriteFloat(f, "  light.intensity", e.light->intensity);
             }
 
+            if (e.camera) {
+                const CameraComponent &c = *e.camera;
+                char buf[128];
+                std::snprintf(buf, sizeof(buf), "  camera %.6f %.6f %.6f %d %.6f %d\n", c.fovY, c.nearZ, c.farZ,
+                              c.orthographic ? 1 : 0, c.orthoHeight, c.primary ? 1 : 0);
+                f << buf;
+            }
+
             if (e.collider) { WriteCollider(f, *e.collider); }
             if (e.body) { WriteRigidBody(f, *e.body); }
             if (e.audioSource) { WriteAudioSource(f, *e.audioSource); }
@@ -335,6 +343,13 @@ namespace toon {
             } else if (key == "light.intensity") {
                 if (!cur->light) { cur->light.emplace(); }
                 ss >> cur->light->intensity;
+            } else if (key == "camera") {
+                CameraComponent c;
+                int ortho = 0, primary = 0;
+                ss >> c.fovY >> c.nearZ >> c.farZ >> ortho >> c.orthoHeight >> primary;
+                c.orthographic = ortho != 0;
+                c.primary = primary != 0;
+                cur->camera = c;
             } else if (key == "collider") {
                 std::string kind;
                 ss >> kind;
