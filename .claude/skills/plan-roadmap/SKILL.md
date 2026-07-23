@@ -43,20 +43,11 @@ comparisons in the explain step need to argue in terms of this codebase's real t
 
 ## Research the Item, in Parallel
 
-Four checks, (a) now retired (see below) so effectively three. Launch the active ones as
-parallel `Agent` calls in one message rather than one at a time. The local check (b) is fast
-enough to run directly if you would rather; the web checks (c, d) benefit from a `fork` (or a
+Three checks. Launch b and c as parallel `Agent` calls in one message rather than one at a time. The web checks (b, c) benefit from a `fork` (or a
 fresh general-purpose agent) so the raw search and fetch output does not fill this session's
 context.
 
-**a. Prior info in ToonEngineOld — retired.** `ToonEngineOld` (the old OpenGL 4.1 engine kept
-as a porting reference for exactly three systems: skeletal animation, grid/sky, and sprites)
-was deleted 2026-07-21 once all three had shipped; see MEMORY.md's "ToonEngineOld:
-Carry-Over Reference" section for what it covered and where that material lives now. There
-is no folder left to check. Skip this lens entirely unless the folder somehow exists again
-(it won't); go straight to (b).
-
-**b. What Diligent Engine already provides.** The load-bearing check, per CLAUDE.md's
+**a. What Diligent Engine already provides.** The load-bearing check, per CLAUDE.md's
 "Guiding principle" section: build on Diligent, don't reinvent it. MEMORY.md has real
 precedent for this paying off: cascaded shadow maps built on `ShadowMapManager` instead of
 a hand-rolled port, asset thumbnails on `Diligent-TextureLoader`, shader hot-reload on
@@ -67,13 +58,13 @@ gameplay-shaped items (entity behavior, physics, audio) are outside a graphics e
 and should come back empty; that is a real, useful answer, not a failed search. Don't force
 a tie-in that isn't there.
 
-**c. Diligent docs and samples online.** Search the official Diligent Engine repos
+**b. Diligent docs and samples online.** Search the official Diligent Engine repos
 (`DiligentGraphics/DiligentEngine` and its wiki, `DiligentSamples`, `DiligentFX`) for
 anything relevant that a local submodule grep would miss: usage patterns, an adjacent
 sample, a wiki page on the relevant subsystem. Skip this (and say why) if check (b) already
 gave a clear, sufficient answer for a narrowly rendering-scoped item.
 
-**d. Engine-architecture best practices online.** Search how other engines and communities
+**c. Engine-architecture best practices online.** Search how other engines and communities
 solve this exact problem, naming real systems (Unity `MonoBehaviour`, Unreal
 `Actor`/`ActorComponent`, Godot `Node`, `EnTT`/`flecs` for data-oriented ECS) rather than
 generic advice, especially for solo indie developers. Filter for what actually applies given this codebase's constraints: C++17,
@@ -85,7 +76,7 @@ Lead with the explanation, before any `AskUserQuestion`. A terse options list wi
 reasoning walked through first has been rejected before as premature. Walk through the
 reasoning first, every time.
 
-**The explanation must be genuinely ELI5: basic CS literacy assumed, zero domain
+**The explanation must be ELI5, in layman's terms: basic CS literacy assumed, zero domain
 knowledge assumed.** The reader knows what a variable, a function, a list/array, and a
 struct (a bundle of named fields) are, and nothing more specific than that: not C++, not
 game-engine concepts, not this codebase's existing vocabulary. This bar has been missed
@@ -117,6 +108,7 @@ using its real vocabulary accurately, unprompted), match that register for that 
 instead of re-explaining it ELI5: forcing basic analogies on someone who just showed
 expertise reads as condescending. The ELI5 depth above is the default; a user's own
 demonstrated depth overrides it locally, topic by topic, not for the rest of the plan.
+At the same time, don't expect the user to understand 100% just because they know a few terms.
 
 Only once that explanation is on the table, if a genuine decision remains, ask it with
 `AskUserQuestion`. Use previews for anything concrete enough to sketch, such as two

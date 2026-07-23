@@ -5,17 +5,13 @@ description: Research what to prioritize next on ToonEngine's roadmap across thr
 
 # update-roadmap: Research and Reprioritize ToonEngine's Roadmap
 
-Two other skills own adjacent jobs: `plan-roadmap` takes one already-identified roadmap item
-and designs it in ELI5 depth before implementation; `tidy-md` keeps every markdown doc's prose
-accurate and current, including this file's own, but not `docs/roadmap.md`'s shipped/unshipped
-bookkeeping itself. Neither one asks *what should be on the roadmap at all, and in what order*,
-or *what's actually shipped by now*. That's this skill's job: confirm the roadmap matches
-reality, then survey the codebase and the outside world across three lenses, and propose
-additions or re-ranks for the user to accept or reject before anything new gets written.
+This skill's job: confirm the roadmap matches reality, then survey the codebase and the 
+outside world, and propose additions or re-ranks for the user to accept or reject before 
+anything new gets written.
 
 This is a **triage pass across many candidates**, not a single deep design decision. Keep
-each candidate's writeup tight (a paragraph, not a page); depth on any one chosen item is
-`plan-roadmap`'s job once it's actually next in line.
+each candidate's writeup tight (a few lines, not a page); depth on any one chosen item is
+the skill `plan-roadmap`'s job once it's actually next in line.
 
 ## Ground Yourself First
 
@@ -53,8 +49,8 @@ actually landed (verified against `git log` and the real current code, not a com
 alone). When it does, promote it before researching anything new, so the rest of this pass
 reasons about the real not-yet-shipped list:
 
-1. Confirm the full story (what was built, why, any gotchas) already lives in `MEMORY.md`
-   under the relevant topic section (`grep '^## ' MEMORY.md` lists the current sections). If
+1. Skip this step and follow the user's instructions if they explicitly state that a given 
+   feature has completed.Confirm the full story (what was built, why, any gotchas) already lives in `MEMORY.md`under the relevant topic section (`grep '^## ' MEMORY.md` lists the current sections). If
    `docs/roadmap.md`'s entry has detail not yet in MEMORY.md, migrate it there first, don't
    delete it: losing the "why" behind a decision is the one mistake this step exists to
    prevent. Skip the migration only if the item genuinely has nothing more to say than its
@@ -144,7 +140,10 @@ that hides a mergeable pattern. Audit real code (`src/**`) against those specifi
 rules, and cross-reference `docs/architecture.md` and MEMORY.md's per-system "Not done"
 notes for structural rough edges a prior session already flagged but didn't act on. A finding
 that guide §7 would itself reject (e.g. "add an interface for future flexibility") is not a
-legitimate candidate: the guide is the filter, not a suggestion box to route around.
+legitimate candidate: the guide is the filter, not a suggestion box to route around. If the 
+guide wouldn't reject it, feel free to check the overall codebase and suggest if any changes
+need to be made to the overall architecture to make it better, smoother, or more in principles
+with the guide.
 
 **b. Gaps blocking a Steam release.** Research what Steamworks integration and a typical
 shipped Steam title actually require (achievements/stats, cloud saves, the Steam Input API,
@@ -152,9 +151,9 @@ overlay compatibility, depot/build packaging, crash reporting, a settings/graphi
 system, save-game persistence beyond scene authoring) via web search, then cross-reference
 against `docs/roadmap.md`'s Shipped section and remaining list to find what's a real gap
 versus already covered (e.g. asset packaging is already on the list; don't re-propose it,
-note it's covered and check whether its current rank still makes sense). Distinguish
-Steam-platform-specific requirements from generic "missing game features": this lens is
-about what *releasing on Steam specifically* requires, not a wishlist of gameplay systems.
+note it's covered and check whether its current rank still makes sense). This can include 
+generic missing gameplay systems that fit, but don't make it specific to a genre (e.g. RTS unit picker,
+playercontroller, dialogue system etc.)
 
 **c. Performance improvements.** Start from what's already known and deferred: grep
 MEMORY.md for existing notes (frustum culling of the shadow pass, instancing already on the

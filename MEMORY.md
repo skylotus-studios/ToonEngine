@@ -845,6 +845,62 @@ Demo: a Sprite entity reusing the window icon texture, positioned above the cube
 pair; orbiting the camera past its edge visibly thins it to a line, proof it isn't secretly
 billboarding to face the camera.
 
+## 2D Editor Mode (Roadmap #14)
+
+A **view mode, not a second scene representation.** Toggling "2D Mode" (Settings > Camera)
+locks the existing viewport to an orthographic camera facing the sprite plane; the scene, the
+entity tree, and every draw path stay exactly what they are in 3D. Forking the engine into a
+parallel 2D scene/renderer was rejected for the reason the guiding principle names: a sprite
+is already a transform-oriented quad in the same world, so an orthographic projection and a
+locked angle are the whole difference.
+
+`Camera` gains two plain fields, `orthographic` and `orthoHeight` (the world-space vertical
+extent the view covers). `Renderer::SetCamera` picks `float4x4::Ortho(orthoHeight * aspect,
+orthoHeight, nearZ, farZ, false)` over the perspective matrix when the flag is set. Nothing
+else in the render path branches: the same fill/outline/shadow/sprite PSOs draw through
+whichever projection lands in the constant buffer.
+
+**`CameraZoom` scales `orthoHeight`, not `distance`, while orthographic.** Moving an
+orthographic camera closer or farther doesn't change apparent size (that is the definition of
+orthographic), so "zoom" has to mean shrinking the visible world extent instead. Getting this
+wrong produces a zoom control that silently does nothing.
+
+**The mode toggle is editor policy, so it lives in `app/`, not `core/camera/`.**
+`SetEditorMode2D` (`app/editor_tick.h`) saves the current 3D yaw/pitch into
+`EditorState::saved3DYaw`/`saved3DPitch`, snaps the camera to yaw = pi / pitch = 0, and sets
+the flag; leaving restores the saved angle. The Settings checkbox calls that function rather
+than writing `camera.orthographic` directly, so the angle save/restore can never drift out of
+sync with the flag. Yaw = pi is the angle that shows sprites right-side-up rather than
+mirrored: `sprite.hlsl`'s quad is wound CCW as seen from +Z, and `CameraBasis`'s forward
+points from eye toward pivot. Verified against a screenshot, since this is a visible bug when
+backwards, not a silent one.
+
+Orbit and fly are gated off while orthographic (both the mouse-drag path and the gamepad
+right-stick path in `TickEditor`): rotating away from the locked angle defeats the mode. Pan,
+zoom, and focus are untouched, since they move or frame the view without changing its angle.
+
+**The gizmo drops its third axis, the Properties panel does not.** `gizmo_overlay.cpp` masks
+`TRANSLATE_Z | ROTATE_X | ROTATE_Y | SCALE_Z` out of the `ImGuizmo::OPERATION` and passes
+`ImGuizmo::SetOrthographic(camera.orthographic)` so the handle's own projection math matches.
+The Properties panel keeps editing all three components unconditionally, matching Unity's 2D
+mode: the viewport handle loses the out-of-plane axis, the inspector doesn't.
+
+The ground grid switches from `FEATURE_FLAG_RENDER_PLANE_XZ` (X/Z axes) to
+`FEATURE_FLAG_RENDER_PLANE_XY` (X/Y axes) to match the sprite quad's own orientation;
+DiligentFX's `CoordinateGridRenderer` already supports both, so this is a flag change, not new
+rendering. `Renderer`'s impl mirrors `Camera::orthographic` into its own `orthographic` field
+on each `SetCamera` because `DrawGrid` takes no `Camera` parameter.
+
+2D mode is editor session state and is deliberately not serialized: a `.scene` file describes
+the world, not which way the editor was looking at it.
+
+**Vulkan `IndependentBlend` fix, found in the same pass.** `CreateSpritePipeline` sets
+`BlendDesc.IndependentBlendEnable = True` (the sprite pass write-masks its normal and motion
+targets differently from its color target), but the Vulkan device was never created with that
+feature requested, so every launch since sprites shipped threw a validation error and the
+differently-masked targets were invalid per spec. Diligent's D3D and WebGPU factories default
+`IndependentBlend` to enabled; the Vulkan factory leaves it to the app to request.
+
 ## Scene Graph (Phase B)
 
 `core/scene.{h,cpp}`: an entity tree replacing `main.cpp`'s hardcoded array. `Scene` is a
@@ -1465,8 +1521,7 @@ every entity's script and field values correctly. Both temporary instrumentation
 were fully removed before the final build. Full verification log in ARCHIVE.md.
 
 Deferred, named so they aren't forgotten: EnTT/ECS (revisit only when entity count or
-a profiled hotspot demands it); Lua scripting (the script slot is shaped for a
-`LuaScript : Script` drop-in, same lifecycle shape, not a redesign); rigidbody/collider
+a profiled hotspot demands it); rigidbody/collider
 components (M2, via the same opaque-handle pattern `renderer.h` already uses, confirmed
 consistent with Jolt's own `SaveState`/`RestoreState` rollback model); UI components;
 inspector "Add Script" UI (scripts attach in code for now); `OnDestroy` actually firing;
@@ -2182,6 +2237,17 @@ full, with in-repo examples (`ColliderShape`'s switches, `Script`'s justified vi
 in docs/cpp-style-guide.md §7; enforced by the `tidy-cpp` skill's architecture-audit
 pass.
 
+### Gameplay Scripting Stays Native C++, No Embedded Scripting Language
+
+Decided 2026-07-23 and removed from the roadmap rather than deferred: gameplay logic is
+authored as C++ `Script` subclasses, compiled with the engine. An embedded VM (Lua was the
+candidate) buys iteration speed a solo developer who is already recompiling the engine
+doesn't need, and costs a binding layer, a second debugging story, and a second set of
+lifetime rules across the C++/script boundary. `Script`'s virtuals remain justified as an
+open-ended extension point on their own terms (see above), independent of any scripting
+language ever landing behind them. Revisit only if a concrete iteration bottleneck shows up;
+until then, don't re-propose it.
+
 
 ## History
 
@@ -2235,3 +2301,5 @@ purely for when someone explicitly asks for the full history behind something.
   Lua scripting + 2D editor mode added, the "Researched, Not Yet Ranked" holding bucket
   removed in favor of ranking everything directly; `ToonEngineOld/` deleted, all three
   tracked ports having shipped (see "ToonEngineOld: Carry-Over Reference").
+- **2026-07-23**: 2D editor mode (#14, see "2D editor mode"); the planned Lua scripting layer
+  dropped from the roadmap entirely, gameplay staying native C++ (user decision).
