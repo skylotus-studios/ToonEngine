@@ -155,10 +155,10 @@ flowchart LR
 
   subgraph V06["v0.6"]
     direction TB
-    N15["Game runtime mode"]
+    S15["Game runtime mode"]
     N16["Asset packaging"]
     N17["In-game UI &amp; HUD"]
-    N15 --> N16 --> N17
+    S15 --> N16 --> N17
   end
 
   subgraph V07["v0.7"]
@@ -216,6 +216,7 @@ flowchart LR
   classDef v03 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
   classDef v04 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
   classDef v05 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
+  classDef shipped fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
   classDef v06 fill:#F4C542,stroke:#c99e28,color:#2B2100;
   classDef v07 fill:#F2835C,stroke:#c25f3a,color:#2B0D00;
   classDef v08 fill:#4FB8A8,stroke:#2f8a7c,color:#00201C;
@@ -229,7 +230,8 @@ flowchart LR
   class S7,S8,S9 v03
   class S10,S11,S12 v04
   class S13,S14 v05
-  class N15,N16,N17 v06
+  class N16,N17 v06
+  class S15 shipped
   class N18,N19,N20 v07
   class N21,N22,N23 v08
   class N24,N25,N26 v09

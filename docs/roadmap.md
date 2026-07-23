@@ -8,7 +8,7 @@ non-essential expansion, the tail of the same ranked sequence, not a separate bu
 project's guiding principle is to build on Diligent Engine, not reinvent it.
 
 ```
-Shipped  ██████████████░░░░░░░░░░░░░░░░░░░░░  14 / 35 items
+Shipped  ███████████████░░░░░░░░░░░░░░░░░░░░  15 / 35 items
 ```
 
 ```mermaid
@@ -54,10 +54,10 @@ flowchart LR
 
     subgraph V06["v0.6"]
         direction TB
-        N15["Game runtime mode"]
+        S15["Game runtime mode"]
         N16["Asset packaging"]
         N17["In-game UI &amp; HUD"]
-        N15 --> N16 --> N17
+        S15 --> N16 --> N17
     end
 
     subgraph V07["v0.7"]
@@ -115,6 +115,7 @@ flowchart LR
     classDef v03 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
     classDef v04 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
     classDef v05 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
+    classDef shipped fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
     classDef v06 fill:#F4C542,stroke:#c99e28,color:#2B2100;
     classDef v07 fill:#F2835C,stroke:#c25f3a,color:#2B0D00;
     classDef v08 fill:#4FB8A8,stroke:#2f8a7c,color:#00201C;
@@ -128,7 +129,8 @@ flowchart LR
     class S7,S8,S9 v03
     class S10,S11,S12 v04
     class S13,S14 v05
-    class N15,N16,N17 v06
+    class N16,N17 v06
+    class S15 shipped
     class N18,N19,N20 v07
     class N21,N22,N23 v08
     class N24,N25,N26 v09
@@ -182,19 +184,18 @@ flowchart LR
     exit, orbit and fly are disabled while locked, zoom scales the visible world extent instead
     of camera distance, the gizmo drops its out-of-plane axis, and the ground grid switches from
     the XZ plane to XY.
+15. **Standalone runtime and application state machine**: a `RuntimeState` (the engine half)
+    split out of `EditorState`, a shared `TickRuntime`/`RenderScene` the editor and player both
+    drive, and an `AppState` machine (Boot/Title/Loading/Playing/Paused/Quit) behind one
+    `SetAppState` funnel, kept a separate axis from the editor's `EditorMode`. A `ToonRuntime`
+    static library feeds two executables: the editor (`ToonEngine`) and a chrome-free
+    `ToonPlayer` (also reachable via `ToonEngine --play`), which renders from a scene's primary
+    `CameraComponent` rather than the editor's orbit camera. Loading is a per-frame-drained work
+    list, and the grid/collider/mouse-pick overlays moved to the editor-only render path so a
+    shipped frame never draws them.
 
 ## What's Next, Most to Least Important
 
-15. **Standalone game runtime mode and application state machine.** An entry path that boots a
-    scene and runs the sim without editor chrome, driven by an application-level state machine
-    (Boot, Title, Loading, Playing, Paused, Quit) distinct from `EditorState`'s
-    `EditorMode`, which is an editor concept wired to the Playback panel. Needs a real quit
-    that isn't closing an editor window, and a gameplay camera separate from `core/camera`'s
-    orbit/pan/fly editor rig. Today `main.cpp` can only ever produce an editor: there is no
-    build config, flag, or entry point that presents anything else, and Valve's Deck
-    compatibility criteria are explicit that a title must not require the player to navigate a
-    launcher first. Ranked first among what's left because every remaining release item below
-    is implicitly a feature of a runtime that doesn't exist yet.
 16. **Asset packaging for a shippable build.** Relative shader/asset paths so the engine can
     ship outside a dev environment. Small and mechanical, but ranked directly behind the
     runtime rather than down in the release cluster where it used to sit: a runtime whose only
