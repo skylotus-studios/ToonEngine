@@ -2,13 +2,13 @@
 
 One list, start to finish in ranked order. There are no
 calendar dates: an item moves up when something below finishes and frees it to start, or when
-new research finds a reason to re-rank it. Item 26 (SteamPipe depot and build upload tooling)
-is the last item scoped for 1.0, the official release; everything ranked after it is post-1.0
-polish and non-essential expansion, the tail of the same ranked sequence, not a separate
-bucket. The project's guiding principle is to build on Diligent Engine, not reinvent it.
+new research finds a reason to re-rank it. Item 30 (a packaged-build smoke test) is the last
+item scoped for 1.0, the official release; everything ranked after it is post-1.0 polish and
+non-essential expansion, the tail of the same ranked sequence, not a separate bucket. The
+project's guiding principle is to build on Diligent Engine, not reinvent it.
 
 ```
-Shipped  █████████████░░░░░░░░░░░░░░░░░  13 / 30 items
+Shipped  ██████████████░░░░░░░░░░░░░░░░░░░░░  14 / 35 items
 ```
 
 ```mermaid
@@ -48,58 +48,64 @@ flowchart LR
     subgraph V05["v0.5"]
         direction TB
         S13["2D &amp; sprites"]
-        N14["2D editor mode"]
-        N15["Lua scripting"]
-        S13 --> N14 --> N15
+        S14["2D editor mode"]
+        S13 --> S14
     end
 
     subgraph V06["v0.6"]
         direction TB
-        N16["Player save system"]
-        N17["Instancing"]
-        N18["Frustum culling"]
-        N16 --> N17 --> N18
+        N15["Game runtime mode"]
+        N16["Asset packaging"]
+        N17["In-game UI &amp; HUD"]
+        N15 --> N16 --> N17
     end
 
     subgraph V07["v0.7"]
         direction TB
-        N19["Prefabs"]
-        N20["Particles &amp; VFX"]
-        N19 --> N20
+        N18["Player save system"]
+        N19["Level transitions"]
+        N20["Resource manager"]
+        N18 --> N19 --> N20
     end
 
     subgraph V08["v0.8"]
         direction TB
-        N21["Steamworks SDK bootstrap"]
-        N22["Settings menu"]
-        N21 --> N22
+        N21["Instancing"]
+        N22["Frustum culling"]
+        N23["Prefabs"]
+        N21 --> N22 --> N23
     end
 
     subgraph V09["v0.9"]
         direction TB
-        N23["Controller UI &amp; Steam Deck keyboard"]
-        N24["Crash reporting"]
-        N23 --> N24
+        N24["Particles &amp; VFX"]
+        N25["Steamworks SDK bootstrap"]
+        N26["Settings menu"]
+        N24 --> N25 --> N26
     end
 
     subgraph V10["v1.0: Official Release"]
         direction TB
-        N25["Asset packaging"]
-        N26["SteamPipe depot upload"]
-        N25 --> N26
+        N27["Controller UI &amp; Steam Deck keyboard"]
+        N28["Crash reporting"]
+        N29["SteamPipe depot upload"]
+        N30["Packaged-build smoke test"]
+        N27 --> N28 --> N29 --> N30
     end
 
     subgraph V11["v1.1: Post-1.0 Polish"]
         direction TB
-        N27["Achievements &amp; Steam Input glyphs"]
+        N31["Achievements &amp; stats"]
+        N32["Localization pipeline"]
+        N31 --> N32
     end
 
     subgraph V12["v1.2: Platform Expansion"]
         direction TB
-        N28["Linux support"]
-        N29["macOS support"]
-        N30["Re-enable D3D11"]
-        N28 --> N29 --> N30
+        N33["Linux support"]
+        N34["macOS support"]
+        N35["Re-enable D3D11"]
+        N33 --> N34 --> N35
     end
 
     V01 --> V02 --> V03 --> V04 --> V05 --> V06 --> V07 --> V08 --> V09 --> V10 --> V11 --> V12
@@ -108,7 +114,7 @@ flowchart LR
     classDef v02 fill:#6B9C8C,stroke:#4a7062,color:#EAF6F1;
     classDef v03 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
     classDef v04 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
-    classDef v05 fill:#FF9F40,stroke:#c97927,color:#2B1400;
+    classDef v05 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
     classDef v06 fill:#F4C542,stroke:#c99e28,color:#2B2100;
     classDef v07 fill:#F2835C,stroke:#c25f3a,color:#2B0D00;
     classDef v08 fill:#4FB8A8,stroke:#2f8a7c,color:#00201C;
@@ -116,21 +122,19 @@ flowchart LR
     classDef v10 fill:#E8B84F,stroke:#b8872f,color:#2B1D00;
     classDef v11 fill:#8A7CFF,stroke:#6357cc,color:#160B3E;
     classDef v12 fill:#B39DDB,stroke:#8672b0,color:#1F1730;
-    classDef shipped fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
 
     class S1,S2,S3 v01
     class S4,S5,S6 v02
     class S7,S8,S9 v03
     class S10,S11,S12 v04
-    class S13 shipped
-    class N14,N15 v05
-    class N16,N17,N18 v06
-    class N19,N20 v07
-    class N21,N22 v08
-    class N23,N24 v09
-    class N25,N26 v10
-    class N27 v11
-    class N28,N29,N30 v12
+    class S13,S14 v05
+    class N15,N16,N17 v06
+    class N18,N19,N20 v07
+    class N21,N22,N23 v08
+    class N24,N25,N26 v09
+    class N27,N28,N29,N30 v10
+    class N31,N32 v11
+    class N33,N34,N35 v12
 ```
 
 ## Shipped
@@ -172,113 +176,154 @@ flowchart LR
     a back-to-front-sorted transparent pass after the opaque toon pass, matching
     `ToonEngineOld`'s `ShadingMode::Sprite` design, with real mouse-pick bounds (not the
     generic marker box every other boundless entity gets) and full `.scene` serialization.
+14. **2D editor mode**: a Settings-panel toggle that locks the viewport to an orthographic
+    camera facing the sprite plane (`Camera::orthographic`/`orthoHeight`), rather than forking
+    the scene into a separate 2D representation. Entering saves the 3D yaw/pitch to restore on
+    exit, orbit and fly are disabled while locked, zoom scales the visible world extent instead
+    of camera distance, the gizmo drops its out-of-plane axis, and the ground grid switches from
+    the XZ plane to XY.
 
 ## What's Next, Most to Least Important
 
-14. **2D editor mode.** A camera/viewport mode toggle (orthographic top-down or side view,
-    2D-appropriate gizmo and snap behavior, grid orientation to match) for working with the
-    sprite system directly above it, replacing the 3D-only editor camera for scenes built
-    primarily from sprites. Ranked ahead of Lua scripting because arranging a scene's content
-    comes before scripting what happens in it, and both outrank Instancing/Frustum
-    culling/Prefabs/Particles below: those are scale-driven work nothing today measures a need
-    for, while 2D mode and Lua scripting are what turn the engine into something a game can
-    actually be built and coded in before release.
-15. **Lua scripting layer.** Embed a Lua VM and bind it to the existing `Script` extension
-    point (`core/scene/script.h`) so gameplay logic can be authored without recompiling the
-    engine: a `LuaScript : Script` subclass evaluates a Lua chunk instead of C++ for the same
-    per-tick hooks (`OnUpdate`, `OnCollisionEnter`/`Stay`/`Exit`) a native script already gets,
-    the exact open-ended extension point `cpp-style-guide.md` §7 names `Script` for. Ranked
-    directly below 2D editor mode for the reason above, and above Player save/progress system
-    because a save system has nothing to persist until Lua scripting exists to produce actual
-    gameplay state.
-16. **Player save/progress system**, distinct from the existing `.scene` authoring
-    serialization: a checkpoint/inventory/unlocked-state format for what a player actually
-    does in a running game, not a full scene dump. Ranked directly after Lua scripting because
-    nothing shipped before it produces actual player state worth persisting; a real gameplay
-    loop, which Lua scripting is what unlocks, is the prerequisite. Also what real Steam
-    cloud-save support would eventually sync, once this exists.
-17. **Instancing.** A per-instance draw path for scenes with many copies of the same mesh.
+15. **Standalone game runtime mode and application state machine.** An entry path that boots a
+    scene and runs the sim without editor chrome, driven by an application-level state machine
+    (Boot, Title, Loading, Playing, Paused, Quit) distinct from `EditorState`'s
+    `EditorMode`, which is an editor concept wired to the Playback panel. Needs a real quit
+    that isn't closing an editor window, and a gameplay camera separate from `core/camera`'s
+    orbit/pan/fly editor rig. Today `main.cpp` can only ever produce an editor: there is no
+    build config, flag, or entry point that presents anything else, and Valve's Deck
+    compatibility criteria are explicit that a title must not require the player to navigate a
+    launcher first. Ranked first among what's left because every remaining release item below
+    is implicitly a feature of a runtime that doesn't exist yet.
+16. **Asset packaging for a shippable build.** Relative shader/asset paths so the engine can
+    ship outside a dev environment. Small and mechanical, but ranked directly behind the
+    runtime rather than down in the release cluster where it used to sit: a runtime whose only
+    verification is "it launches from the dev tree" isn't verified as a game at all, and
+    relative paths are what make a standalone exe testable in the first place.
+17. **In-game UI and HUD, including text rendering.** Player-facing UI primitives (layout and
+    anchoring, 9-slice, controller focus navigation) plus text rendering outside ImGui's font
+    atlas. Dear ImGui is deliberately not the answer here; its own author's position is that
+    it targets development and debug tools rather than end-user UI, and that it isn't designed
+    to be skinnable, which matters more than usual for a stylized title where UI art direction
+    is part of the product. Ranked above the settings menu and controller-navigable UI because
+    it is their unnamed prerequisite: both assume a player-facing UI system that doesn't exist.
+    Route every player-facing string through a lookup key from the start, so the localization
+    pipeline (item 32) is a data change later rather than a rewrite.
+18. **Player save/progress system**, distinct from the existing `.scene` authoring
+    serialization: a checkpoint/inventory/unlocked-state format for what a player actually does
+    in a running game, not a full scene dump. Ranked here rather than at the top of the list
+    because a save system running inside the editor process saves editor state; the runtime
+    above it is the real prerequisite. Save to a path that is unique per Steam user, which
+    Steam Auto-Cloud supplies through its `{64BitSteamID}` path variable, and keep display and
+    graphics settings out of that path: Valve's own cloud documentation advises against syncing
+    machine-specific configuration. Auto-Cloud is partner-site configuration rather than code,
+    so it's the cheaper option than `ISteamRemoteStorage` for a solo project.
+19. **Scene and level transitions.** Level changes requested from gameplay code rather than the
+    editor's File menu, with physics bodies, audio handles, and scripts released in the right
+    order, and something on screen while the load runs. Today `LoadSceneInto` is a synchronous
+    full replace driven from a menu. This is a correctness item, not a convenience one: scene
+    mutation is already deferred to tick boundaries because structural edits reorder
+    `Scene::entities`, so a mid-tick scene swap requested from a script is a crash. Ranked
+    directly after the save system because it's what makes the runtime's Loading state real.
+20. **Resource manager with reference counting.** A load-path cache and ownership model for
+    textures, models, and audio clips. There's no dedupe today, so two sprites naming the same
+    PNG create two GPU textures, and `Renderer::DestroyTexture` is the entire lifetime story;
+    `ui/thumbnail_cache.h` is already a one-off of this idea scoped to browser icons. A bounded
+    leak now, a correctness bug the moment level transitions above it exist, since unloading a
+    level has to free exactly what no other level still holds. Retires the thumbnail cache's
+    duplicate logic in the same pass.
+21. **Instancing.** A per-instance draw path for scenes with many copies of the same mesh.
     Ranked here because it only pays off once a scene actually has enough repeated objects
     to matter, which the content systems above it are what will start creating that
     scenario. `Renderer::DrawMesh`/`DrawModel` already rebind the same outline/fill PSOs on
     every entity even when they're shared, the same redundant state-setting this item's
     batching would remove, so fold that cleanup into the same pass rather than a separate one.
-18. **Frustum culling: shadow cascades and the main pass.** Bounds-test each entity against
+22. **Frustum culling: shadow cascades and the main pass.** Bounds-test each entity against
     the camera/cascade frustum before drawing it, instead of today's unconditional
     every-entity loop in both the shadow pass and the main color pass
-    (`app/editor_render.cpp`'s `RenderFrame`), a gap deliberately deferred when cascaded
-    shadow maps shipped) and shared, it turns out,
-    by the main pass that was never named alongside it. Ranked right after instancing
-    because both are scale-driven: cheap and correct to add whenever someone's already
-    touching either draw loop, but nothing today measures either as an actual bottleneck at
-    the current scene's object count, so it stays below every content system that outranks it.
-19. **Prefabs.** Reusable entity templates for runtime spawning. A workflow multiplier: it
+    (`app/editor_render.cpp`'s `RenderFrame`). The shadow half was deliberately deferred when
+    cascaded shadow maps shipped; the main pass shares the same gap and was never named
+    alongside it. Ranked right after instancing because both are scale-driven: cheap and
+    correct to add whenever someone's already touching either draw loop, but nothing today
+    measures either as an actual bottleneck at the current scene's object count, so it stays
+    below every content system that outranks it.
+23. **Prefabs.** Reusable entity templates for runtime spawning. A workflow multiplier: it
     cuts the cost of populating a scene with everything shipped above it, so it's ranked
     ahead of pure-visual polish that doesn't compound the same way.
-20. **Particles and VFX.** A toon-appropriate particle system. Doesn't depend on anything
+24. **Particles and VFX.** A toon-appropriate particle system. Doesn't depend on anything
     above it and doesn't unlock anything below it either, so it sits after the items that do
     one or the other.
-21. **Steamworks SDK bootstrap.** Link the Steamworks SDK and wire `SteamAPI_Init`/
+25. **Steamworks SDK bootstrap.** Link the Steamworks SDK and wire `SteamAPI_Init`/
     `SteamAPI_Shutdown`, a per-frame `SteamAPI_RunCallbacks`, a dev-time `steam_appid.txt`,
     and the overlay-activation callback. Small and mechanical, but every other Steam-specific
-    item, achievements and Steam Input glyph mapping (item 27, post-1.0) and the
-    controller-navigable UI item two below this one, assumes this exists first.
-    Ranked ahead of the settings menu because it blocks nothing above it and opens the
-    release-readiness cluster the rest of this tier belongs to.
-22. **Settings menu.** A player-facing menu for display (resolution, fullscreen, VSync) and
-    input (a rebind UI over the already-shipped action-map system), replacing today's
-    dev-only Settings panel for anything a player, not a developer, needs to control. Steam's
-    own launch checklist tests for exactly this, and ToonEngine has no player-facing display
-    settings today. Should default to, or strongly favor, borderless windowed over true
-    exclusive fullscreen (Vulkan titles under the Steam Overlay have documented
-    exclusive-fullscreen rendering failures), and persist graphics settings per device rather
-    than through cloud sync, per Valve's own Steam Deck guidance. Ranked with crash reporting
-    and asset packaging below it because none of the three block or unlock anything else;
-    they're release-readiness work a real release can't ship without, not features that
-    create new gameplay.
-23. **Controller-navigable UI and Steam Deck on-screen keyboard.** Every player-facing menu,
-    starting with the settings menu this depends on, navigable end to end with a controller,
-    plus `ShowGamepadTextInput`/`ShowFloatingGamepadTextInput` wired for any text entry. A
-    real, separate requirement from the already-deferred Steam Input glyph mapping (that's
-    which icon to show; this is whether the menu can be driven with a controller at all), and
-    a genuine lever for Steam Deck Verified badging per Valve's own QA checklist. Ranked
-    directly after the settings menu because it hardens the one player-facing menu system
-    that item establishes, and is roughly comparable in scope to skeletal animation, not a
-    small polish pass.
-24. **Crash reporting.** A crash-reporting handler or SDK integration so a crash leaves a
+    item, the controller and glyph work two below this one and achievements after 1.0
+    (item 31), assumes this exists first. Testable from a dev exe on its own, so it doesn't
+    wait on the runtime; ranked ahead of the settings menu because it blocks nothing above it
+    and opens the release-readiness cluster the rest of this tier belongs to.
+26. **Settings menu.** A player-facing menu for display (resolution, fullscreen, VSync), input
+    (a rebind UI over the already-shipped action-map system), and audio, built on the in-game
+    UI system from item 17 and replacing today's dev-only Settings panel for anything a player
+    rather than a developer needs to control. Steam's own launch checklist tests for exactly
+    this, and ToonEngine has no player-facing display settings today. Two engine-side pieces
+    land with it: an audio bus split (Master, Music, SFX through `ma_sound_group` behind the
+    existing `AudioEngine` seam), since `SetMasterVolume` is currently the only volume control
+    and one slider isn't what a settings menu offers; and persisting settings locally per
+    device rather than through cloud sync, per Valve's Steam Deck guidance. Should default to,
+    or strongly favor, borderless windowed over true exclusive fullscreen, which has documented
+    rendering failures for Vulkan titles under the Steam Overlay.
+27. **Controller-navigable UI, Steam Deck on-screen keyboard, and Steam Input glyphs.** Every
+    player-facing menu navigable end to end with a controller, `ShowGamepadTextInput`/
+    `ShowFloatingGamepadTextInput` wired for any text entry, on-screen glyphs mapped to
+    whichever controller is actually active, and a default controller configuration published
+    on the partner site that reaches all content. All four are named Steam Deck Verified input
+    criteria, which is why glyph mapping sits here inside 1.0 rather than with achievements
+    after it: matching icons to the active device is a stated requirement, while achievements
+    aren't. Ranked directly after the settings menu because it hardens the player-facing menus
+    that item establishes.
+28. **Crash reporting.** A crash-reporting handler or SDK integration so a crash leaves a
     diagnostic trail instead of a silent exit, tested against a live endpoint before release,
     per Steam's own launch checklist. Valve's own `SteamAPI_WriteMiniDump` is documented as
     32-bit-Windows-only, so the real implementation will be a third-party service (Sentry,
-    Backtrace, or a Breakpad-based one), not the Steamworks call itself. Ranked next to the
-    settings menu for the same reason: a small, bounded release requirement, not a new
-    subsystem, closer in shape to asset packaging below it than to any content system above it.
-25. **Asset packaging for a shippable build.** Relative shader/asset paths so the engine can
-    ship outside a dev environment. A genuine hard requirement before any real release, but
-    small and mechanical, and it blocks nothing above it. Ranked alongside the settings menu
-    and crash reporting above it, the same release-readiness cluster, without displacing the
-    systems that need to exist before there's a game worth releasing.
-26. **SteamPipe depot and build upload tooling.** The `app_build.vdf` plus per-depot
+    Backtrace, or a Breakpad-based one), not the Steamworks call itself. Scope it to cover the
+    highest-probability crash class for a Vulkan title specifically: swapchain recreation on
+    alt-tab, resize, monitor change, or Deck resume, and device loss under the Steam Overlay's
+    Vulkan layer. Ranked next to the settings menu as a small, bounded release requirement
+    rather than a new subsystem.
+29. **SteamPipe depot and build upload tooling.** The `app_build.vdf` plus per-depot
     `depot_build.vdf` config and `steamcmd +run_app_build` invocation Valve's own SteamPipe
     system needs to actually push a built game onto Steam's content delivery network,
-    distinct from asset packaging above it, which makes the engine runnable outside a dev
-    environment but doesn't get that build onto Steam's servers. Ranked directly after asset
-    packaging because it depends on that item's relative-path packaging existing first:
-    there's nothing to upload to a depot until the build actually runs standalone. The last
-    item scoped for 1.0; everything below this line ships after the official release.
-27. **Achievements, stats, and Steam Input controller glyph mapping.** `ISteamUserStats` for
-    achievements/stats, plus mapping the Steam Input API's action glyphs to whichever
-    controller is active. Both depend on Steamworks SDK bootstrap (item 21) existing first,
-    and both are additive once there's actual gameplay to hook them into, common for a solo
-    dev to add post-launch rather than at launch: the first item ranked after the 1.0
-    boundary rather than inside it.
-28. **Linux support** (Vulkan). Expands the eventual audience, but Windows-only is a normal,
+    distinct from asset packaging (item 16), which makes the engine runnable outside a dev
+    environment but doesn't get that build onto Steam's servers. Ranked here because it depends
+    on that item's relative-path packaging existing first: there's nothing to upload to a depot
+    until the build actually runs standalone.
+30. **Packaged-build smoke test.** Produce a release artifact and launch it unattended, from an
+    installed depot rather than the dev tree, before any build goes live on the default branch.
+    Items 16 and 29 produce the artifact; neither proves it runs, and the classic launch-day
+    failure is a build that works in the dev environment but not once installed: a missing
+    engine DLL, one surviving absolute path, a shipped `steam_appid.txt`. Valve's own advice is
+    to test through a beta branch first. Ranked last inside 1.0 because it has no value until
+    both items it verifies exist. The last item scoped for 1.0; everything below this line
+    ships after the official release.
+31. **Achievements and stats.** `ISteamUserStats` wiring for achievements and stat tracking.
+    Depends on Steamworks SDK bootstrap (item 25) existing first, and is additive once there's
+    actual gameplay to hook it into, which is why it's common for a solo developer to add it
+    after launch rather than at launch: the first item ranked after the 1.0 boundary rather
+    than inside it.
+32. **Localization and text pipeline.** External string tables, per-language font atlases, and
+    CJK fallback fonts (the Noto and Source Han families rather than one atlas), plus declaring
+    supported languages on the partner site's Depots page. Every user-facing string is a
+    hard-coded C++ literal today. Not blocking for a Windows-only English first release, which
+    is why it ranks after 1.0, but the lookup-key indirection item 17 introduces is what keeps
+    this a data change rather than a rewrite of every menu. Also interacts with Steam Deck's
+    legibility floor, since translated strings routinely run longer than the English source.
+33. **Linux support** (Vulkan). Expands the eventual audience, but Windows-only is a normal,
     viable starting point for a first release on Steam; a solo project's time before that
     point is better spent on the game itself than a second platform.
-29. **macOS support** (Vulkan via MoltenVK, needs an `NSView` from a GLFW Cocoa `.mm`
+34. **macOS support** (Vulkan via MoltenVK, needs an `NSView` from a GLFW Cocoa `.mm`
     helper). Ranked after Linux because it builds on the same Vulkan-portability work Linux
     already exercises, and because it's the smaller of the two non-Windows audiences for a
     PC-first indie title.
-30. **Re-enable D3D11.** Only matters for players on hardware too old for Vulkan, a small
+35. **Re-enable D3D11.** Only matters for players on hardware too old for Vulkan, a small
     and shrinking slice of the Steam hardware survey. Ranked last because every item above
     it either unlocks gameplay, unlocks content, or is a hard release requirement, and this
     is none of those.
