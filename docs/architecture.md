@@ -1101,8 +1101,8 @@ see "The scene model" -> "Scripts" above), landed close to what this section use
 an `Update`-style hook (`Script::OnUpdate`) called inside the fixed-step loop, before
 `UpdateWorldTransforms`, right where the demo's spin used to advance inline, inheriting the
 `EditorMode` gate for free. It did *not* stay a two-member addition, though. An open, growing
-subsystem, and the landing spot for a future Lua bridge, got its own module (`core/scene/script.h`
-plus `core/scene/scripts/`) rather than folding into `scene.cpp`.
+subsystem got its own module (`core/scene/script.h` plus `core/scene/scripts/`) rather than
+folding into `scene.cpp`.
 
 The third, physics + collision (M2.1, see "The physics abstraction layer" and "The scene
 model" -> "Physics components" above), also got its own module and landed close to this

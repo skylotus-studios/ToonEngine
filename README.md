@@ -149,58 +149,64 @@ flowchart LR
   subgraph V05["v0.5"]
     direction TB
     S13["2D &amp; sprites"]
-    N14["2D editor mode"]
-    N15["Lua scripting"]
-    S13 --> N14 --> N15
+    S14["2D editor mode"]
+    S13 --> S14
   end
 
   subgraph V06["v0.6"]
     direction TB
-    N16["Player save system"]
-    N17["Instancing"]
-    N18["Frustum culling"]
-    N16 --> N17 --> N18
+    N15["Game runtime mode"]
+    N16["Asset packaging"]
+    N17["In-game UI &amp; HUD"]
+    N15 --> N16 --> N17
   end
 
   subgraph V07["v0.7"]
     direction TB
-    N19["Prefabs"]
-    N20["Particles &amp; VFX"]
-    N19 --> N20
+    N18["Player save system"]
+    N19["Level transitions"]
+    N20["Resource manager"]
+    N18 --> N19 --> N20
   end
 
   subgraph V08["v0.8"]
     direction TB
-    N21["Steamworks SDK bootstrap"]
-    N22["Settings menu"]
-    N21 --> N22
+    N21["Instancing"]
+    N22["Frustum culling"]
+    N23["Prefabs"]
+    N21 --> N22 --> N23
   end
 
   subgraph V09["v0.9"]
     direction TB
-    N23["Controller UI &amp; Steam Deck keyboard"]
-    N24["Crash reporting"]
-    N23 --> N24
+    N24["Particles &amp; VFX"]
+    N25["Steamworks SDK bootstrap"]
+    N26["Settings menu"]
+    N24 --> N25 --> N26
   end
 
   subgraph V10["v1.0: Official Release"]
     direction TB
-    N25["Asset packaging"]
-    N26["SteamPipe depot upload"]
-    N25 --> N26
+    N27["Controller UI &amp; Steam Deck keyboard"]
+    N28["Crash reporting"]
+    N29["SteamPipe depot upload"]
+    N30["Packaged-build smoke test"]
+    N27 --> N28 --> N29 --> N30
   end
 
   subgraph V11["v1.1: Post-1.0 Polish"]
     direction TB
-    N27["Achievements &amp; Steam Input glyphs"]
+    N31["Achievements &amp; stats"]
+    N32["Localization pipeline"]
+    N31 --> N32
   end
 
   subgraph V12["v1.2: Platform Expansion"]
     direction TB
-    N28["Linux support"]
-    N29["macOS support"]
-    N30["Re-enable D3D11"]
-    N28 --> N29 --> N30
+    N33["Linux support"]
+    N34["macOS support"]
+    N35["Re-enable D3D11"]
+    N33 --> N34 --> N35
   end
 
   V01 --> V02 --> V03 --> V04 --> V05 --> V06 --> V07 --> V08 --> V09 --> V10 --> V11 --> V12
@@ -209,7 +215,7 @@ flowchart LR
   classDef v02 fill:#6B9C8C,stroke:#4a7062,color:#EAF6F1;
   classDef v03 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
   classDef v04 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
-  classDef v05 fill:#FF9F40,stroke:#c97927,color:#2B1400;
+  classDef v05 fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
   classDef v06 fill:#F4C542,stroke:#c99e28,color:#2B2100;
   classDef v07 fill:#F2835C,stroke:#c25f3a,color:#2B0D00;
   classDef v08 fill:#4FB8A8,stroke:#2f8a7c,color:#00201C;
@@ -217,21 +223,19 @@ flowchart LR
   classDef v10 fill:#E8B84F,stroke:#b8872f,color:#2B1D00;
   classDef v11 fill:#8A7CFF,stroke:#6357cc,color:#160B3E;
   classDef v12 fill:#B39DDB,stroke:#8672b0,color:#1F1730;
-  classDef shipped fill:#5C8A7D,stroke:#3f6357,color:#EAF6F1;
 
   class S1,S2,S3 v01
   class S4,S5,S6 v02
   class S7,S8,S9 v03
   class S10,S11,S12 v04
-  class S13 shipped
-  class N14,N15 v05
-  class N16,N17,N18 v06
-  class N19,N20 v07
-  class N21,N22 v08
-  class N23,N24 v09
-  class N25,N26 v10
-  class N27 v11
-  class N28,N29,N30 v12
+  class S13,S14 v05
+  class N15,N16,N17 v06
+  class N18,N19,N20 v07
+  class N21,N22,N23 v08
+  class N24,N25,N26 v09
+  class N27,N28,N29,N30 v10
+  class N31,N32 v11
+  class N33,N34,N35 v12
 ```
 
 ## License
