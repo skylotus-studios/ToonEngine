@@ -9,6 +9,7 @@
 //  Diligent-free like main.cpp: all GPU/backend work stays behind core/rendering/renderer.h.
 //============================================================================
 #include "app/runtime_init.h"
+#include "core/platform/paths.h" // Assets::Init + Assets::Scenes (exe-relative asset paths)
 
 #include <GLFW/glfw3.h>
 
@@ -20,7 +21,11 @@ int main(int argc, char **argv) {
     // Unbuffered stdout so a silent early-init failure still prints (see main.cpp).
     std::cout.setf(std::ios::unitbuf);
 
-    const char *scenePath = (argc > 1) ? argv[1] : TOON_SCENES_DIR "/default.scene";
+    // Resolve the asset root (assets/ next to the exe for a shipped build, else the baked
+    // source tree) before the default scene path below is built from it; see core/platform/paths.h.
+    toon::Assets::Init();
+
+    const std::string scenePath = (argc > 1) ? std::string(argv[1]) : toon::Assets::Scenes() + "/default.scene";
 
     if (!glfwInit()) {
         std::fprintf(stderr, "GLFW init failed\n");
@@ -36,7 +41,7 @@ int main(int argc, char **argv) {
     }
 
     toon::RuntimeState rs;
-    if (!toon::InitRuntime(rs, window, scenePath)) {
+    if (!toon::InitRuntime(rs, window, scenePath.c_str())) {
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;

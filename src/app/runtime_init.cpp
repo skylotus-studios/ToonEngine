@@ -7,6 +7,7 @@
 #include "app/runtime_render.h"
 #include "app/runtime_tick.h"
 #include "core/input/input_system.h"
+#include "core/platform/paths.h" // Assets::Icon (exe-relative asset paths)
 
 #include <GLFW/glfw3.h>
 
@@ -17,7 +18,7 @@ namespace toon {
 
     bool InitRuntime(RuntimeState &rs, GLFWwindow *window, const char *scenePath) {
         rs.window = window;
-        SetWindowIcon(window, TOON_ICON_PATH);
+        SetWindowIcon(window, Assets::Icon().c_str());
 
         if (!rs.renderer.Init(window)) {
             std::fprintf(stderr, "Renderer init failed\n");

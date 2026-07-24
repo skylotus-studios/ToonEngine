@@ -4,6 +4,7 @@
 #include "ui/panels/properties_panel.h"
 
 #include "app/editor_state.h"
+#include "core/platform/paths.h" // Assets::Sprite (exe-relative sprite texture paths)
 
 #include <algorithm>
 #include <cstdio>
@@ -294,9 +295,9 @@ namespace toon {
                             if (ImGui::Button("Load")) {
                                 // srgb=true: a sprite composites into the linear HDR scene
                                 // (Renderer::LoadTexture's own comment), unlike a thumbnail.
-                                // texturePath is relative to TOON_SPRITES_DIR (SpriteTexturePath).
+                                // texturePath is a filename resolved against the sprites/ asset dir (Assets::Sprite).
                                 e.sprite->texture =
-                                    state.runtime.renderer.LoadTexture(SpriteTexturePath(e.sprite->texturePath).c_str(), true);
+                                    state.runtime.renderer.LoadTexture(Assets::Sprite(e.sprite->texturePath).c_str(), true);
                             }
                             if (e.sprite->texture == TextureHandle::Invalid) {
                                 ImGui::TextDisabled("(no texture loaded)");

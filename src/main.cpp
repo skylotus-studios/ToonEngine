@@ -14,6 +14,7 @@
 #include "app/runtime_init.h" // --play: run the standalone runtime instead of the editor
 #include "app/scene_ops.h"
 #include "core/input/input_system.h"
+#include "core/platform/paths.h" // Assets::Init + Assets::Scenes (exe-relative asset paths)
 #include "ui/panels/dockspace.h"
 #include "ui/panels/gizmo_overlay.h"
 #include "ui/panels/menu_bar.h"
@@ -39,11 +40,16 @@ int main(int argc, char **argv) {
     // logging.
     std::cout.setf(std::ios::unitbuf);
 
+    // Resolve the asset root before anything reads a path from it (the default scene below is
+    // the first). Prefers assets/ next to the exe (a packaged build), else the baked source
+    // tree; see core/platform/paths.h.
+    toon::Assets::Init();
+
     // Roadmap #15: `ToonEngine.exe --play [scene]` runs the standalone runtime (no editor
     // chrome) instead of the editor -- a dev convenience that exercises the same code path
     // ToonPlayer.exe ships. Parsed here so the editor path below is untouched.
     const bool runtimeMode = (argc > 1 && std::string(argv[1]) == "--play");
-    const char *runtimeScene = (argc > 2) ? argv[2] : TOON_SCENES_DIR "/default.scene";
+    const std::string runtimeScene = (argc > 2) ? std::string(argv[2]) : toon::Assets::Scenes() + "/default.scene";
 
     if (!glfwInit()) {
         std::fprintf(stderr, "GLFW init failed\n");
@@ -65,7 +71,7 @@ int main(int argc, char **argv) {
 
     if (runtimeMode) {
         toon::RuntimeState rs;
-        if (!toon::InitRuntime(rs, window, runtimeScene)) {
+        if (!toon::InitRuntime(rs, window, runtimeScene.c_str())) {
             glfwDestroyWindow(window);
             glfwTerminate();
             return 1;

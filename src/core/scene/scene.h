@@ -67,7 +67,7 @@ namespace toon {
     };
 
     // A sound emitter carried by an entity (M2.2): the audio seam's SoundDesc vocabulary
-    // (core/audio/audio.h). `clip` is a path under TOON_AUDIO_DIR, same "asset path on the
+    // (core/audio/audio.h). `clip` is a filename under the audio/ asset dir, same "asset path on the
     // component, GPU/audio resource behind a handle" split as Entity::modelPath/model. Autoplay
     // emitters start when a Play/Step session begins (app/audio_glue.cpp's BuildAudioWorld);
     // `handle` is runtime-only state (like RigidBodyComponent::handle above): populated then,
@@ -107,9 +107,9 @@ namespace toon {
     // A flat, textured, alpha-blended quad carried by an entity (roadmap #13: 2D & sprites),
     // drawn transform-oriented (no billboarding) in a separate transparent pass after the
     // opaque toon pass; see Renderer::DrawSprite. Splits data the same way AudioSource above
-    // does: `texturePath` is a FILENAME relative to TOON_SPRITES_DIR (not a full path, unlike
-    // modelPath/AudioSource::clip), serialized; `texture` is the runtime handle rebuilt from
-    // it on load via SpriteTexturePath below (never serialized, harmless to copy as a plain
+    // does: `texturePath` is a FILENAME relative to the sprites/ asset dir (not a full path,
+    // unlike modelPath/AudioSource::clip), serialized; `texture` is the runtime handle rebuilt
+    // from it on load via Assets::Sprite (core/platform/paths.h), never serialized, harmless to copy as a plain
     // id -- same reasoning as AudioSource::handle). `uvRect` is an atlas sub-rect (xy =
     // offset, zw = scale, default the full [0,1] texture); `flipX`/`flipY` mirror it by
     // negating the relevant axis's offset/scale (applied by the app layer before DrawSprite,
@@ -123,13 +123,9 @@ namespace toon {
         bool flipY = false;
     };
 
-    // Resolves a sprite's user-facing texture filename (SpriteComponent::texturePath, what
-    // the Properties panel's Texture field holds and what's saved to a .scene file, e.g.
-    // "icon.png") against TOON_SPRITES_DIR, the one base directory every sprite texture
-    // loads from -- so authoring a sprite never needs a full path typed in by hand.
-    inline std::string SpriteTexturePath(const std::string &relativePath) {
-        return std::string(TOON_SPRITES_DIR) + "/" + relativePath;
-    }
+    // (A sprite's user-facing texture filename -- SpriteComponent::texturePath, e.g. "icon.png"
+    // -- is resolved against the one sprites/ asset directory by Assets::Sprite in
+    // core/platform/paths.h, so authoring a sprite never needs a full path typed in by hand.)
 
     // One node in the scene. It renders either a procedural primitive (`mesh` set) or a loaded
     // glTF model (`model` set); `material` is the primitive's material, or the model's

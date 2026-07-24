@@ -6,6 +6,8 @@
 //============================================================================
 #include "core/rendering/renderer.h"
 
+#include "core/platform/paths.h" // Assets::Shaders (exe-relative shader source dir)
+
 // GLFW with native access: extracting the OS window handle is a backend
 // concern, so it lives behind the seam here. main.cpp includes only plain GLFW.
 // GLFW_INCLUDE_NONE is set engine-wide (CMakeLists.txt), not per-file here, since
@@ -118,13 +120,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-// Absolute path to the HLSL sources, baked in by CMake so the shader stream
-// factory finds them regardless of working directory (dev convenience; a
-// shipped build would copy shaders next to the exe instead).
-#ifndef TOON_SHADERS_DIR
-#define TOON_SHADERS_DIR "assets/shaders"
-#endif
 
 using namespace Diligent;
 
@@ -959,9 +954,10 @@ namespace toon {
         // under assets/shaders, so our own factory alone can't resolve them. The compound
         // factory tries ours first (existing #include "toon_common.hlsli" etc. still resolve
         // exactly as before), falling back to DiligentFX's for names only it has.
-        factory->CreateDefaultShaderSourceStreamFactory(TOON_SHADERS_DIR, &m_impl->shaderFactory);
+        const std::string shadersDir = Assets::Shaders(); // exe-relative (or dev-fallback) HLSL source dir
+        factory->CreateDefaultShaderSourceStreamFactory(shadersDir.c_str(), &m_impl->shaderFactory);
         if (!m_impl->shaderFactory) {
-            std::fprintf(stderr, "Renderer: failed to create shader source factory for '%s'\n", TOON_SHADERS_DIR);
+            std::fprintf(stderr, "Renderer: failed to create shader source factory for '%s'\n", shadersDir.c_str());
             return false;
         }
         m_impl->shaderFactory = CreateCompoundShaderSourceFactory(
@@ -994,7 +990,7 @@ namespace toon {
         // BeginFrame checks shadersDirty once per frame and calls stateCache->Reload() when
         // it's set. Non-recursive: every .hlsl lives flat in this one directory.
         m_impl->shaderListener = std::make_unique<ShaderReloadListener>(m_impl->shadersDirty);
-        m_impl->shaderWatcher.addWatch(TOON_SHADERS_DIR, m_impl->shaderListener.get(), /*recursive=*/false);
+        m_impl->shaderWatcher.addWatch(Assets::Shaders(), m_impl->shaderListener.get(), /*recursive=*/false);
         m_impl->shaderWatcher.watch();
 #endif
 

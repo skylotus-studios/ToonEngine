@@ -120,6 +120,8 @@ endif()
 # ui/panels/ or ImGuizmo. Every core/ TU plus the app/ runtime half (runtime_*, app_state)
 # lives here; the editor-only app/ TUs (editor_*, picking, scene_ops) live in ToonEngine.
 add_library(ToonRuntime STATIC
+    src/core/platform/paths.h         # (header-only interface, listed for IDE visibility)
+    src/core/platform/paths.cpp       # exe-relative asset path resolution (roadmap #16)
     src/core/rendering/renderer.cpp
     src/core/rendering/primitives.cpp
     src/core/scene/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
@@ -277,20 +279,15 @@ target_compile_definitions(ToonRuntime PUBLIC ENGINE_DLL=1)
 # this is Debug-only.
 target_compile_definitions(ToonRuntime PUBLIC $<$<CONFIG:Debug>:TOON_SHADER_HOT_RELOAD>)
 
-# Bake in the absolute path to the HLSL sources so the shader stream factory
-# finds them regardless of the working directory (dev convenience). A shipped
-# build would copy assets/shaders next to the exe and use a relative path. PUBLIC because the
-# executables read some of these too (e.g. main.cpp/player_main.cpp use TOON_SCENES_DIR).
+# Development fallback ONLY: the absolute path to the source-tree assets/ directory. At
+# runtime the engine prefers an assets/ directory sitting next to the exe (a packaged build,
+# staged by the install() rules below) and resolves it there via core/platform/paths.cpp's
+# Assets::Init(), independent of the working directory. This baked path is consulted only when
+# that folder isn't present -- i.e. running straight out of build/<preset>/ during development,
+# where nothing copied assets next to the exe. PUBLIC because both executables link paths.cpp
+# through ToonRuntime.
 target_compile_definitions(ToonRuntime PUBLIC
-    TOON_SHADERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders"
-    TOON_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
-    TOON_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
-    TOON_SPRITES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/sprites"
-    TOON_ICON_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/sprites/icon.png"
-    TOON_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes"
-    TOON_AUDIO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/audio"
-    TOON_INPUT_JSON="${CMAKE_CURRENT_SOURCE_DIR}/assets/input.json"
-    TOON_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets" # asset browser's root (ui/file_browser.h)
+    TOON_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets"
     # core/input/input_device.h needs <GLFW/glfw3.h> (GLFW_RELEASE, GLFWgamepadstate) and is
     # reachable before a TU's own local #define would run. Set engine-wide instead of per-TU so
     # it's correct regardless of #include order.
@@ -300,3 +297,28 @@ target_compile_definitions(ToonRuntime PUBLIC
 # executable so the OS can find and load them at runtime. Both exes need their own copy.
 copy_required_dlls(ToonEngine)
 copy_required_dlls(ToonPlayer)
+
+# --- Packaging (roadmap #16): stage a self-contained, relocatable build ------------------
+# `cmake --install build/<preset> --prefix <dir> --component toonengine` assembles <dir>/ with
+# both exes, the assets/ tree, and the engine DLLs all together. Because the engine resolves
+# assets/ next to the exe at runtime (core/platform/paths.cpp), that staged folder runs from
+# anywhere -- a test dir, another machine, a Steam install -- with no configuration. This is the
+# artifact SteamPipe upload (roadmap #29) and the packaged-build smoke test (#30) build on.
+# install() only records a packing list; it adds nothing to an ordinary `cmake --build`.
+#
+# Every rule is tagged COMPONENT toonengine, and the package step passes `--component
+# toonengine`, so ONLY these three rules run -- the vendored submodules (Diligent, GLFW, efsw)
+# register their own install() rules for headers/static libs/licenses, and without the
+# component filter `cmake --install` would dump all of them into the game folder too.
+install(TARGETS ToonEngine ToonPlayer RUNTIME DESTINATION . COMPONENT toonengine)
+install(DIRECTORY assets/ DESTINATION assets COMPONENT toonengine)
+# The engine's Vulkan/Archiver DLLs are the ones copy_required_dlls already dropped, flat, next
+# to the build exe (Diligent's own helper knows which shared libraries the runtime LoadLibrary's
+# -- $<TARGET_RUNTIME_DLLS> wouldn't catch the dynamically loaded engine DLL, and it needs CMake
+# 3.21 anyway; this repo pins 3.20). Glob those flat *.dll at INSTALL time -- after the build,
+# so they exist, and with no directory recursion, so none of the build tree's subdirectories
+# come along. Captures whichever suffix the config produced (debug _64d / release _64).
+install(CODE "
+    file(GLOB _toon_dlls \"${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/*.dll\")
+    file(INSTALL \${_toon_dlls} DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
+" COMPONENT toonengine)

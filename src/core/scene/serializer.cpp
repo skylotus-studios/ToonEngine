@@ -8,6 +8,7 @@
 //============================================================================
 #include "core/scene/serializer.h"
 
+#include "core/platform/paths.h" // Assets::Sprite (exe-relative sprite texture paths)
 #include "core/rendering/primitives.h"
 #include "core/scene/script.h"
 
@@ -323,7 +324,7 @@ namespace toon {
                                                     mesh.indices.data(), static_cast<uint32_t>(mesh.indices.size()));
                 }
             } else if (key == "model") {
-                ss >> cur->modelPath; // a single token, fine for the baked TOON_MODELS_DIR paths this writes
+                ss >> cur->modelPath; // a single token, fine for the space-free asset paths this writes
                 cur->model = renderer.LoadModel(cur->modelPath.c_str());
             } else if (key == "material.baseColor") {
                 cur->material.baseColor = ParseVec3(ss);
@@ -397,9 +398,9 @@ namespace toon {
                 s.flipY = flipYInt != 0;
                 // srgb=true: a sprite composites into the linear HDR scene (see LoadTexture's
                 // own comment), unlike the asset-browser thumbnails this loader otherwise
-                // serves. texturePath is relative to TOON_SPRITES_DIR (SpriteTexturePath).
+                // serves. texturePath is a filename resolved against the sprites/ asset dir (Assets::Sprite).
                 if (!s.texturePath.empty()) {
-                    s.texture = renderer.LoadTexture(SpriteTexturePath(s.texturePath).c_str(), true);
+                    s.texture = renderer.LoadTexture(Assets::Sprite(s.texturePath).c_str(), true);
                 }
                 cur->sprite = s;
             } else if (key == "script") {

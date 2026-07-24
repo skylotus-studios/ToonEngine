@@ -7,6 +7,7 @@
 #include "core/input/action_map.h"
 #include "core/input/binding_io.h"
 #include "core/input/input_system.h"
+#include "core/platform/paths.h" // Assets::* (exe-relative asset paths)
 #include "core/scene/scripts/spin_script.h"
 
 #include <GLFW/glfw3.h>
@@ -112,7 +113,7 @@ namespace toon {
                 AddSpin(scene, i, {1.0f, 0.0f, 0.0f});
 
                 AudioSource audioSrc;
-                audioSrc.clip = TOON_AUDIO_DIR "/demo_hum.wav";
+                audioSrc.clip = Assets::Audio() + "/demo_hum.wav";
                 audioSrc.volume = 0.6f;
                 audioSrc.loop = true;
                 audioSrc.autoplay = true;
@@ -156,8 +157,8 @@ namespace toon {
                 e.body = RigidBodyComponent{BodyType::Dynamic, 0.6f};
             }
             // Loaded glTF model (DiligentTools' loader): cel-shaded albedo + inverted-hull outline.
-            const char *helmetPath = TOON_MODELS_DIR "/helmet.glb";
-            const ModelHandle helmet = renderer.LoadModel(helmetPath);
+            const std::string helmetPath = Assets::Models() + "/helmet.glb";
+            const ModelHandle helmet = renderer.LoadModel(helmetPath.c_str());
             if (helmet != ModelHandle::Invalid) {
                 const int i = AddEntity(scene, 0, "Helmet");
                 Entity &e = scene.entities[i];
@@ -176,8 +177,8 @@ namespace toon {
             // AnimationComponent is only attached if the file actually exposes a playable
             // clip -- defensive, since this is the first real skinned-model asset this engine
             // has loaded, rather than assuming its content sight-unseen.
-            const char *foxPath = TOON_MODELS_DIR "/fox.glb";
-            const ModelHandle fox = renderer.LoadModel(foxPath);
+            const std::string foxPath = Assets::Models() + "/fox.glb";
+            const ModelHandle fox = renderer.LoadModel(foxPath.c_str());
             if (fox != ModelHandle::Invalid) {
                 const int i = AddEntity(scene, 0, "Fox");
                 Entity &e = scene.entities[i];
@@ -198,8 +199,8 @@ namespace toon {
                     e.animation = anim;
                 }
             }
-            // Sprite (roadmap #13): reuses the window icon (already on disk under
-            // TOON_SPRITES_DIR, which doubles as TOON_ICON_PATH's directory) as a demo
+            // Sprite (roadmap #13): reuses the window icon (already on disk under the sprites/
+            // asset dir, which is also where the window icon lives) as a demo
             // texture rather than adding a new binary asset just for this. Sits above the
             // cube/satellite pair, transform-oriented (identity rotation, no billboard -- the
             // roadmap item's scope): orbiting the camera past its edge visibly thins it to a
@@ -210,8 +211,8 @@ namespace toon {
                 e.transform->position = {-1.4f, 1.6f, 0.0f};
                 e.transform->scale = {1.2f, 1.2f, 1.2f};
                 SpriteComponent sprite;
-                sprite.texturePath = "icon.png"; // relative to TOON_SPRITES_DIR
-                sprite.texture = renderer.LoadTexture(SpriteTexturePath(sprite.texturePath).c_str(), /*srgb=*/true);
+                sprite.texturePath = "icon.png"; // a filename relative to the sprites/ asset dir
+                sprite.texture = renderer.LoadTexture(Assets::Sprite(sprite.texturePath).c_str(), /*srgb=*/true);
                 e.sprite = sprite;
             }
             // Sun: a directional light entity (no mesh/model, so the draw loop's isMesh/isModel
@@ -232,7 +233,7 @@ namespace toon {
 
     bool InitEditor(EditorState &state, GLFWwindow *window) {
         state.runtime.window = window;
-        SetWindowIcon(window, TOON_ICON_PATH);
+        SetWindowIcon(window, Assets::Icon().c_str());
 
         if (!state.runtime.renderer.Init(window)) {
             std::fprintf(stderr, "Renderer init failed\n");
@@ -259,8 +260,9 @@ namespace toon {
         // shape as scene save/load (core/scene/serializer.h).
         Input::RegisterDefaultEditorBindings();
         if (auto *editorBindings = Input::GetContext("editor")) {
-            if (!Input::BindingIO::Load(TOON_INPUT_JSON, *editorBindings)) {
-                Input::BindingIO::Save(TOON_INPUT_JSON, *editorBindings);
+            const std::string inputJson = Assets::InputJson();
+            if (!Input::BindingIO::Load(inputJson.c_str(), *editorBindings)) {
+                Input::BindingIO::Save(inputJson.c_str(), *editorBindings);
             }
         }
 
@@ -284,7 +286,8 @@ namespace toon {
         // created the context, before the first frame) is enough; the glyph texture uploads on
         // first draw. uiScale also drives ApplyTheme's ScaleAllSizes so the whole UI matches DPI.
         glfwGetWindowContentScale(window, &state.uiScale, &state.uiScaleY);
-        ImGui::GetIO().Fonts->AddFontFromFileTTF(TOON_FONTS_DIR "/BaiJamjuree-Medium.ttf", 18.0f * state.uiScale);
+        ImGui::GetIO().Fonts->AddFontFromFileTTF((Assets::Fonts() + "/BaiJamjuree-Medium.ttf").c_str(),
+                                                 18.0f * state.uiScale);
 
         // Merge Font Awesome 6 solid's icon glyphs into that same font (MergeMode stitches them
         // into the range Bai Jamjuree just registered instead of starting a second font), so the
@@ -297,8 +300,8 @@ namespace toon {
         iconFontConfig.PixelSnapH = true;
         iconFontConfig.GlyphMinAdvanceX = 18.0f * state.uiScale;
         static const ImWchar iconRanges[] = {ICON_MIN_FA, ICON_MAX_16_FA, 0};
-        ImGui::GetIO().Fonts->AddFontFromFileTTF(TOON_FONTS_DIR "/fa-solid-900.ttf", 18.0f * state.uiScale,
-                                                 &iconFontConfig, iconRanges);
+        ImGui::GetIO().Fonts->AddFontFromFileTTF((Assets::Fonts() + "/fa-solid-900.ttf").c_str(),
+                                                 18.0f * state.uiScale, &iconFontConfig, iconRanges);
 
         ApplyTheme(state.uiTheme, state.uiScale, window);
 
@@ -319,11 +322,12 @@ namespace toon {
         // Scene serialization (core/scene/serializer.h): path field + Save/Load buttons live in
         // the Settings panel. `sceneStatus` echoes the last op's result in the UI (SaveScene/
         // LoadScene also log to the console) since this dev environment has no reliable console.
-        std::snprintf(state.scenePathBuf, sizeof(state.scenePathBuf), "%s", TOON_SCENES_DIR "/default.scene");
+        std::snprintf(state.scenePathBuf, sizeof(state.scenePathBuf), "%s",
+                      (Assets::Scenes() + "/default.scene").c_str());
 
         // Contents: browses assets/ with thumbnails; passive besides double-click, which
         // main.cpp routes through LoadSceneInto when the activated file is a .scene.
-        InitFileBrowser(state.assetBrowser, TOON_ASSETS_DIR);
+        InitFileBrowser(state.assetBrowser, Assets::Root().c_str());
 
         state.runtime.lastTime = glfwGetTime();
 
