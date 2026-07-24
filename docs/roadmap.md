@@ -8,7 +8,7 @@ non-essential expansion, the tail of the same ranked sequence, not a separate bu
 project's guiding principle is to build on Diligent Engine, not reinvent it.
 
 ```
-Shipped  ███████████████░░░░░░░░░░░░░░░░░░░░  15 / 35 items
+Shipped  ████████████████░░░░░░░░░░░░░░░░░░░  16 / 35 items
 ```
 
 ```mermaid
@@ -55,9 +55,9 @@ flowchart LR
     subgraph V06["v0.6"]
         direction TB
         S15["Game runtime mode"]
-        N16["Asset packaging"]
+        S16["Asset packaging"]
         N17["In-game UI &amp; HUD"]
-        S15 --> N16 --> N17
+        S15 --> S16 --> N17
     end
 
     subgraph V07["v0.7"]
@@ -129,8 +129,8 @@ flowchart LR
     class S7,S8,S9 v03
     class S10,S11,S12 v04
     class S13,S14 v05
-    class N16,N17 v06
-    class S15 shipped
+    class N17 v06
+    class S15,S16 shipped
     class N18,N19,N20 v07
     class N21,N22,N23 v08
     class N24,N25,N26 v09
@@ -193,14 +193,16 @@ flowchart LR
     `CameraComponent` rather than the editor's orbit camera. Loading is a per-frame-drained work
     list, and the grid/collider/mouse-pick overlays moved to the editor-only render path so a
     shipped frame never draws them.
+16. **Asset packaging for a shippable build**: exe-relative asset resolution (a
+    `core/platform/paths` module, `toon::Assets`, resolves `assets/` next to the executable via
+    `GetModuleFileNameW`, falling back to the source tree for dev builds) plus component-scoped
+    CMake `install()` rules that stage the two executables, the `assets/` tree, and the engine
+    DLLs into a relocatable folder, so a standalone build runs outside the dev tree. Writable
+    user data (rebound bindings, saved scenes) stays on the read path for now, deferred to the
+    save system (item 18).
 
 ## What's Next, Most to Least Important
 
-16. **Asset packaging for a shippable build.** Relative shader/asset paths so the engine can
-    ship outside a dev environment. Small and mechanical, but ranked directly behind the
-    runtime rather than down in the release cluster where it used to sit: a runtime whose only
-    verification is "it launches from the dev tree" isn't verified as a game at all, and
-    relative paths are what make a standalone exe testable in the first place.
 17. **In-game UI and HUD, including text rendering.** Player-facing UI primitives (layout and
     anchoring, 9-slice, controller focus navigation) plus text rendering outside ImGui's font
     atlas. Dear ImGui is deliberately not the answer here; its own author's position is that
