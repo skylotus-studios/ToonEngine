@@ -66,6 +66,11 @@ namespace toon {
         // steps, decoupled from the variable render rate, via this accumulator.
         double accumulator = 0.0;
 
+        // Total time the player has spent in-game, advanced each frame the sim is Playing (see
+        // TickRuntime). Persisted by the save system (roadmap #18, app/save_glue.h): New Game
+        // resets it to 0, Continue restores it from the save file.
+        float playtimeSeconds = 0.0f;
+
         // Application lifecycle (roadmap #15, app/app_state.h). In the player, appState drives
         // the frame loop; in the editor it stays Playing and EditorMode decides sim ticking.
         AppState appState = AppState::Boot;

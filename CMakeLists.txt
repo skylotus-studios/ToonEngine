@@ -135,6 +135,8 @@ add_library(ToonRuntime STATIC
     src/core/input/action_map.cpp     # named actions/axes, context stack, default bindings
     src/core/input/binding_io.cpp     # JSON save/load for bindings (assets/input.json)
     src/core/scene/serializer.cpp     # scene save/load (.scene text files)
+    src/core/save/savegame.cpp        # player save/progress file (roadmap #18), distinct from .scene
+    src/app/save_glue.cpp        # bridges SaveGame <-> RuntimeState (MakeSave/ApplySave/QuickSave/QuickLoad)
     src/app/runtime_state.h      # (header-only RuntimeState struct -- the engine half, listed for IDE visibility)
     src/app/app_state.h          # (header-only AppState enum + LoadJob -- listed for IDE visibility)
     src/app/app_state.cpp        # application state machine (Boot/Title/Loading/Playing/Paused/Quit) + LoadJob drain

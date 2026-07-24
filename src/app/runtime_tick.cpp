@@ -47,7 +47,13 @@ namespace toon {
         // wall-clock; stepOnce (the editor's Step) credits exactly one kFixedDt so the SAME loop
         // drains exactly one iteration, no separate single-step path needed.
         const bool runFixedStepsThisFrame = p.advanceSim || p.stepOnce;
-        if (p.advanceSim) { rs.accumulator += frameTime; }
+        if (p.advanceSim) {
+            rs.accumulator += frameTime;
+            // Playtime (roadmap #18): wall-clock spent actually playing, so it only advances with
+            // the sim (advanceSim), not while paused, loading, or at the title. frameTime is the
+            // clamped variable frame delta, which is what a "how long have I played" counter wants.
+            rs.playtimeSeconds += static_cast<float>(frameTime);
+        }
         if (p.stepOnce) { rs.accumulator += kFixedDt; }
         if (runFixedStepsThisFrame) {
             while (rs.accumulator >= kFixedDt) {

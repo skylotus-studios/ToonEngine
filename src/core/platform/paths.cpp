@@ -3,7 +3,9 @@
 //============================================================================
 #include "core/platform/paths.h"
 
+#include <cstdlib> // std::getenv (the non-Windows UserData path)
 #include <filesystem>
+#include <string>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -81,4 +83,63 @@ namespace toon {
         std::string Sprite(const std::string &file) { return g_root + "/sprites/" + file; }
 
     } // namespace Assets
+
+    namespace UserData {
+        namespace {
+
+            // The OS's per-user writable data directory (no app subfolder yet), or an empty path
+            // if it can't be determined. Read from an environment variable rather than
+            // SHGetKnownFolderPath so this TU needs no extra link libraries (Shell32/Ole32) beyond
+            // the windows.h it already uses; LOCALAPPDATA is reliably set for any interactive
+            // Windows session (and for a Steam-launched process). Mirrors ExecutableDir's platform
+            // ladder above: macOS stays a stub until that port lands.
+            std::filesystem::path PlatformDataDir() {
+#if defined(_WIN32)
+                wchar_t buf[MAX_PATH];
+                const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+                if (n == 0 || n >= MAX_PATH) { return {}; } // unset, or longer than the buffer
+                return std::filesystem::path(buf, buf + n);
+#elif defined(__linux__)
+                if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && xdg[0] != '\0') {
+                    return std::filesystem::path(xdg);
+                }
+                if (const char *home = std::getenv("HOME"); home && home[0] != '\0') {
+                    return std::filesystem::path(home) / ".local" / "share";
+                }
+                return {};
+#else
+                return {}; // macOS: filled in when the macOS port lands (see Platform Support)
+#endif
+            }
+
+            // Return `dir` as a string after ensuring it exists, or "" if it couldn't be created.
+            std::string Ensure(const std::filesystem::path &dir) {
+                if (dir.empty()) { return {}; }
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                if (ec) { return {}; }
+                return dir.string();
+            }
+
+        } // namespace
+
+        std::string Root() {
+            const std::filesystem::path base = PlatformDataDir();
+            if (base.empty()) { return {}; }
+            return Ensure(base / "ToonEngine");
+        }
+
+        std::string SaveDir() {
+            const std::string root = Root();
+            if (root.empty()) { return {}; }
+            return Ensure(std::filesystem::path(root) / "saves" / "local");
+        }
+
+        std::string SaveSlot(int slot) {
+            const std::string dir = SaveDir();
+            if (dir.empty()) { return {}; }
+            return dir + "/slot" + std::to_string(slot) + ".save";
+        }
+
+    } // namespace UserData
 } // namespace toon

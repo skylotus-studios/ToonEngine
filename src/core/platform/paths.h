@@ -49,4 +49,32 @@ namespace toon {
         std::string Sprite(const std::string &file);
 
     } // namespace Assets
+
+    // Writable per-user data (roadmap #18), the WRITE-side twin of the read-only Assets tree
+    // above. Assets:: resolves where the game reads its content from; UserData:: resolves where
+    // it writes what the player produces (save files today). The split is deliberate: a shipped
+    // build's assets/ can sit under a read-only install directory (e.g. Program Files), so saves
+    // must go to an OS-blessed per-user location that stays writable regardless. Diligent-free,
+    // same as Assets. Roadmap #16 explicitly deferred introducing this to the save system.
+    namespace UserData {
+
+        // The per-user writable root for this app, created if missing:
+        //   Windows: %LOCALAPPDATA%/ToonEngine  (e.g. C:/Users/<name>/AppData/Local/ToonEngine)
+        //   Linux:   $XDG_DATA_HOME/ToonEngine, or ~/.local/share/ToonEngine
+        //   macOS:   empty for now (stub, like Assets' ExecutableDir; filled when that port lands)
+        // Empty string on failure (query failed, or the dir couldn't be created). Unlike
+        // Assets::Root() there's no Init()/cache: this is called rarely (a save/load), so it just
+        // resolves each time.
+        std::string Root();
+
+        // The directory save files live in: Root()/saves/local, created if missing. The `local`
+        // segment is a deliberate seam for Steam (roadmap #25): it becomes the player's
+        // {64BitSteamID} once Steamworks is wired, at which point Steam Auto-Cloud (partner-site
+        // config, not code) syncs the saves/ subtree per user. Empty string if Root() failed.
+        std::string SaveDir();
+
+        // The path of one numbered save slot: SaveDir()/slotN.save. Empty if SaveDir() failed.
+        std::string SaveSlot(int slot);
+
+    } // namespace UserData
 } // namespace toon

@@ -9,8 +9,10 @@
 #include "app/app_state.h"
 
 #include "app/runtime_state.h"
+#include "app/save_glue.h"          // QuickSave/QuickLoad + kQuickSaveSlot (roadmap #18)
 #include "core/input/input_system.h"
-#include "core/scene/serializer.h" // LoadScene
+#include "core/save/savegame.h"     // SaveExists (title "Continue" affordance)
+#include "core/scene/serializer.h"  // LoadScene
 
 #include <GLFW/glfw3.h> // glfwGetTime (sim-clock reset on entering Playing)
 
@@ -72,6 +74,11 @@ namespace toon {
             case AppState::Paused:
                 rs.resumeTo = prev; // remember where we paused from (normally Playing)
                 rs.audio.PauseAll();
+                // Autosave (roadmap #18): pausing is the natural checkpoint, and it only ever
+                // happens in the player (the editor pins Playing and never calls SetAppState), so
+                // this never fires from the editor. A failed write just logs; it doesn't block the
+                // pause.
+                QuickSave(rs);
                 break;
             case AppState::Quit:
                 break;
@@ -88,8 +95,18 @@ namespace toon {
                 break;
             case AppState::Title:
                 // No text renderer yet (roadmap #17): a bare clear that waits for a keypress.
-                // Enter/Space starts the game; Escape quits.
-                if (Input::WasKeyPressed(Input::Key::Enter) || Input::WasKeyPressed(Input::Key::Space)) {
+                // New Game (N / Enter / Space) starts fresh; Continue (C) loads the save if one
+                // exists; Escape quits. A real title MENU with these as on-screen buttons waits on
+                // the in-game UI (roadmap #17); keyboard-driven is the demonstrable form today.
+                if (Input::WasKeyPressed(Input::Key::C) && SaveExists(kQuickSaveSlot)) {
+                    // Continue: point the loader at the saved scene + restore playtime. If the save
+                    // turned out unreadable (corrupt/newer), fall back to a fresh start rather than
+                    // stalling at the title.
+                    if (!QuickLoad(rs)) { rs.playtimeSeconds = 0.0f; }
+                    SetAppState(rs, AppState::Loading);
+                } else if (Input::WasKeyPressed(Input::Key::N) || Input::WasKeyPressed(Input::Key::Enter) ||
+                           Input::WasKeyPressed(Input::Key::Space)) {
+                    rs.playtimeSeconds = 0.0f; // New Game: fresh progress, keep the default scene
                     SetAppState(rs, AppState::Loading);
                 } else if (Input::WasKeyPressed(Input::Key::Escape)) {
                     SetAppState(rs, AppState::Quit);
@@ -100,8 +117,12 @@ namespace toon {
                 if (rs.loadJob.done >= rs.loadJob.total) { SetAppState(rs, AppState::Playing); }
                 break;
             case AppState::Playing:
-                // Escape pauses. No pause menu to draw until roadmap #17, so Paused is just a
-                // frozen sim for now.
+                // F5 quick-saves (roadmap #18): a manual checkpoint on top of the autosave that
+                // fires on pause. Independent of the Escape->pause below (both can be pressed the
+                // same frame without conflict).
+                if (Input::WasKeyPressed(Input::Key::F5)) { QuickSave(rs); }
+                // Escape pauses (which also autosaves; see SetAppState). No pause menu to draw
+                // until roadmap #17, so Paused is just a frozen sim for now.
                 if (Input::WasKeyPressed(Input::Key::Escape)) { SetAppState(rs, AppState::Paused); }
                 break;
             case AppState::Paused:
