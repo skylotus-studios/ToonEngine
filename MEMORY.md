@@ -901,6 +901,117 @@ feature requested, so every launch since sprites shipped threw a validation erro
 differently-masked targets were invalid per spec. Diligent's D3D and WebGPU factories default
 `IndependentBlend` to enabled; the Vulkan factory leaves it to the app to request.
 
+## Standalone Runtime and App State Machine (Roadmap #15)
+
+The engine can now run a game with **no editor at all**. Before this, `main.cpp` could only
+ever produce the editor (window + Diligent device + ImGui dockspace + seven panels); there was
+no entry path that booted a scene without editor chrome. Diligent's own app framework
+(`NativeAppBase`/`SampleApp`) was rejected as the base: it owns `WinMain`, creates a raw
+`HWND`, and leaks `Diligent::`+Win32 into the app layer. Diligent's `GLFWDemo` game sample
+bypasses that framework and hand-rolls a GLFW loop, which was already ToonEngine's architecture,
+so this builds on the existing seam rather than adopting a foreign one.
+
+**The split is one struct and three functions, not a rewrite.** `RuntimeState`
+(`app/runtime_state.h`) holds the engine half (renderer, physics/audio worlds, scene, camera,
+render style, sky, the app lifecycle); `EditorState` (`app/editor_state.h`) now *embeds* one and
+keeps only editor fields (panels, gizmo, themes, the Play/Stop snapshot). `core/` never includes
+`editor_state.h`, so the engine layer was already runtime-clean; the churn was a mechanical
+`.runtime.` hop at every editor reference to a moved field. The monolithic `TickEditor` and
+`RenderFrame` split into a shared half plus an editor wrapper: `RuntimeBeginFrame` + `TickRuntime`
+(`app/runtime_tick.cpp`, the fixed-step sim + audio + camera/post/light push) and `RenderScene`
+(`app/runtime_render.cpp`, shadow/sky/opaque/sprite/resolve). `TickEditor` wraps them with camera
+nav + ImGui capture gating; `RenderFrame` calls `RenderScene` then adds the editor-only trailers.
+
+**`AppState` is a flat enum + one funnel, deliberately a separate axis from `EditorMode`.**
+`enum class AppState { Boot, Title, Loading, Playing, Paused, Quit }` with every transition
+routed through `SetAppState` (`app/app_state.cpp`), which holds the enter/exit side effects (a
+state can't be entered without them). No `default:` arm, so `-Wswitch` enumerates obligations
+when the enum grows. `resumeTo` is a one-deep stack (Paused returns to whatever it paused from)
+written as a single field, not a state stack, which no surveyed engine uses for pause. The
+editor never calls `SetAppState`: it drives its sim through its own `EditorMode` (Playing/Step)
+and leaves `appState` at `Boot`. Merging the two axes is how a flat enum collapses
+(`Playing_InEditor_Paused_ButLoading`); they answer different questions (what the app shows vs.
+whether the editor's sim ticks).
+
+**The Loading state's sim-clock reset is load-bearing, not cosmetic.** `LoadJob` is a
+per-frame-drained work list (one scene today, roadmap #19 grows it); the loop returns to the
+frame every chunk so the window stays responsive and Quit stays honorable. On entering `Playing`,
+`SetAppState` resets `lastTime = glfwGetTime()` and zeros `accumulator`. Without this, a load
+that blocks within a frame yields a huge `frameTime` next frame; the existing 0.25s clamp in
+`RuntimeBeginFrame` caps it, but 0.25s is still 15 fixed ticks -- a visible physics lurch on the
+first playing frame that would get blamed on Jolt. The clamp guards a single stall; the reset
+guards the transition. The runtime loop decides `advanceSim` on the state at frame *start*, so
+the Loading->Playing transition frame doesn't also advance the sim with that frame's stale delta.
+
+**Gameplay camera is a `CameraComponent` on `Entity`, a structural twin of `LightComponent`.**
+Eye = the entity's world position, look = its local +Z in world space (the *same* aim convention
+`GetActiveLight` uses; a camera entity is aimed with the gizmo like a light). It holds only
+projection params (`fovY`/`nearZ`/`farZ`/`orthographic`/`orthoHeight`/`primary`) -- the pose comes
+from `worldMatrix`, never duplicated -- so parenting a camera entity under a player entity is a
+follow rig with zero new machinery. `GetActiveCamera` (scene.cpp, next to `GetActiveLight`)
+derives the orbit `Camera`'s yaw/pitch by **inverting** `SetCamera`'s own basis: there
+`RotationY(yaw)*RotationX(pitch)` makes the look direction
+`forward = (-cos(pitch)sin(yaw), sin(pitch), cos(pitch)cos(yaw))`, so `pitch = asin(fwd.y)`,
+`yaw = atan2(-fwd.x, fwd.z)`. Derived from those Diligent matrices and verified against
+`SetEditorMode2D`'s yaw=pi/pitch=0 -> `(0,0,-1)` anchor rather than guessed. Roll is dropped (the
+orbit camera has none). The runtime's audio listener follows this gameplay camera, not the
+editor camera the player doesn't have -- a silent break if missed, since positional audio just
+dies with no error.
+
+**Two executables from one static library.** `ToonRuntime` (STATIC) holds all `core/` plus the
+runtime app TUs (`runtime_*`, `app_state`); `ToonEngine` links it + the editor-only TUs
+(`editor_*`, `picking`, `scene_ops`, `ui/panels/`, ImGuizmo); `ToonPlayer` links *only*
+`ToonRuntime`, so the linker strips the editor by reachability (verified: `ToonPlayer.exe` links
+with no undefined `ui/panels/` symbol, ~0.5 MB smaller). Every usage requirement (includes,
+defines, Diligent/GLFW/Jolt links) moved onto `ToonRuntime` as PUBLIC so both exes inherit it.
+`ToonEngine.exe --play [scene]` is a dev-convenience runtime path that exercises the same loop
+`ToonPlayer` ships. The one residual seam leak: `renderer.cpp` (in the lib) calls
+`ImGui_ImplGlfw_*`, so `imgui_impl_glfw.cpp` sits in `ToonRuntime` and the player drags ImGui in
+through that one TU -- but it never calls `InitUI`, and `ShutdownUI` guards on `!m_impl->imgui`,
+so no ImGui frame is ever built. Splitting that TU out is a separate item.
+
+Gotchas worth keeping: the mouse-pick **marker boxes** were previously ungated and would have
+rendered in a shipped frame; moving them into the editor-only `RenderFrame` is the fix. The
+player has **no demo scene** (`SeedDemoScene` is editor-only), so `ToonPlayer.exe` with no args
+loads `pendingScenePath` (default `assets/scenes/default.scene`); if that file doesn't exist yet
+it renders an empty scene + sky rather than crashing. Deferred (flagged, not done): moving the
+editor-tuning floats (`lookSensitivity` etc.) off `toon::Camera` into an `EditorCameraRig` --
+cosmetic, the renderer already ignores them, and it belongs with the pose/view split. Native C++
+gameplay scripting only (see [[feedback_casey_muratori_plain_data_architecture]]); no Lua.
+
+## Asset Packaging and Exe-Relative Paths (Roadmap #16)
+
+Every asset directory used to be a compile-time absolute macro (`TOON_SHADERS_DIR`,
+`TOON_MODELS_DIR`, ... nine of them) baked from `${CMAKE_CURRENT_SOURCE_DIR}/assets/...`,
+welding the build machine's path into the binary so a copied exe found nothing. Now
+`core/platform/paths.{h,cpp}` (`toon::Assets`, plain free functions, Diligent-free) resolves
+one asset root at startup: `<exe_dir>/assets` if it exists (a packaged build), else the
+source-tree path CMake still bakes as the single `TOON_ASSET_ROOT` fallback. One binary serves
+both -- run from `build/<preset>/` in dev (no asset copy), or from a staged folder anywhere --
+with no call-site branching. `Assets::Init()` runs first thing in `main`/`player_main`, before
+the default-scene path is built from `Assets::Scenes()`. Exe dir comes from `GetModuleFileNameW`
+(Win32); `/proc/self/exe` and `_NSGetExecutablePath` branches are stubbed for the planned
+platforms. Diligent has path utilities (`BasicFileSystem::SplitPath`/`SimplifyPath`) but no
+public get-exe-dir helper, so that piece is hand-written.
+
+Packaging is CMake `install()` rules tagged `COMPONENT toonengine`: `cmake --install
+build/<preset> --prefix <dir> --component toonengine` stages the two exes, `assets/`, and the
+engine DLLs into a relocatable folder. Two gotchas the component + a glob solve: without
+`--component`, `cmake --install` also runs every vendored submodule's own install rules
+(Diligent/GLFW/efsw headers, static libs, licenses) into the game folder; and installing the
+DLLs via `install(DIRECTORY <build>/ FILES_MATCHING "*.dll")` recreates the whole build tree's
+subdirectory structure as empty dirs, so the DLLs instead come from an install-time
+`file(GLOB)` of the flat `*.dll` next to the build exe (whatever `copy_required_dlls` placed
+there, debug `_64d` / release `_64`). Verified by moving the source `assets/` aside and running
+`ToonPlayer` from the staged folder: shaders still compiled, proving exe-relative resolution,
+not the fallback.
+
+Not done / deferred: writable user data (rebound `input.json`, saved `.scene` files) still
+resolves to the (possibly read-only) asset path; redirecting it to a per-user dir belongs with
+the save system (#18, which owns the Steam cloud path). The `windows-release` preset fails to
+build from clean for an unrelated reason (clang-cl rejects `/GL` in Diligent's third-party
+SPIRV-Tools); #16 was verified under `windows-debug`, and the install rules are config-agnostic.
+
 ## Scene Graph (Phase B)
 
 `core/scene.{h,cpp}`: an entity tree replacing `main.cpp`'s hardcoded array. `Scene` is a
@@ -2302,4 +2413,9 @@ purely for when someone explicitly asks for the full history behind something.
   removed in favor of ranking everything directly; `ToonEngineOld/` deleted, all three
   tracked ports having shipped (see "ToonEngineOld: Carry-Over Reference").
 - **2026-07-23**: 2D editor mode (#14, see "2D editor mode"); the planned Lua scripting layer
-  dropped from the roadmap entirely, gameplay staying native C++ (user decision).
+  dropped from the roadmap entirely, gameplay staying native C++ (user decision); standalone
+  runtime + app state machine (#15, see "Standalone runtime and app state machine"): RuntimeState
+  split out of EditorState, an AppState machine, a CameraComponent, and a ToonRuntime library
+  feeding editor + chrome-free ToonPlayer executables; asset packaging + exe-relative paths
+  (#16, see "Asset Packaging and Exe-Relative Paths"): a `core/platform/paths` module resolving
+  assets next to the exe with a dev-tree fallback, plus component-scoped `install()` packaging.
