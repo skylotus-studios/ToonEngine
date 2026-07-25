@@ -4,6 +4,7 @@
 #include "app/runtime_tick.h"
 
 #include "app/physics_glue.h" // DispatchContactEvents
+#include "app/session.h"      // SceneFadeLevel (roadmap #19)
 #include "core/audio/audio.h"
 #include "core/camera/camera.h"
 #include "core/input/input_system.h"
@@ -109,6 +110,14 @@ namespace toon {
                 if (rs.runScripts) { DispatchContactEvents(rs.physicsWorld, rs.scene, rs.bodyToEntity); }
 
                 rs.accumulator -= kFixedDt;
+
+                // A script or contact hook asked for a level change this tick (roadmap #19).
+                // The tick above still completed in full, so the sim state stays consistent;
+                // what stops is the CATCH-UP loop, which would otherwise keep simulating a
+                // level that is about to be destroyed -- letting the player fall out of the
+                // world, or re-trigger the same door, in the frames before the swap. The swap
+                // itself never happens here; TickSceneTransition performs it outside this loop.
+                if (HasPendingSceneChange(rs.scene)) { break; }
             }
         }
 
@@ -146,8 +155,18 @@ namespace toon {
 
         // Push post params + camera + light: SetCamera reads post.taa to decide the TAA jitter,
         // and the shadow cascade pre-pass (RenderScene) needs the camera + light already set.
+        //
+        // A level transition's fade rides the tone-map resolve that already ships: exposure is a
+        // plain linear multiplier applied before tone mapping (assets/shaders/tonemap.hlsl's
+        // `hdr *= g_Exposure`), so scaling it to zero fades the entire HDR scene, sky included,
+        // to black with no overlay draw, no blend pipeline, and no new shader. It's applied to a
+        // COPY so the user's authored post.exposure is never overwritten -- the same
+        // overlay-a-global-onto-a-per-draw-copy shape RenderFrame already uses for Material and
+        // the shared style.
         rs.post.suppressTemporalHistory = p.suppressTemporalHistory;
-        rs.renderer.SetPostParams(rs.post);
+        PostParams framePost = rs.post;
+        framePost.exposure *= SceneFadeLevel(rs.transition);
+        rs.renderer.SetPostParams(framePost);
         rs.renderer.SetCamera(rs.camera);
 
         // Light: driven by the scene's first light entity (aimed via its rotation), falling back

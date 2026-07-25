@@ -48,6 +48,12 @@ namespace toon {
         // live in core/scene/scene.h.
         std::string Sprite(const std::string &file);
 
+        // A single scene by its user-facing filename (e.g. "level_two.scene"), resolved against
+        // Scenes(). The twin of Sprite() above, and for the same reason: a level transition
+        // (roadmap #19) names its destination by FILENAME in the .scene file, so an authored
+        // level never bakes in a build-machine path and still resolves inside a packaged build.
+        std::string Scene(const std::string &file);
+
     } // namespace Assets
 
     // Writable per-user data (roadmap #18), the WRITE-side twin of the read-only Assets tree

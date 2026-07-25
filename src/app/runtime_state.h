@@ -13,6 +13,7 @@
 //  EditorState&, so the ToonPlayer target can link them and nothing else.
 //============================================================================
 #include "app/app_state.h"
+#include "app/session.h" // SceneTransition (roadmap #19)
 #include "core/audio/audio.h"
 #include "core/physics/physics.h"
 #include "core/rendering/renderer.h" // Renderer, Camera, Material, PostParams, Color
@@ -79,8 +80,16 @@ namespace toon {
         AppState resumeTo = AppState::Playing;
         // The current loading work list (drained while appState == Loading).
         LoadJob loadJob;
-        // The scene the loader should bring up (seeded when entering Loading).
+        // The scene the loader should bring up (seeded when entering Loading). Also the answer
+        // to "which level am I in": a level transition rewrites it on commit, and MakeSave
+        // (app/save_glue.h) records it, so a save always names the level actually being played.
         std::string pendingScenePath;
+
+        // The in-flight level change, if any (roadmap #19, app/session.h). A separate axis from
+        // both AppState and EditorMode: it lives here rather than as AppState values so the
+        // editor -- which never sets AppState -- gets transitions on the same code path the
+        // player does.
+        SceneTransition transition;
 
         // In-game UI (roadmap #17): the Fleury box cache + its MSDF font, driven by RenderHUD
         // (app/runtime_ui.h) each frame after RenderScene. The font loads lazily on the first

@@ -204,7 +204,33 @@ namespace toon {
     struct Scene {
         std::vector<Entity> entities;
         int selected = -1; // index into entities; -1 = none (editor selection)
+
+        // A gameplay script's request to replace this whole scene with another (roadmap #19).
+        // Runtime-only, never serialized -- the same treatment `selected` above already gets.
+        // Written by RequestSceneChange below and drained at a frame boundary by app/session.h's
+        // TickSceneTransition; NEVER acted on where it's set. Empty = nothing pending.
+        std::string requestedScenePath;
     };
+
+    // --- Scene change requests (roadmap #19) --------------------------------------
+    // The one route gameplay code has to ask for a level change. A Script only ever receives
+    // `Entity &self` and `Scene &scene` (core/scene/script.h) -- there is no context pointer or
+    // service locator, deliberately -- so the request rides on the Scene a script already holds.
+    //
+    // Requesting and performing are split because a script runs INSIDE UpdateScripts' walk of
+    // `entities`: swapping the scene there would free the very entity whose OnUpdate is still on
+    // the stack, leaving `self` dangling as execution returns into engine code. Godot defers
+    // change_scene_to_file for exactly this reason ("it may still be executing code"); Unreal's
+    // OpenLevel likewise only sets a travel URL that the next tick acts on. The same split also
+    // makes the request safe from OnCollision*, which fires while Jolt still owns every body.
+
+    // Ask for `path` to replace this scene. Last writer wins if called twice in one tick; a null
+    // or empty path clears any pending request.
+    void RequestSceneChange(Scene &scene, const char *path);
+
+    // True if a scene change is pending. Read by the fixed-step loop (to stop simulating a scene
+    // that's about to be destroyed) and by TickSceneTransition (to start the swap).
+    bool HasPendingSceneChange(const Scene &scene);
 
     // Ensure a root exists at index 0 (parent = -1, no transform). Call once, before adding
     // entities; existing entities are shifted down and re-parented to the new root.

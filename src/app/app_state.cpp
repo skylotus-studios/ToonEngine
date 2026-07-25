@@ -10,6 +10,7 @@
 
 #include "app/runtime_state.h"
 #include "app/save_glue.h"          // QuickSave/QuickLoad + kQuickSaveSlot (roadmap #18)
+#include "app/session.h"            // BeginSession/EndSession + BeginFadeIn (roadmap #19)
 #include "core/input/input_system.h"
 #include "core/save/savegame.h"     // SaveExists (title "Continue" affordance)
 #include "core/scene/serializer.h"  // LoadScene
@@ -31,7 +32,9 @@ namespace toon {
                     // The core loader (not the editor's LoadSceneInto wrapper): fills the scene +
                     // a fallback camera. The gameplay camera (Part 7's GetActiveCamera) overrides
                     // the view per frame once Playing, if the scene has a primary CameraComponent.
-                    LoadScene(asset.scenePath.c_str(), rs.scene, rs.camera, rs.renderer);
+                    if (!LoadScene(asset.scenePath.c_str(), rs.scene, rs.camera, rs.renderer)) {
+                        job.failed = true; // Loading falls back to the title rather than to nothing
+                    }
                 }
                 ++job.done;
             }
@@ -55,6 +58,10 @@ namespace toon {
             case AppState::Title:
                 break;
             case AppState::Loading:
+                // Whatever session was live is over: release its scripts, sounds, and bodies in
+                // dependency order before the scene under them is replaced (roadmap #19). A no-op
+                // on the first boot, where there's nothing loaded yet.
+                EndSession(rs);
                 // Seed the work list with the scene to bring up. Today one item; the drain loop
                 // and progress denominator already handle an N-item queue for roadmap #19.
                 rs.loadJob = LoadJob{};
@@ -114,7 +121,21 @@ namespace toon {
                 break;
             case AppState::Loading:
                 DrainLoadJob(rs);
-                if (rs.loadJob.done >= rs.loadJob.total) { SetAppState(rs, AppState::Playing); }
+                if (rs.loadJob.done >= rs.loadJob.total) {
+                    if (rs.loadJob.failed) {
+                        // Nothing usable came up. Back to the title rather than into an empty
+                        // world the player can neither play nor escape.
+                        SetAppState(rs, AppState::Title);
+                    } else {
+                        // Build the world the player half never built before roadmap #19: fire
+                        // OnCreate, seed the Jolt bodies, start the autoplay emitters. Runs
+                        // BEFORE the Playing transition so its sim-clock reset covers this work
+                        // too, not just the file load above.
+                        BeginSession(rs);
+                        BeginFadeIn(rs.transition); // appear rather than cut in hard
+                        SetAppState(rs, AppState::Playing);
+                    }
+                }
                 break;
             case AppState::Playing:
                 // F5 quick-saves (roadmap #18): a manual checkpoint on top of the autosave that

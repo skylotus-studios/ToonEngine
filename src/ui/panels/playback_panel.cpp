@@ -3,10 +3,9 @@
 //============================================================================
 #include "ui/panels/playback_panel.h"
 
-#include "app/audio_glue.h"
 #include "app/editor_state.h"
-#include "app/physics_glue.h"
 #include "app/save_glue.h"       // QuickSave/QuickLoad + kQuickSaveSlot (roadmap #18 dev buttons)
+#include "app/session.h"         // BeginSession/EndSession + CancelSceneTransition (roadmap #19)
 #include "app/scene_ops.h"       // LoadSceneInto (Load Game brings the saved scene up)
 #include "core/save/savegame.h"  // SaveExists (gate the Load button)
 
@@ -50,10 +49,7 @@ namespace toon {
                     state.sceneBackup = state.runtime.scene; // snapshot: Stop restores exactly this
                     state.mode = EditorMode::Playing;
                     state.runtime.accumulator = 0.0;
-                    CreateScripts(state.runtime.scene); // fire OnCreate once, entering this Play session
-                    BuildPhysicsWorld(state.runtime.physicsWorld, state.runtime.scene,
-                                      state.runtime.bodyToEntity);     // seed bodies from collider-bearing entities
-                    BuildAudioWorld(state.runtime.audio, state.runtime.scene); // start autoplay emitters
+                    BeginSession(state.runtime); // OnCreate + Jolt bodies + autoplay emitters
                 } else if (state.mode == EditorMode::Playing) {
                     state.mode = EditorMode::Paused;
                     state.runtime.audio.PauseAll();
@@ -70,11 +66,8 @@ namespace toon {
                     state.sceneBackup = state.runtime.scene;
                     state.mode = EditorMode::Paused; // step lands paused, not playing
                     state.runtime.accumulator = 0.0;
-                    CreateScripts(state.runtime.scene); // fire OnCreate once, entering this Play session
-                    BuildPhysicsWorld(state.runtime.physicsWorld, state.runtime.scene,
-                                      state.runtime.bodyToEntity);     // seed bodies from collider-bearing entities
-                    BuildAudioWorld(state.runtime.audio, state.runtime.scene); // start autoplay emitters
-                    state.runtime.audio.PauseAll();                    // step lands paused -- freeze right after starting
+                    BeginSession(state.runtime);    // OnCreate + Jolt bodies + autoplay emitters
+                    state.runtime.audio.PauseAll(); // step lands paused -- freeze right after starting
                 }
                 state.stepRequested = true;
                 state.suppressNextFrameHistory = true; // one tick's worth of pose jump, not smooth motion
@@ -84,9 +77,11 @@ namespace toon {
             ImGui::BeginDisabled(state.mode == EditorMode::Editing); // nothing to stop yet
             if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, btnW))) {
                 stopPreview();
-                state.runtime.physicsWorld.Clear();      // release this session's bodies before the scene reverts
-                state.runtime.bodyToEntity.clear();      // this session's contact-event lookup, same reason
-                state.runtime.audio.StopAll();           // release this session's sounds before the scene reverts
+                // Abandon any in-flight level transition first: the scene is about to revert to
+                // the pre-Play snapshot, so a FadeOut still counting down would otherwise finish
+                // afterward and load its target over the scene being authored again.
+                CancelSceneTransition(state.runtime.transition);
+                EndSession(state.runtime);               // OnDestroy, then this session's sounds, then its bodies
                 state.runtime.scene = state.sceneBackup; // discard everything Play did -- see the panel comment above
                 state.mode = EditorMode::Editing;
                 state.runtime.accumulator = 0.0;

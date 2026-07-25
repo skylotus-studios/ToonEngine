@@ -221,18 +221,18 @@ namespace toon {
         return true;
     }
 
-    bool LoadScene(const char *path, Scene &scene, Camera &camera, Renderer &renderer) {
+    bool LoadSceneData(const char *path, Scene &out, Camera &outCamera, Renderer &renderer) {
         std::ifstream f(path);
         if (!f.is_open()) {
             std::fprintf(stderr, "Failed to load scene: %s\n", path);
             return false;
         }
 
-        // Parse into a side buffer and only replace `scene`/`camera` once the whole file is
-        // read. A malformed file then leaves the caller's current scene untouched, matching
+        // Parse into a side buffer and only fill `out`/`outCamera` once the whole file is
+        // read. A malformed file then leaves the caller's destination untouched, matching
         // this function's documented failure contract.
         Scene loaded;
-        Camera loadedCamera = camera;
+        Camera loadedCamera = outCamera;
         Entity *cur = nullptr;
         std::string line;
 
@@ -418,11 +418,25 @@ namespace toon {
 
         EnsureSceneRoot(loaded); // defensive: a hand-edited file might omit the root entity
         loaded.selected = -1;
+        loaded.requestedScenePath.clear(); // a freshly-loaded scene never arrives mid-transition
+
+        out = std::move(loaded);
+        outCamera = loadedCamera;
+
+        std::printf("Scene loaded: %s (%zu entities)\n", path, out.entities.size());
+        return true;
+    }
+
+    bool LoadScene(const char *path, Scene &scene, Camera &camera, Renderer &renderer) {
+        // Parse into a local first so a failure leaves `scene`/`camera` untouched (LoadSceneData
+        // guarantees that for its own out-params too; this just keeps the two entry points'
+        // contracts identical rather than relying on that from a distance).
+        Scene loaded;
+        Camera loadedCamera = camera;
+        if (!LoadSceneData(path, loaded, loadedCamera, renderer)) { return false; }
 
         scene = std::move(loaded);
         camera = loadedCamera;
-
-        std::printf("Scene loaded: %s (%zu entities)\n", path, scene.entities.size());
         return true;
     }
 

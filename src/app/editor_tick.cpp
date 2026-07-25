@@ -10,6 +10,7 @@
 
 #include "app/editor_state.h"
 #include "app/runtime_tick.h"
+#include "app/session.h" // TickSceneTransition + the sim/history gates (roadmap #19)
 #include "core/camera/camera.h"
 #include "core/input/action_map.h"
 #include "core/input/input_system.h"
@@ -74,13 +75,20 @@ namespace toon {
             }
         }
 
+        // Level transitions (roadmap #19), on the same code path the player uses -- testing one
+        // shouldn't mean building and launching ToonPlayer. Skipped in Editing: only a ticking
+        // script can request a transition, and a scene the user is authoring must never be
+        // swapped out from under them. Runs before TickRuntime so this frame's post params carry
+        // the fade level it just advanced.
+        if (state.mode != EditorMode::Editing) { TickSceneTransition(rt, frameTime); }
+
         // Sim + presentation. The editor gates the sim through its own EditorMode (Playing feeds
         // wall-clock; Step credits exactly one fixed step); rs.camera was just navved above, so
         // TickRuntime uses it as-is (cameraFromScene stays false -- that's the player's path).
         SimTickParams sim;
-        sim.advanceSim = (state.mode == EditorMode::Playing);
+        sim.advanceSim = (state.mode == EditorMode::Playing) && !SceneTransitionBlocksSim(rt.transition);
         sim.stepOnce = state.stepRequested;
-        sim.suppressTemporalHistory = suppressTemporalHistory;
+        sim.suppressTemporalHistory = suppressTemporalHistory || SceneTransitionSuppressesHistory(rt.transition);
         state.stepRequested = false; // consumed
         TickRuntime(rt, frameTime, sim);
     }

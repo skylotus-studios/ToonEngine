@@ -81,6 +81,7 @@ namespace toon {
         std::string InputJson() { return g_root + "/input.json"; }
 
         std::string Sprite(const std::string &file) { return g_root + "/sprites/" + file; }
+        std::string Scene(const std::string &file) { return g_root + "/scenes/" + file; }
 
     } // namespace Assets
 

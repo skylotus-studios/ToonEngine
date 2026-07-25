@@ -6,6 +6,8 @@
 #include "app/app_state.h"
 #include "app/runtime_render.h"
 #include "app/runtime_tick.h"
+#include "app/session.h" // TickSceneTransition + EndSession (roadmap #19)
+#include "core/scene/scripts/builtin_scripts.h" // RegisterBuiltinScripts
 #include "app/runtime_ui.h" // RenderHUD (roadmap #17: the in-game HUD/menu)
 #include "core/input/input_system.h"
 #include "core/platform/paths.h" // Assets::Icon (exe-relative asset paths)
@@ -18,6 +20,12 @@
 namespace toon {
 
     bool InitRuntime(RuntimeState &rs, GLFWwindow *window, const char *scenePath) {
+        // Before anything can load a scene: the name -> factory registry has to know the script
+        // types this build ships with, and nothing else populates it (see builtin_scripts.h --
+        // the self-registering statics this replaced were being dropped by the linker, which is
+        // why a shipped player silently ran no scripts at all).
+        RegisterBuiltinScripts();
+
         rs.window = window;
         SetWindowIcon(window, Assets::Icon().c_str());
 
@@ -66,11 +74,17 @@ namespace toon {
             const bool wasPlaying = (rs.appState == AppState::Playing);
             TickAppState(rs);
 
+            // Level transitions (roadmap #19): the one point in the frame where the scene vector
+            // may be replaced -- outside the fixed-step loop and outside every script, physics,
+            // and audio callback. Runs before TickRuntime so this frame's post params carry the
+            // fade level it just advanced.
+            TickSceneTransition(rs, frameTime);
+
             SimTickParams sim;
-            sim.advanceSim = wasPlaying;
+            sim.advanceSim = wasPlaying && !SceneTransitionBlocksSim(rs.transition);
             sim.stepOnce = false;
             sim.cameraFromScene = (rs.appState == AppState::Playing);
-            sim.suppressTemporalHistory = false;
+            sim.suppressTemporalHistory = SceneTransitionSuppressesHistory(rs.transition);
             TickRuntime(rs, frameTime, sim);
 
             RenderScene(rs);
@@ -80,6 +94,11 @@ namespace toon {
     }
 
     void ShutdownRuntime(RuntimeState &rs) {
+        // Close out the live session first, so a script's OnDestroy still runs on a normal quit
+        // (the hook's contract is "fires once when the session ends", and exiting the game ends
+        // it) and so the bodies/sounds are released in dependency order rather than by whatever
+        // order the destructors below happen to run in.
+        EndSession(rs);
         Input::Shutdown();
         rs.physicsWorld.Shutdown();
         rs.renderer.Shutdown(); // ShutdownUI inside is a no-op: InitUI was never called

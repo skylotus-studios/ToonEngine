@@ -33,6 +33,11 @@ namespace toon {
         std::vector<PendingAsset> queue;
         std::size_t done = 0;
         std::size_t total = 0;
+        // Set by the drain if any item failed to load. Before roadmap #19 the loader's return
+        // value was discarded outright, so a missing or malformed scene was indistinguishable
+        // from a good one and the game dropped into an empty world; now Loading falls back to
+        // the title screen instead.
+        bool failed = false;
     };
 
     // The one transition funnel: every AppState change goes through here, so a state can never

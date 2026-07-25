@@ -8,6 +8,7 @@
 #include "core/input/binding_io.h"
 #include "core/input/input_system.h"
 #include "core/platform/paths.h" // Assets::* (exe-relative asset paths)
+#include "core/scene/scripts/builtin_scripts.h" // RegisterBuiltinScripts
 #include "core/scene/scripts/spin_script.h"
 
 #include <GLFW/glfw3.h>
@@ -232,6 +233,12 @@ namespace toon {
     } // namespace
 
     bool InitEditor(EditorState &state, GLFWwindow *window) {
+        // Populate the script name -> factory registry before any scene can be loaded; see
+        // core/scene/scripts/builtin_scripts.h. The editor got away without this only because
+        // SeedDemoScene below happens to construct a SpinScript directly, which is what kept the
+        // linker from discarding that one TU.
+        RegisterBuiltinScripts();
+
         state.runtime.window = window;
         SetWindowIcon(window, Assets::Icon().c_str());
 

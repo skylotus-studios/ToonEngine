@@ -136,6 +136,8 @@ add_library(ToonRuntime STATIC
     src/core/audio/miniaudio_impl.cpp   # compiles miniaudio.h's implementation (once)
     src/core/scene/script.cpp         # native script registry + per-tick dispatch (M1.3)
     src/core/scene/scripts/spin_script.cpp   # first concrete Script (replaces the old spin block)
+    src/core/scene/scripts/level_exit_script.cpp # collision-triggered level change (roadmap #19)
+    src/core/scene/scripts/builtin_scripts.cpp   # explicit registration of every built-in script
     src/core/camera/camera.cpp         # editor camera controls (uses Diligent float4x4 for the basis)
     src/core/input/input_system.cpp   # GLFW device polling + capture gate + callback wiring
     src/core/input/action_map.cpp     # named actions/axes, context stack, default bindings
@@ -153,6 +155,8 @@ add_library(ToonRuntime STATIC
     src/app/runtime_init.cpp     # runtime bring-up/teardown + the main loop (no ImGui)
     src/app/physics_glue.cpp     # collider-extent scaling + physics-world (re)construction
     src/app/audio_glue.cpp       # audio-world (re)construction from AudioSource-bearing entities
+    src/app/session.h            # (header-only interface, listed for IDE visibility)
+    src/app/session.cpp          # gameplay session + scene-transition lifecycle (roadmap #19)
     # renderer.cpp calls ImGui_ImplGlfw_* (InitUI/BeginUI/EndUI): the GLFW backend TU lives here
     # so the runtime resolves those symbols. The player links it but simply never calls InitUI,
     # so no ImGui frame is ever built (the one residual seam the plan notes, splitting it out is

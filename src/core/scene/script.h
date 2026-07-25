@@ -38,8 +38,12 @@ namespace toon {
 
         virtual void OnCreate(Entity &self, Scene &scene) {}
         virtual void OnUpdate(Entity &self, Scene &scene, float dt) {}
-        // Declared for API symmetry (matches Unity/Hazel naming); not wired to fire in
-        // M1.3: there's no mid-Play entity spawn/destroy yet for it to signal.
+        // Fires once when the session this script belongs to ends: the editor's Stop, or a level
+        // transition tearing the scene down (roadmap #19, app/session.h's EndSession). Runs
+        // FIRST in that teardown, while the physics bodies and sound handles a script might want
+        // to touch on the way out are all still valid; audio and physics are released after every
+        // OnDestroy has returned. Still not a per-entity destroy hook -- nothing spawns or
+        // destroys a single entity mid-Play yet.
         virtual void OnDestroy(Entity &self, Scene &scene) {}
 
         // Physics contact hooks (roadmap #9), driven by a Jolt ContactListener
@@ -68,8 +72,12 @@ namespace toon {
 
     // Register a native script type under a stable name, so a saved scene or an
     // in-memory Entity clone can reconstruct the right subclass from just that name.
-    // Call once per script type; see core/scene/scripts/spin_script.cpp's self-registering
-    // static for the pattern every future script follows.
+    // Call once per script type, from core/scene/scripts/builtin_scripts.cpp's
+    // RegisterBuiltinScripts -- explicitly, NOT from a self-registering static in the script's
+    // own TU. Every script lives in the ToonRuntime static library, and a linker drops a library
+    // object file that nothing references, taking the static initializer (and the registration)
+    // with it. See builtin_scripts.h for the full story; adding a script means adding a line
+    // there.
     void RegisterScript(const std::string &name, ScriptFactory factory);
 
     // Construct a script instance by its registered name. Returns nullptr (and logs to
@@ -91,9 +99,16 @@ namespace toon {
         std::unique_ptr<Script> instance;
     };
 
-    // Call once, in entity order, when a Play session begins (see main.cpp's Playback
-    // panel), before any OnUpdate this session.
+    // Call once, in entity order, when a Play session begins (app/session.h's BeginSession),
+    // before any OnUpdate this session.
     void CreateScripts(Scene &scene);
+
+    // The twin of CreateScripts: call once, in entity order, when a session ends
+    // (app/session.h's EndSession), firing every attached script's OnDestroy. Leaves the script
+    // instances themselves alive -- the caller decides whether the scene is being replaced (a
+    // level transition, so they die with it) or restored from a snapshot (the editor's Stop),
+    // and neither case wants this function guessing.
+    void DestroyScripts(Scene &scene);
 
     // Call once per fixed sim tick (see main.cpp's frame loop), after SnapshotSimState
     // and before UpdateWorldTransforms.

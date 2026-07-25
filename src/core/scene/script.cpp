@@ -65,4 +65,12 @@ namespace toon {
         }
     }
 
+    void DestroyScripts(Scene &scene) {
+        for (Entity &e : scene.entities) {
+            for (ScriptComponent &sc : e.scripts) {
+                if (sc.instance) { sc.instance->OnDestroy(e, scene); }
+            }
+        }
+    }
+
 } // namespace toon

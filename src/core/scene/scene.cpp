@@ -385,6 +385,12 @@ namespace toon {
         return false;
     }
 
+    // --- Scene change requests (roadmap #19) ------------------------------------
+
+    void RequestSceneChange(Scene &scene, const char *path) { scene.requestedScenePath = path ? path : ""; }
+
+    bool HasPendingSceneChange(const Scene &scene) { return !scene.requestedScenePath.empty(); }
+
     // --- Hierarchy mutations ----------------------------------------------------
 
     bool IsAncestorOrSelf(const Scene &scene, int idx, int maybeAncestor) {
