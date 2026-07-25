@@ -1007,10 +1007,145 @@ there, debug `_64d` / release `_64`). Verified by moving the source `assets/` as
 not the fallback.
 
 Not done / deferred: writable user data (rebound `input.json`, saved `.scene` files) still
-resolves to the (possibly read-only) asset path; redirecting it to a per-user dir belongs with
-the save system (#18, which owns the Steam cloud path). The `windows-release` preset fails to
-build from clean for an unrelated reason (clang-cl rejects `/GL` in Diligent's third-party
-SPIRV-Tools); #16 was verified under `windows-debug`, and the install rules are config-agnostic.
+resolves to the (possibly read-only) asset path. The save system (#17) since introduced the
+`toon::UserData` per-user writable dir (see "Player Save System"); migrating `input.json` and
+`.scene` onto it is still deferred. The `windows-release` preset fails to build from clean for
+an unrelated reason (clang-cl rejects `/GL` in Diligent's third-party SPIRV-Tools); #16 was
+verified under `windows-debug`, and the install rules are config-agnostic.
+
+## Player Save System (Roadmap #17)
+
+Player-progress persistence, deliberately NOT a scene dump. `core/scene/serializer.*` saves the
+authored level; this saves what a player did in a running game -- the split Unreal (USaveGame),
+Unity (a JsonUtility struct), and Godot (ConfigFile) all draw. Writing the live scene to disk
+(the editor's in-memory Play/Stop `sceneBackup`) would weld every save to the authored layout,
+so a level patch would break existing saves, and would store everything untouched to record the
+few things a player changed.
+
+Scope was "minimal plumbing" (user decision at plan time): build the whole save MACHINE around
+a near-empty payload, defer the real schema until there's a game to fill it. `core/save/
+savegame.{h,cpp}` is a `SaveGame` struct (version, `scenePath`, `playtimeSeconds`, and an opaque
+game-owned `gameBlob`) plus `WriteSave`/`ReadSave`/`SaveExists`/`DeleteSave`, plain free
+functions, Diligent-free, hand-rolled line-based text like the scene serializer. The file opens
+in BINARY mode because the trailing `gameBlob` is a length-prefixed raw-byte section and Windows
+`\r\n` translation would desync it from its stored count. `ReadSave` rejects a version newer than
+`kSaveVersion` and parses into a side buffer, assigning `out` only on full success (the same
+failure contract as `LoadScene`). The real schema (inventory/unlocks/checkpoints) grows into
+`gameBlob` later as a data change, not a rearchitecture.
+
+Writable path: a new `toon::UserData` namespace in `core/platform/paths` (the write-side twin of
+the read-only `Assets` tree #16 built), resolving `%LOCALAPPDATA%/ToonEngine/saves/local` via the
+`LOCALAPPDATA` env var rather than `SHGetKnownFolderPath` (avoids linking Shell32/Ole32; the env
+var is reliably set for any interactive or Steam-launched session). An installed build's `assets/`
+can sit under a read-only Program Files dir, so saves must go to an OS-blessed per-user location
+instead. The `local` segment is the seam for Steam: it becomes `{64BitSteamID}` once Steamworks
+(#26) lands, at which point Steam Cloud saves (#29) sync the `saves/` subtree
+per user. This is the writable-user-data path #16 explicitly deferred here.
+
+Runtime wiring: `RuntimeState.playtimeSeconds` advances only while Playing; `app/save_glue.*`
+(`MakeSave`/`ApplySave`/`QuickSave`/`QuickLoad`) bridges `SaveGame` and `RuntimeState`. The
+player's Title screen gained New Game (N/Enter/Space) vs Continue (C, shown only when a save
+exists, falling back to a fresh start on a corrupt read), F5 quick-save, and autosave on entering
+Paused. A save/load MENU waits on the in-game UI (#18), so today's flow is keyboard + stdout. The
+editor's Playback panel got dev Save/Load buttons over the same glue (Load gated to Editing, so a
+mid-Play swap can't strand the physics/audio worlds). Verified with a standalone harness against
+the real `savegame` + `paths` TUs (no Diligent/GLFW): the path resolves under `%LOCALAPPDATA%`, a
+scene path with spaces and a binary blob with a null byte and newline round-trip exactly, a
+version-99 file is rejected leaving `out` untouched, and delete/missing paths fail cleanly.
+
+## In-Game UI, HUD, and MSDF Text (Roadmap #18)
+
+The player-facing UI -- a HUD plus title/loading/pause menus -- deliberately NOT Dear ImGui (its
+author scopes it to dev/debug tools, not skinnable end-user UI, and the shipped `ToonPlayer` never
+calls `InitUI`, so it has no ImGui at all). Built as Ryan Fleury's **immediate-mode API over a
+persistent, per-frame-pruned box cache keyed by hashed IDs** -- one unified system for HUD and
+menus (every real commercial/OSS engine unifies; the two-tier immediate-HUD/retained-menu split
+nothing ships was considered and rejected), chosen over all-retained and over adopting RmlUi/MyGUI
+because it is plain-data (arrays + hash tables, no widget-object graph) and matches the engine's
+Casey-Muratori grain. Pieces:
+
+- **`core/ui/ui.{h,cpp}`**: `UIContext` -- an `unordered_map<UIKey,UIBox>` cache (node addresses
+  stay stable across inserts, so the rebuilt-each-frame tree links are safe), keyed by FNV-1a(id)
+  mixed with the parent key, pruned by build index; the semantic-size layout solve
+  (`Pixels`/`TextContent`/`PercentOfParent`/`ChildrenSum`, via standalone -> upward -> downward ->
+  violations -> positions passes); `UISignal` hover/press/click hit-tested against LAST frame's
+  cached rect (the immediate-over-cache trick) + `hotT`/`activeT` easing; directional focus nav
+  (`navKey` + `NavPick` scoring, confirm-as-click); floating/anchor boxes (`UIAnchor`);
+  parent/style stacks.
+- **`core/ui/text.{h,cpp}`**: MSDF font load (atlas PNG via `LoadTexture` + msdf-atlas-gen JSON
+  metrics via the vendored nlohmann) + measure/layout to glyph quads; `AppendRect`/
+  `AppendRoundRect`/`AppendTexQuad`/`AppendNineSlice` batch builders.
+- **`core/ui/strings.{h,cpp}`**: the string-key table -- a `StrId` enum, `Text(StrId)`, and a
+  `key = value` `LoadStrings`. Every player-facing literal routes through `Text()`, so localization
+  (#34) is a data change; `assets/ui/strings.txt` is the seam (loaded at startup, hot-reloaded).
+- **Renderer seam**: `Renderer::DrawUI` draws a `UIVertex` screen-space quad batch AFTER `EndScene`
+  onto the resolved back buffer (same slot/contract as `DrawWireframe`/`DrawGrid`/ImGui; PSO cloned
+  from the sprite/wireframe pattern). One shader `assets/shaders/ui.hlsl`, four modes: solid; MSDF
+  text (median-of-3 + `fwidth` screen-px-range); rounded rect + SDF border (Inigo-Quilez
+  `SdRoundBox`); textured quad (9-slice).
+- **`app/runtime_ui.{h,cpp}`**: `RenderHUD(rs, UIScreen)` -- the shared driver called from both the
+  player loop and editor play-in-editor -- builds Title/Loading/Playing/Pause and drives
+  `SetAppState`/`BeginNewGame`/`BeginContinue`, replacing the `app_state.cpp` Title/Pause stubs.
+
+**The MTSDF atlas is a bootstrap.** `msdf-atlas-gen` isn't installed in the dev env, and PIL (which
+is) can't extract glyph outlines for true multi-channel SDF, so `tools/gen_ui_font.py` bakes a
+single-channel SDF (PIL + a numpy Euclidean distance transform) replicated across RGB into the
+msdf-atlas-gen JSON schema. The C++/shader are FINAL -- dropping in a real `msdf-atlas-gen -type
+mtsdf` atlas at `assets/fonts/ui/ui_font.{png,json}` is a pure asset swap (the median shader
+consumes both).
+
+**Two durable gotchas.** (1) With combined texture samplers, a texture sampled only in the PIXEL
+shader (`g_UIAtlas`) is ALSO surfaced in the VERTEX shader's resource signature -- declare it for
+`SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL` in the PSO Variables + ImmutableSamplers AND bind it for
+both stages in `DrawUI`, or the draw fails validation ("no resource bound to g_UIAtlas in ui VS")
+and is silently skipped. (2) `UI_Render` batches per-texture (9-slice panels vs the font atlas),
+flushing on a texture change, so it issues several `DrawUI` calls/frame, each `DISCARD`-mapping the
+WHOLE dynamic VB; a big `kMaxUIVertices` (65536 x the 68-byte vertex) exhausted Diligent's per-frame
+dynamic heap and crashed the player -- keep it modest (16384). Hot-reload of the UI strings/font/
+panel texture is Debug-only mtime polling in `RenderHUD` (the `ui.hlsl` shader itself already
+hot-reloads via #10); immediate mode makes it trivial -- the next frame's rebuild uses the new data
+with no retained state to reconcile.
+
+## Scene and Level Transitions (Roadmap #19)
+
+Level changes requested from gameplay code, not the editor's File menu, releasing the live scene's
+scripts/physics/audio in order and fading over the load. Two parts, both in `app/session.{h,cpp}`
+(runtime-side: `RuntimeState&`, no ImGui, so `ToonPlayer` links it):
+
+**Session lifetime.** `BeginSession` brings the loaded scene to life (fire `OnCreate`, build the
+Jolt world from collider-bearing entities, start autoplay emitters); `EndSession` tears it down in
+dependency order -- scripts' `OnDestroy` FIRST (while the bodies/sounds they might touch are still
+valid), then audio (`StopAll` + clear `AudioSource::handle`, since miniaudio owns a real OS thread),
+then physics LAST (`PhysicsWorld::Clear` + the body-to-entity map + `RigidBodyComponent::handle`; a
+contact callback into a half-destroyed script is the hazard step 1 avoids). These existed only as
+loose statements in `ui/panels/playback_panel.cpp` -- an editor-only TU -- which is why **a shipped
+`ToonPlayer` ran no scripts, built no bodies, and started no audio** before this; extracting them
+fixed the player as a side effect and is what makes a transition expressible (a transition IS
+`EndSession` + load + `BeginSession`). `EndSession` deliberately leaves `scene.entities` alone (the
+caller picks replace-vs-restore, so it serves both a level swap and the editor's Stop).
+
+**The transition.** A `SceneTransition` on `RuntimeState`, kept OFF `AppState` on purpose (that enum
+is flat and answers "what is the app showing"; fade phases are sub-states, and living on
+RuntimeState is what gives the EDITOR transitions for free). `TickSceneTransition` runs once per
+frame AFTER the prologue and BEFORE `TickRuntime` -- the one "known-safe point" outside the
+fixed-step loop and every script/physics/audio callback, so the scene vector is replaced HERE and
+nowhere else (structural edits reorder `Scene::entities`, so a mid-tick swap from a script would
+crash). Swap order makes a bad load harmless: the incoming level parses/uploads into a side buffer
+FIRST, and only on success is the outgoing level torn down; a bad path logs, reverses the fade, and
+keeps the current level. The fade is `FadeOut -> (instant swap) -> FadeIn` with NO overlay/blend
+pipeline/new shader: `SceneFadeLevel` multiplies a COPY of `PostParams::exposure`, riding the
+tone-map resolve that already ships (`tonemap.hlsl`'s `hdr *= g_Exposure`) and never overwriting the
+authored exposure. FadeOut blocks the sim; FadeIn lets it run (the new level moves as it appears);
+temporal history is suppressed across the whole fade (the previous level's TAA/SSAO history is
+meaningless in the new one). `BeginFadeIn` (no preceding FadeOut) hides the first, likely-uneven
+frame of a boot load.
+
+**Deferred (durable gotcha).** `EndSession` does NOT free the outgoing level's `MeshHandle`/
+`ModelHandle`/sprite `TextureHandle`: `Renderer` has no `DestroyMesh`/`DestroyModel`, and the
+editor's Stop shares handles with its `sceneBackup` (a naive free would double-free on revert). So a
+transition LEAKS the outgoing level's GPU memory, bounded by (levels visited x level size) per run.
+The load-path cache + reference counting that make this correct are roadmap #21, scoped to replace
+any half-measure built now.
 
 ## Scene Graph (Phase B)
 
@@ -2419,3 +2554,17 @@ purely for when someone explicitly asks for the full history behind something.
   feeding editor + chrome-free ToonPlayer executables; asset packaging + exe-relative paths
   (#16, see "Asset Packaging and Exe-Relative Paths"): a `core/platform/paths` module resolving
   assets next to the exe with a dev-tree fallback, plus component-scoped `install()` packaging.
+- **2026-07-24**: player save/progress system (#17, see "Player Save System"): a `core/save/
+  savegame` module + a `toon::UserData` writable-path resolver (`%LOCALAPPDATA%/.../saves/local`,
+  the seam for Steam's `{64BitSteamID}`), player New Game/Continue + F5/autosave, and editor
+  Playback dev Save/Load buttons; minimal-plumbing scope with the real schema deferred to an
+  opaque blob.
+- **2026-07-25**: in-game UI, HUD, and MSDF text (#18, see "In-Game UI, HUD, and MSDF Text"): a
+  Fleury immediate-over-cache box system, a bootstrap MTSDF text renderer, a screen-space `DrawUI`
+  primitive, and a shared `RenderHUD` driving Title/Loading/Playing/Pause menus for the player +
+  editor, with string-keys (the #34 seam), rounded-rect + 9-slice panels, and Debug-only UI
+  hot-reload. Scene and level transitions (#19, see "Scene and Level Transitions"): `BeginSession`/
+  `EndSession` extracted from the editor's Playback panel (which fixed the shipped player running no
+  scripts, physics, or audio), plus a `SceneTransition` fade riding the tone-map exposure and a
+  safe-point scene swap; the outgoing level's GPU handles leak, deferred to the resource manager
+  (#21).
