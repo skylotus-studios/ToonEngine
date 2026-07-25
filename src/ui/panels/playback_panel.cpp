@@ -6,8 +6,13 @@
 #include "app/audio_glue.h"
 #include "app/editor_state.h"
 #include "app/physics_glue.h"
+#include "app/save_glue.h"       // QuickSave/QuickLoad + kQuickSaveSlot (roadmap #18 dev buttons)
+#include "app/scene_ops.h"       // LoadSceneInto (Load Game brings the saved scene up)
+#include "core/save/savegame.h"  // SaveExists (gate the Load button)
 
 #include "IconsFontAwesome6.h"
+
+#include <cstdio> // std::snprintf (status echo + reflecting the loaded path)
 
 namespace toon {
 
@@ -86,6 +91,36 @@ namespace toon {
                 state.mode = EditorMode::Editing;
                 state.runtime.accumulator = 0.0;
                 state.suppressNextFrameHistory = true;
+            }
+            ImGui::EndDisabled();
+
+            // Dev Save/Load (roadmap #18): exercises the same save glue the player's title
+            // New Game/Continue + F5 flow uses, from inside the editor. The editor's "current
+            // scene" is scenePathBuf (pendingScenePath is a runtime-only field the editor never
+            // fills), so point the save at that; Load then reloads whatever scene the save named.
+            ImGui::Separator();
+            const float halfW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+            if (ImGui::Button(ICON_FA_FLOPPY_DISK " Save Game", ImVec2(halfW, 0.0f))) {
+                state.runtime.pendingScenePath = state.scenePathBuf; // what a save should point back at
+                state.sceneStatus = QuickSave(state.runtime) ? "Game saved (slot 0)"
+                                                             : "Save failed (no writable location)";
+            }
+            ImGui::SameLine();
+            // Load reloads the scene, so restrict it to Editing (a mid-Play swap would strand the
+            // physics/audio worlds built for the running session), and only when a save exists.
+            ImGui::BeginDisabled(state.mode != EditorMode::Editing || !SaveExists(kQuickSaveSlot));
+            if (ImGui::Button(ICON_FA_FOLDER_OPEN " Load Game", ImVec2(halfW, 0.0f))) {
+                if (QuickLoad(state.runtime)) {
+                    // QuickLoad set pendingScenePath + playtime; bring that scene up in the editor.
+                    if (!state.runtime.pendingScenePath.empty()) {
+                        std::snprintf(state.scenePathBuf, sizeof(state.scenePathBuf), "%s",
+                                      state.runtime.pendingScenePath.c_str());
+                        LoadSceneInto(state, state.runtime.pendingScenePath.c_str());
+                    }
+                    state.sceneStatus = "Game loaded (slot 0)";
+                } else {
+                    state.sceneStatus = "No save to load";
+                }
             }
             ImGui::EndDisabled();
         }
