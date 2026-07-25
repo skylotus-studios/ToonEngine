@@ -285,11 +285,13 @@ namespace toon {
     // (Capsule, the largest, is ~200) with headroom to spare.
     static constexpr Uint32 kMaxWireframeVertices = 1024;
 
-    // In-game UI overlay (roadmap #17): a fixed-capacity dynamic vertex buffer remapped per
-    // DrawUI call, holding one frame's tessellated UI (6 verts per quad). 65536 verts is
-    // ~10.9k quads, comfortably above a dense HUD + menu's glyph + panel count; DrawUI clamps
-    // and warns past it, the same as DrawWireframe.
-    static constexpr Uint32 kMaxUIVertices = 65536;
+    // In-game UI overlay (roadmap #17): a fixed-capacity dynamic vertex buffer remapped per DrawUI
+    // call. Each map DISCARDs the WHOLE buffer from the per-frame dynamic heap, and UI_Render can
+    // issue several DrawUI calls per frame (one per texture -- 9-slice panels vs the font atlas), so
+    // keep the buffer modest: 16384 verts = ~2.7k quads per batch, ample for a HUD/menu, without
+    // exhausting the dynamic heap (a 68-byte vertex x 65536 x several maps/frame did). DrawUI clamps
+    // + warns past it, like DrawWireframe.
+    static constexpr Uint32 kMaxUIVertices = 16384;
 
     // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
     // (five row-major float4x4 rows + five float4 rows = 400 bytes, 16-aligned).

@@ -62,4 +62,16 @@ namespace toon {
     void AppendRoundRect(std::vector<UIVertex> &out, float x, float y, float w, float h, float cornerRadius,
                          float border, const Vec4 &fill, const Vec4 &borderColor);
 
+    // Append a single textured quad (mode 3): sample [u0,v0]..[u1,v1] of the DrawUI-bound texture
+    // over pixels [x,x+w) x [y,y+h), multiplied by `tint`.
+    void AppendTexQuad(std::vector<UIVertex> &out, float x, float y, float w, float h, float u0, float v0,
+                       float u1, float v1, const Vec4 &tint);
+
+    // Append a 9-slice of a (texW x texH) texture, its source split by pixel `insets` (l,t,r,b) into
+    // a 3x3 grid -- corners fixed, edges stretched one axis, center both -- filling pixels
+    // [x,x+w) x [y,y+h), tinted by `tint`. Emits 9 textured quads (mode 3); the caller binds the
+    // texture for the batch (see UI_Render's per-texture batching).
+    void AppendNineSlice(std::vector<UIVertex> &out, float x, float y, float w, float h, float texW,
+                         float texH, const Vec4 &insets, const Vec4 &tint);
+
 } // namespace toon

@@ -7,7 +7,7 @@
 //  overlay uses. Positions arrive in PIXELS (top-left origin) and are mapped to NDC here, so the
 //  UI layer above the seam (core/ui/) works purely in pixels.
 //
-//  One vertex stream carries three primitive kinds, chosen per-vertex by Mode:
+//  One vertex stream carries four primitive kinds, chosen per-vertex by Mode:
 //    0 -- solid fill: emit Color.
 //    1 -- MSDF text: sample a multi-channel signed-distance-field atlas; the median of the three
 //         channels reconstructs the glyph edge (sharp corners a single-channel SDF would round),
@@ -15,6 +15,7 @@
 //    2 -- rounded rect + SDF border: a rounded-box signed distance drives an antialiased fill
 //         (Color) with an inner border stroke (BorderColor); Params = (halfW, halfH, radius,
 //         borderThickness) and UV = the pixel offset from the rect center.
+//    3 -- textured quad (9-slice panels/images): sample the bound texture at UV, times Color.
 //============================================================================
 cbuffer Constants
 {
@@ -97,16 +98,23 @@ float4 PSMain(VSOut i) : SV_Target
         return float4(i.Color.rgb, i.Color.a * coverage);
     }
 
-    // Rounded rect + SDF border. UV is the pixel offset from the rect center, so fwidth gives a
-    // ~1px antialiased edge regardless of size.
-    float2 halfSize = i.Params.xy;
-    float radius = i.Params.z;
-    float border = i.Params.w;
-    float d = SdRoundBox(i.UV, halfSize, radius);
-    float aa = max(fwidth(d), 1e-4) * 0.7;
-    float outer = 1.0 - smoothstep(-aa, aa, d);                     // coverage of the whole shape
-    float inner = 1.0 - smoothstep(-border - aa, -border + aa, d); // coverage of the fill (inside the border ring)
-    float3 rgb = lerp(i.BorderColor.rgb, i.Color.rgb, inner);
-    float alpha = outer * lerp(i.BorderColor.a, i.Color.a, inner);
-    return float4(rgb, alpha);
+    if (i.Mode < 2.5)
+    {
+        // Rounded rect + SDF border. UV is the pixel offset from the rect center, so fwidth gives a
+        // ~1px antialiased edge regardless of size.
+        float2 halfSize = i.Params.xy;
+        float radius = i.Params.z;
+        float border = i.Params.w;
+        float d = SdRoundBox(i.UV, halfSize, radius);
+        float aa = max(fwidth(d), 1e-4) * 0.7;
+        float outer = 1.0 - smoothstep(-aa, aa, d);                     // coverage of the whole shape
+        float inner = 1.0 - smoothstep(-border - aa, -border + aa, d); // coverage of the fill (inside the border)
+        float3 rgb = lerp(i.BorderColor.rgb, i.Color.rgb, inner);
+        float alpha = outer * lerp(i.BorderColor.a, i.Color.a, inner);
+        return float4(rgb, alpha);
+    }
+
+    // Mode 3: plain textured quad (9-slice panels / images), tinted by Color. UV is a 0..1 texture
+    // coord; the texture's own alpha (e.g. a panel frame's transparent corners) drives the blend.
+    return g_UIAtlas.Sample(g_UIAtlas_sampler, i.UV) * i.Color;
 }

@@ -154,4 +154,37 @@ namespace toon {
         out.push_back(bl);
     }
 
+    void AppendTexQuad(std::vector<UIVertex> &out, float x, float y, float w, float h, float u0, float v0,
+                       float u1, float v1, const Vec4 &tint) {
+        const UIVertex tl{{x, y}, {u0, v0}, tint, 3.0f};
+        const UIVertex tr{{x + w, y}, {u1, v0}, tint, 3.0f};
+        const UIVertex br{{x + w, y + h}, {u1, v1}, tint, 3.0f};
+        const UIVertex bl{{x, y + h}, {u0, v1}, tint, 3.0f};
+        out.push_back(tl);
+        out.push_back(tr);
+        out.push_back(br);
+        out.push_back(tl);
+        out.push_back(br);
+        out.push_back(bl);
+    }
+
+    void AppendNineSlice(std::vector<UIVertex> &out, float x, float y, float w, float h, float texW,
+                         float texH, const Vec4 &insets, const Vec4 &tint) {
+        if (texW <= 0.0f || texH <= 0.0f) { return; }
+        const float il = insets.x, it = insets.y, ir = insets.z, ib = insets.w;
+        // Target column/row edges (px) and the matching source-UV edges (0..1).
+        const float xs[4] = {x, x + il, x + w - ir, x + w};
+        const float ys[4] = {y, y + it, y + h - ib, y + h};
+        const float us[4] = {0.0f, il / texW, 1.0f - ir / texW, 1.0f};
+        const float vs[4] = {0.0f, it / texH, 1.0f - ib / texH, 1.0f};
+        for (int col = 0; col < 3; ++col) {
+            for (int row = 0; row < 3; ++row) {
+                const float qw = xs[col + 1] - xs[col];
+                const float qh = ys[row + 1] - ys[row];
+                if (qw <= 0.0f || qh <= 0.0f) { continue; } // a target smaller than its insets: skip the cell
+                AppendTexQuad(out, xs[col], ys[row], qw, qh, us[col], vs[row], us[col + 1], vs[row + 1], tint);
+            }
+        }
+    }
+
 } // namespace toon

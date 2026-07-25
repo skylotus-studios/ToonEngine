@@ -14,10 +14,71 @@
 #include <GLFW/glfw3.h> // glfwGetWindowSize / glfwGetFramebufferSize
 
 #include <cstdio>
+#include <filesystem> // UI asset hot-reload (Debug)
 
 namespace toon {
 
     namespace {
+
+        // The 9-slice menu-panel frame (assets/sprites/9slice.png), loaded once by RenderHUD.
+        // TextureHandle::Invalid until then, and MenuPanel falls back to a procedural rounded rect.
+        TextureHandle g_panelTex = TextureHandle::Invalid;
+
+#ifdef TOON_SHADER_HOT_RELOAD
+        // Records `path`'s mtime into `out`; returns false if it can't be stat'd.
+        bool FileMTime(const std::string &path, std::filesystem::file_time_type &out) {
+            std::error_code ec;
+            out = std::filesystem::last_write_time(path, ec);
+            return !ec;
+        }
+
+        // Poll the UI asset files each frame; reload on an mtime change. Immediate mode makes this
+        // trivial -- the next frame's rebuild just uses the new strings/font/texture, with no
+        // retained UI state to reconcile. Debug-only (same gate + rationale as the shader hot-reload,
+        // roadmap #10); ui.hlsl itself already hot-reloads through that shader watcher, so it isn't
+        // polled here.
+        void PollUIHotReload(RuntimeState &rs) {
+            const std::string stringsPath = Assets::Root() + "/ui/strings.txt";
+            const std::string fontJson = Assets::Fonts() + "/ui/ui_font.json";
+            const std::string fontPng = Assets::Fonts() + "/ui/ui_font.png";
+            const std::string panelPng = Assets::Sprites() + "/9slice.png";
+
+            static std::filesystem::file_time_type tStrings, tFontJson, tFontPng, tPanel;
+            static bool seeded = false;
+            if (!seeded) { // first call: record baselines so nothing "reloads" on frame one
+                seeded = true;
+                FileMTime(stringsPath, tStrings);
+                FileMTime(fontJson, tFontJson);
+                FileMTime(fontPng, tFontPng);
+                FileMTime(panelPng, tPanel);
+                return;
+            }
+
+            std::filesystem::file_time_type t;
+            if (FileMTime(stringsPath, t) && t != tStrings) {
+                tStrings = t;
+                LoadStrings(stringsPath.c_str());
+            }
+            bool fontChanged = false;
+            if (FileMTime(fontJson, t) && t != tFontJson) {
+                tFontJson = t;
+                fontChanged = true;
+            }
+            if (FileMTime(fontPng, t) && t != tFontPng) {
+                tFontPng = t;
+                fontChanged = true;
+            }
+            if (fontChanged) {
+                if (rs.uiFont.atlas != TextureHandle::Invalid) { rs.renderer.DestroyTexture(rs.uiFont.atlas); }
+                rs.uiFont = LoadFont(rs.renderer, fontJson.c_str(), fontPng.c_str());
+            }
+            if (FileMTime(panelPng, t) && t != tPanel) {
+                tPanel = t;
+                if (g_panelTex != TextureHandle::Invalid) { rs.renderer.DestroyTexture(g_panelTex); }
+                g_panelTex = rs.renderer.LoadTexture(panelPng.c_str(), /*srgb=*/false);
+            }
+        }
+#endif
 
         // Gather this frame's UI input from Input:: (raw/ungated -- the runtime has no ImGui). GLFW
         // reports the cursor in WINDOW pixels; scale to FRAMEBUFFER pixels (the space the UI lays
@@ -78,14 +139,20 @@ namespace toon {
             return UI_SignalFromBox(ui, b);
         }
 
-        // A dark, translucent, screen-centered menu panel. The caller pushes it as parent + fills it.
+        // A screen-centered menu panel: the 9-slice frame texture if it loaded, else a procedural
+        // dark rounded rect. The caller pushes it as parent + fills it.
         UIBox *MenuPanel(UIContext &ui, const char *id) {
             UIBox *panel = UI_Panel(ui, id);
             UI_Anchor(panel, UIAnchor::Center);
-            panel->padding = 22.0f;
-            panel->bgColor = {0.05f, 0.06f, 0.09f, 0.92f};
-            panel->borderColor = {0.30f, 0.34f, 0.42f, 1.0f};
-            panel->borderThickness = 2.0f;
+            panel->padding = 28.0f; // inset content past the frame's rounded border
+            if (g_panelTex != TextureHandle::Invalid) {
+                UI_NineSlice(panel, g_panelTex, {44.0f, 44.0f, 44.0f, 44.0f});
+                panel->bgColor = {1.0f, 1.0f, 1.0f, 1.0f}; // untinted: show the frame as authored
+            } else {
+                panel->bgColor = {0.05f, 0.06f, 0.09f, 0.92f};
+                panel->borderColor = {0.30f, 0.34f, 0.42f, 1.0f};
+                panel->borderThickness = 2.0f;
+            }
             return panel;
         }
 
@@ -205,8 +272,14 @@ namespace toon {
             rs.uiFontLoaded = true;
             rs.uiFont = LoadFont(rs.renderer, (Assets::Fonts() + "/ui/ui_font.json").c_str(),
                                  (Assets::Fonts() + "/ui/ui_font.png").c_str());
+            g_panelTex = rs.renderer.LoadTexture((Assets::Sprites() + "/9slice.png").c_str(), /*srgb=*/false);
+            LoadStrings((Assets::Root() + "/ui/strings.txt").c_str()); // external table overrides code defaults
         }
         if (!rs.uiFont.valid()) { return; }
+
+#ifdef TOON_SHADER_HOT_RELOAD
+        PollUIHotReload(rs); // Debug-only: live-reload UI strings/font/panel texture on file save
+#endif
 
         int fbW = 0, fbH = 0;
         glfwGetFramebufferSize(rs.window, &fbW, &fbH);

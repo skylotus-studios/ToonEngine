@@ -162,24 +162,56 @@ namespace toon {
 
         // --- Rendering (tree walk -> UIVertex batch) ----------------------------------------
 
-        void RenderBox(UIContext &ui, UIBox *box) {
+        // Draw the accumulated batch with its currently-bound texture, then clear it.
+        void FlushBatch(UIContext &ui, Renderer &renderer) {
+            if (!ui.batch.empty() && ui.font) {
+                renderer.DrawUI(ui.batch.data(), static_cast<uint32_t>(ui.batch.size()), ui.batchTexture,
+                                ui.font->pixelRange);
+                ui.batch.clear();
+            }
+        }
+
+        // Switch the batch's bound texture: flush what's queued (drawn with the OLD texture) so
+        // painter's order across textures is preserved, then bind the new one. Rounded/solid quads
+        // don't sample, so they ride whatever batch is current; only text + 9-slice pin a texture.
+        void SetBatchTexture(UIContext &ui, Renderer &renderer, TextureHandle tex) {
+            if (tex == ui.batchTexture) { return; }
+            FlushBatch(ui, renderer);
+            ui.batchTexture = tex;
+        }
+
+        void RenderBox(UIContext &ui, Renderer &renderer, UIBox *box) {
             const float x0 = box->rectMin[0], y0 = box->rectMin[1];
             const float w = box->computedSize[0], h = box->computedSize[1];
 
-            const bool hasBg = (box->flags & UIBoxFlag_DrawBackground) != 0;
-            const bool hasBorder = (box->flags & UIBoxFlag_DrawBorder) != 0 && box->borderThickness > 0.0f;
-            if (hasBg || hasBorder) {
-                Vec4 bg = box->bgColor;
-                if (box->flags & UIBoxFlag_HotAnimation) { bg = Lerp4(bg, Brighten(bg, 0.12f), box->hotT); }
-                if (box->flags & UIBoxFlag_ActiveAnimation) { bg = Lerp4(bg, Darken(bg, 0.16f), box->activeT); }
-                // One rounded-rect quad carries fill + border together (a 0-alpha fill leaves a
-                // hollow outline; a 0 thickness leaves a plain rounded fill).
-                const Vec4 fill = hasBg ? bg : Vec4{0.0f, 0.0f, 0.0f, 0.0f};
-                const Vec4 bord = hasBorder ? box->borderColor : Vec4{0.0f, 0.0f, 0.0f, 0.0f};
-                const float thick = hasBorder ? box->borderThickness : 0.0f;
-                AppendRoundRect(ui.batch, x0, y0, w, h, box->cornerRadius, thick, fill, bord);
+            // Background: a 9-slice texture (pins its own texture) OR a rounded rect (texture-agnostic).
+            if (box->bgTexture != TextureHandle::Invalid) {
+                Vec4 tint = box->bgColor;
+                if (box->flags & UIBoxFlag_HotAnimation) { tint = Lerp4(tint, Brighten(tint, 0.12f), box->hotT); }
+                if (box->flags & UIBoxFlag_ActiveAnimation) { tint = Lerp4(tint, Darken(tint, 0.16f), box->activeT); }
+                SetBatchTexture(ui, renderer, box->bgTexture);
+                uint32_t tw = 0, th = 0;
+                renderer.GetTextureSize(box->bgTexture, tw, th);
+                AppendNineSlice(ui.batch, x0, y0, w, h, static_cast<float>(tw), static_cast<float>(th),
+                                box->nineSliceInsets, tint);
+            } else {
+                const bool hasBg = (box->flags & UIBoxFlag_DrawBackground) != 0;
+                const bool hasBorder = (box->flags & UIBoxFlag_DrawBorder) != 0 && box->borderThickness > 0.0f;
+                if (hasBg || hasBorder) {
+                    Vec4 bg = box->bgColor;
+                    if (box->flags & UIBoxFlag_HotAnimation) { bg = Lerp4(bg, Brighten(bg, 0.12f), box->hotT); }
+                    if (box->flags & UIBoxFlag_ActiveAnimation) { bg = Lerp4(bg, Darken(bg, 0.16f), box->activeT); }
+                    // One rounded-rect quad carries fill + border together (a 0-alpha fill leaves a
+                    // hollow outline; a 0 thickness leaves a plain rounded fill).
+                    const Vec4 fill = hasBg ? bg : Vec4{0.0f, 0.0f, 0.0f, 0.0f};
+                    const Vec4 bord = hasBorder ? box->borderColor : Vec4{0.0f, 0.0f, 0.0f, 0.0f};
+                    const float thick = hasBorder ? box->borderThickness : 0.0f;
+                    AppendRoundRect(ui.batch, x0, y0, w, h, box->cornerRadius, thick, fill, bord);
+                }
             }
+
             if ((box->flags & UIBoxFlag_DrawText) && !box->text.empty() && ui.font) {
+                SetBatchTexture(ui, renderer, ui.font->atlas); // text samples the font atlas
                 const float textW = MeasureText(*ui.font, box->text, box->fontSize);
                 const float tx = (box->flags & UIBoxFlag_TextCenterX) ? x0 + (w - textW) * 0.5f : x0 + box->padding;
                 float baseline;
@@ -192,7 +224,7 @@ namespace toon {
                 AppendText(ui.batch, *ui.font, box->text, tx, baseline, box->fontSize, box->textColor);
             }
 
-            for (UIBox *c = box->first; c; c = c->next) { RenderBox(ui, c); }
+            for (UIBox *c = box->first; c; c = c->next) { RenderBox(ui, renderer, c); }
         }
 
         // Pick the focusable box (from ui.navCandidates, last frame's set) best in direction
@@ -309,11 +341,10 @@ namespace toon {
 
     void UI_Render(UIContext &ui, Renderer &renderer) {
         ui.batch.clear();
-        if (ui.root) { RenderBox(ui, ui.root); }
-        if (!ui.batch.empty() && ui.font) {
-            renderer.DrawUI(ui.batch.data(), static_cast<uint32_t>(ui.batch.size()), ui.font->atlas,
-                            ui.font->pixelRange);
-        }
+        if (!ui.font) { return; }
+        ui.batchTexture = ui.font->atlas; // batches default to the font atlas; 9-slice boxes switch it
+        if (ui.root) { RenderBox(ui, renderer, ui.root); }
+        FlushBatch(ui, renderer); // draw the final (or only) batch
     }
 
     // --- Building ---------------------------------------------------------------
@@ -345,6 +376,8 @@ namespace toon {
         box.floating = false;
         box.anchor = UIAnchor::TopLeft;
         box.anchorOffset[0] = box.anchorOffset[1] = 0.0f;
+        box.bgTexture = TextureHandle::Invalid;
+        box.nineSliceInsets = Vec4{};
 
         const UIStyle &st = ui.styleStack.back();
         box.semanticSize[0] = st.size[0];
@@ -469,6 +502,12 @@ namespace toon {
         box->anchor = anchor;
         box->anchorOffset[0] = offsetX;
         box->anchorOffset[1] = offsetY;
+    }
+
+    void UI_NineSlice(UIBox *box, TextureHandle tex, const Vec4 &insets) {
+        if (!box) { return; }
+        box->bgTexture = tex;
+        box->nineSliceInsets = insets;
     }
 
 } // namespace toon

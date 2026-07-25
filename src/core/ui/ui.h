@@ -91,6 +91,10 @@ namespace toon {
         float padding = 0.0f;       // inner padding (px): content inset + TextContent margin
         float borderThickness = 0.0f;
         float cornerRadius = 0.0f;  // rounded corners (px); 0 = sharp
+        // 9-slice textured background: when bgTexture is set, RenderBox draws a 9-slice of it (split
+        // by nineSliceInsets l/t/r/b px) instead of the rounded-rect bg/border. See UI_NineSlice.
+        TextureHandle bgTexture = TextureHandle::Invalid;
+        Vec4 nineSliceInsets{};
         std::string text;           // display string (already localized by the caller)
 
         // Floating placement: a floating box pins to `anchor` (+ anchorOffset) within its parent
@@ -167,6 +171,7 @@ namespace toon {
 
         const Font *font = nullptr;  // text sizing + rendering
         std::vector<UIVertex> batch; // built by UI_Render, drawn via Renderer::DrawUI
+        TextureHandle batchTexture = TextureHandle::Invalid; // texture bound for the in-flight batch
     };
 
     // --- Lifecycle --------------------------------------------------------------
@@ -205,5 +210,9 @@ namespace toon {
     // Make `box` float: pin it to `anchor` (+ offset px) within its parent, out of sibling flow.
     // e.g. UI_Anchor(panel, UIAnchor::Center) centers a menu; TopLeft + offset pins a HUD element.
     void UI_Anchor(UIBox *box, UIAnchor anchor, float offsetX = 0.0f, float offsetY = 0.0f);
+
+    // Give `box` a 9-slice textured background: `tex` split by `insets` (l,t,r,b texture px),
+    // replacing its rounded-rect bg/border. The box's bgColor tints the texture (white = as-is).
+    void UI_NineSlice(UIBox *box, TextureHandle tex, const Vec4 &insets);
 
 } // namespace toon
