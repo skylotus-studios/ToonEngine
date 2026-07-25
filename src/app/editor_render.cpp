@@ -1,64 +1,37 @@
 //============================================================================
 //  app/editor_render.cpp: see editor_render.h.
+//
+//  Since roadmap #15 the scene itself is drawn by app/runtime_render.cpp's RenderScene (shared
+//  with the player). RenderFrame calls that, then adds the editor-only authoring trailers --
+//  the ground grid, collider debug wireframes, and mouse-pick marker boxes -- which a shipped
+//  game never draws (that's why they live here, not in RenderScene).
 //============================================================================
 #include "app/editor_render.h"
 
 #include "app/editor_state.h"
 #include "app/physics_glue.h"
 #include "app/picking.h"
+#include "app/runtime_render.h"
+#include "app/runtime_ui.h" // RenderHUD (roadmap #17: in-game UI during play-in-editor)
 
+#include <cstdint>
 #include <vector>
 
 namespace toon {
 
     void RenderFrame(EditorState &state) {
-        Renderer &renderer = state.renderer;
-        const Scene &scene = state.scene;
+        // The scene, exactly as the player would draw it.
+        RenderScene(state.runtime);
 
-        // Cascaded shadow map pre-pass: walks the same renderable entities as the main pass
-        // below, once per cascade, into the shadow map's own depth-only targets. Must run
-        // before BeginFrame (separate render targets, no interaction with the main G-buffer).
-        // BeginShadowPass returns 0 (the loop below becomes a no-op) when the Settings panel's
-        // Shadows toggle is off.
-        const uint32_t shadowCascades = renderer.BeginShadowPass();
-        for (uint32_t cascade = 0; cascade < shadowCascades; ++cascade) {
-            renderer.BeginShadowCascade(cascade);
-            for (const Entity &e : scene.entities) {
-                if (e.mesh != MeshHandle::Invalid) {
-                    renderer.DrawMeshShadow(e.mesh, e.worldMatrix);
-                } else if (e.model != ModelHandle::Invalid) {
-                    renderer.DrawModelShadow(e.model, e.worldMatrix);
-                }
-            }
-        }
-        renderer.EndShadowPass();
+        Renderer &renderer = state.runtime.renderer;
+        const Scene &scene = state.runtime.scene;
 
-        const Color kClearColor{0.10f, 0.11f, 0.13f, 1.0f};
-        renderer.BeginFrame(kClearColor);
-
-        // Walk the scene, drawing every renderable entity with its hierarchy-composed world
-        // matrix (+ last frame's, for motion vectors). The shared style overlays band count,
-        // ambient, and the global outline-width multiplier onto each entity's own material.
-        for (const Entity &e : scene.entities) {
-            const bool isMesh = e.mesh != MeshHandle::Invalid;
-            const bool isModel = e.model != ModelHandle::Invalid;
-            if (!isMesh && !isModel) {
-                continue; // root / non-renderable
-            }
-
-            Material m = e.material;
-            m.bands = state.style.bands;
-            m.ambient = state.style.ambient;
-            m.outlineWidth = e.material.outlineWidth * state.outlineScale;
-            if (isMesh) {
-                renderer.DrawMesh(e.mesh, e.worldMatrix, e.prevWorldMatrix, m);
-            } else {
-                renderer.DrawModel(e.model, e.worldMatrix, e.prevWorldMatrix, m);
-            }
-        }
-
-        // Resolve the HDR scene to the back buffer (post effects + exposure + tone map).
-        renderer.EndScene();
+        // Ground grid (roadmap #12) -- after EndScene, before the UI overlay (see
+        // Renderer::DrawGrid's call-timing contract: it occludes itself by reading the
+        // now-finished scene depth buffer, so it can't run any earlier). An authoring aid,
+        // not world content: stays out of Playing AND Paused (still a Play session, just
+        // frozen), the same "editor-only" scope as the collider wireframes below.
+        if (state.showGrid && state.mode == EditorMode::Editing) { renderer.DrawGrid(); }
 
         // Collider debug wireframes (M2.1) -- after EndScene, before the UI overlay (see
         // Renderer::DrawWireframe's call-timing contract). A fixed yellow-ish color for every
@@ -83,22 +56,36 @@ namespace toon {
             }
         }
 
-        // Mouse-pick markers (roadmap #8): a light or empty anchor has no mesh/model bounds, so
-        // it'd otherwise be a dead zone for click-to-select (see app/picking.cpp's
+        // Mouse-pick markers (roadmap #8): a light or empty anchor has no mesh/model/sprite
+        // bounds, so it'd otherwise be a dead zone for click-to-select (see app/picking.cpp's
         // kPickBoxHalfExtent fallback box). Reuses ColliderWireframe's Box case rather than a new
         // cube generator -- same shape, sized to exactly match what PickEntity actually tests.
+        // A sprite entity (roadmap #13) is excluded: it's already visible (DrawSprite) and
+        // picked via its own quad-shaped bounds (picking.cpp's EntityWorldBounds), so a
+        // generic marker box floating around it would just be visual noise disconnected from
+        // what's actually on screen. Editor-only (an authoring aid), which is why this is here
+        // and not in RenderScene -- a shipped game must never draw these boxes.
         {
             const Color markerColor{0.3f, 0.7f, 1.0f, 1.0f};
             const Vec3 markerExtents{kPickBoxHalfExtent, kPickBoxHalfExtent, kPickBoxHalfExtent};
             const std::vector<Vec3> markerWireframe = ColliderWireframe(ColliderShape::Box, markerExtents);
             for (const Entity &e : scene.entities) {
-                const bool isRenderable = e.mesh != MeshHandle::Invalid || e.model != ModelHandle::Invalid;
-                if (isRenderable || !e.transform) { continue; }
+                const bool hasOwnBounds = e.mesh != MeshHandle::Invalid || e.model != ModelHandle::Invalid || e.sprite;
+                if (hasOwnBounds || !e.transform) { continue; }
                 const Mat4 world = ComposeWorldMatrix(e.transform->position, e.transform->rotation, {1.0f, 1.0f, 1.0f});
                 renderer.DrawWireframe(world, markerWireframe.data(), static_cast<uint32_t>(markerWireframe.size()),
                                        markerColor);
             }
         }
+
+        // In-game HUD during play-in-editor (roadmap #17): the shared RenderHUD, the same one the
+        // player runs, so the game HUD is testable in the editor. Only the passive Playing HUD shows
+        // here -- the Title/Pause menus drive SetAppState, which the editor doesn't use (its own
+        // EditorMode owns play/pause). Editing mode shows nothing.
+        const UIScreen hudScreen = (state.mode == EditorMode::Playing || state.mode == EditorMode::Paused)
+                                       ? UIScreen::Playing
+                                       : UIScreen::None;
+        RenderHUD(state.runtime, hudScreen);
     }
 
 } // namespace toon

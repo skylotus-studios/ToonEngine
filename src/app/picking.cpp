@@ -36,6 +36,15 @@ namespace toon {
                 hasBounds = renderer.GetMeshBounds(e.mesh, localMin, localMax);
             } else if (e.model != ModelHandle::Invalid) {
                 hasBounds = renderer.GetModelBounds(e.model, localMin, localMax);
+            } else if (e.sprite) {
+                // A sprite's own local quad extents (roadmap #13; see picking.h's
+                // kSpriteQuadHalfThickness), not the generic anchor box below -- so it's
+                // picked via bounds that actually match what's on screen, the same
+                // "real geometry" treatment a mesh/model gets, not a disconnected marker
+                // (editor_render.cpp's pick-marker loop excludes a sprite for the same reason).
+                localMin = {-0.5f, -0.5f, -kSpriteQuadHalfThickness};
+                localMax = {0.5f, 0.5f, kSpriteQuadHalfThickness};
+                hasBounds = true;
             }
 
             if (!hasBounds) {
@@ -130,9 +139,9 @@ namespace toon {
         if ((drag.x * drag.x + drag.y * drag.y) > (kClickMaxDragPx * kClickMaxDragPx)) { return; }
 
         Vec3 rayOrigin, rayDir;
-        state.renderer.ScreenPointToRay(io.MousePos.x, io.MousePos.y, io.DisplaySize.x, io.DisplaySize.y, rayOrigin,
+        state.runtime.renderer.ScreenPointToRay(io.MousePos.x, io.MousePos.y, io.DisplaySize.x, io.DisplaySize.y, rayOrigin,
                                         rayDir);
-        state.scene.selected = PickEntity(state.scene, state.renderer, rayOrigin, rayDir);
+        state.runtime.scene.selected = PickEntity(state.runtime.scene, state.runtime.renderer, rayOrigin, rayDir);
     }
 
 } // namespace toon

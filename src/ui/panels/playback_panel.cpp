@@ -3,11 +3,15 @@
 //============================================================================
 #include "ui/panels/playback_panel.h"
 
-#include "app/audio_glue.h"
 #include "app/editor_state.h"
-#include "app/physics_glue.h"
+#include "app/save_glue.h"       // QuickSave/QuickLoad + kQuickSaveSlot (roadmap #18 dev buttons)
+#include "app/session.h"         // BeginSession/EndSession + CancelSceneTransition (roadmap #19)
+#include "app/scene_ops.h"       // LoadSceneInto (Load Game brings the saved scene up)
+#include "core/save/savegame.h"  // SaveExists (gate the Load button)
 
 #include "IconsFontAwesome6.h"
+
+#include <cstdio> // std::snprintf (status echo + reflecting the loaded path)
 
 namespace toon {
 
@@ -32,7 +36,7 @@ namespace toon {
             // linger after Stop -- silence it at every transition below.
             auto stopPreview = [&state]() {
                 if (state.previewHandle != SoundHandle::Invalid) {
-                    state.audio.Stop(state.previewHandle);
+                    state.runtime.audio.Stop(state.previewHandle);
                     state.previewHandle = SoundHandle::Invalid;
                     state.previewEntityIdx = -1;
                 }
@@ -42,19 +46,16 @@ namespace toon {
             if (ImGui::Button(isPlaying ? ICON_FA_PAUSE : ICON_FA_PLAY, ImVec2(btnW, btnW))) {
                 if (state.mode == EditorMode::Editing) {
                     stopPreview();
-                    state.sceneBackup = state.scene; // snapshot: Stop restores exactly this
+                    state.sceneBackup = state.runtime.scene; // snapshot: Stop restores exactly this
                     state.mode = EditorMode::Playing;
-                    state.accumulator = 0.0;
-                    CreateScripts(state.scene); // fire OnCreate once, entering this Play session
-                    BuildPhysicsWorld(state.physicsWorld, state.scene,
-                                      state.bodyToEntity);     // seed bodies from collider-bearing entities
-                    BuildAudioWorld(state.audio, state.scene); // start autoplay emitters
+                    state.runtime.accumulator = 0.0;
+                    BeginSession(state.runtime); // OnCreate + Jolt bodies + autoplay emitters
                 } else if (state.mode == EditorMode::Playing) {
                     state.mode = EditorMode::Paused;
-                    state.audio.PauseAll();
+                    state.runtime.audio.PauseAll();
                 } else { // Paused -> resume
                     state.mode = EditorMode::Playing;
-                    state.audio.ResumeAll();
+                    state.runtime.audio.ResumeAll();
                 }
             }
             ImGui::SameLine();
@@ -62,14 +63,11 @@ namespace toon {
             if (ImGui::Button(ICON_FA_FORWARD_STEP, ImVec2(btnW, btnW))) {
                 if (state.mode == EditorMode::Editing) {
                     stopPreview();
-                    state.sceneBackup = state.scene;
+                    state.sceneBackup = state.runtime.scene;
                     state.mode = EditorMode::Paused; // step lands paused, not playing
-                    state.accumulator = 0.0;
-                    CreateScripts(state.scene); // fire OnCreate once, entering this Play session
-                    BuildPhysicsWorld(state.physicsWorld, state.scene,
-                                      state.bodyToEntity);     // seed bodies from collider-bearing entities
-                    BuildAudioWorld(state.audio, state.scene); // start autoplay emitters
-                    state.audio.PauseAll();                    // step lands paused -- freeze right after starting
+                    state.runtime.accumulator = 0.0;
+                    BeginSession(state.runtime);    // OnCreate + Jolt bodies + autoplay emitters
+                    state.runtime.audio.PauseAll(); // step lands paused -- freeze right after starting
                 }
                 state.stepRequested = true;
                 state.suppressNextFrameHistory = true; // one tick's worth of pose jump, not smooth motion
@@ -79,13 +77,45 @@ namespace toon {
             ImGui::BeginDisabled(state.mode == EditorMode::Editing); // nothing to stop yet
             if (ImGui::Button(ICON_FA_STOP, ImVec2(btnW, btnW))) {
                 stopPreview();
-                state.physicsWorld.Clear();      // release this session's bodies before the scene reverts
-                state.bodyToEntity.clear();      // this session's contact-event lookup, same reason
-                state.audio.StopAll();           // release this session's sounds before the scene reverts
-                state.scene = state.sceneBackup; // discard everything Play did -- see the panel comment above
+                // Abandon any in-flight level transition first: the scene is about to revert to
+                // the pre-Play snapshot, so a FadeOut still counting down would otherwise finish
+                // afterward and load its target over the scene being authored again.
+                CancelSceneTransition(state.runtime.transition);
+                EndSession(state.runtime);               // OnDestroy, then this session's sounds, then its bodies
+                state.runtime.scene = state.sceneBackup; // discard everything Play did -- see the panel comment above
                 state.mode = EditorMode::Editing;
-                state.accumulator = 0.0;
+                state.runtime.accumulator = 0.0;
                 state.suppressNextFrameHistory = true;
+            }
+            ImGui::EndDisabled();
+
+            // Dev Save/Load (roadmap #18): exercises the same save glue the player's title
+            // New Game/Continue + F5 flow uses, from inside the editor. The editor's "current
+            // scene" is scenePathBuf (pendingScenePath is a runtime-only field the editor never
+            // fills), so point the save at that; Load then reloads whatever scene the save named.
+            ImGui::Separator();
+            const float halfW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+            if (ImGui::Button(ICON_FA_FLOPPY_DISK " Save Game", ImVec2(halfW, 0.0f))) {
+                state.runtime.pendingScenePath = state.scenePathBuf; // what a save should point back at
+                state.sceneStatus = QuickSave(state.runtime) ? "Game saved (slot 0)"
+                                                             : "Save failed (no writable location)";
+            }
+            ImGui::SameLine();
+            // Load reloads the scene, so restrict it to Editing (a mid-Play swap would strand the
+            // physics/audio worlds built for the running session), and only when a save exists.
+            ImGui::BeginDisabled(state.mode != EditorMode::Editing || !SaveExists(kQuickSaveSlot));
+            if (ImGui::Button(ICON_FA_FOLDER_OPEN " Load Game", ImVec2(halfW, 0.0f))) {
+                if (QuickLoad(state.runtime)) {
+                    // QuickLoad set pendingScenePath + playtime; bring that scene up in the editor.
+                    if (!state.runtime.pendingScenePath.empty()) {
+                        std::snprintf(state.scenePathBuf, sizeof(state.scenePathBuf), "%s",
+                                      state.runtime.pendingScenePath.c_str());
+                        LoadSceneInto(state, state.runtime.pendingScenePath.c_str());
+                    }
+                    state.sceneStatus = "Game loaded (slot 0)";
+                } else {
+                    state.sceneStatus = "No save to load";
+                }
             }
             ImGui::EndDisabled();
         }

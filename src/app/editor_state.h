@@ -4,16 +4,17 @@
 //
 //  A plain data bundle (no methods, no hidden internals) that main.cpp's InitEditor/
 //  TickEditor/RenderFrame and every ui/panels/* function share by reference, the same
-//  plain-struct-plus-free-functions shape core/scene/scene.h's Scene already uses, not a class
-//  wrapping this state in private members:
-//  nothing here hides a third-party dependency the way Renderer/PhysicsWorld's PIMPL does,
-//  so there's nothing to justify hiding it behind accessors either.
+//  plain-struct-plus-free-functions shape core/scene/scene.h's Scene already uses.
+//
+//  Since roadmap #15 this is a THIN SHELL over RuntimeState (app/runtime_state.h): the engine
+//  half (renderer, physics/audio worlds, scene, camera, render style, app lifecycle) lives in
+//  the embedded `runtime`, and only the fields an editor adds on top -- panels, gizmo, themes,
+//  the Play/Stop snapshot -- live here. Editor code reaches engine state through `state.runtime`
+//  (e.g. state.runtime.scene); the player never constructs an EditorState at all.
 //============================================================================
-#include "core/audio/audio.h"
-#include "core/camera/camera.h"
-#include "core/physics/physics.h"
-#include "core/rendering/renderer.h"
-#include "core/scene/scene.h"
+#include "app/runtime_state.h"
+#include "core/rendering/renderer.h" // Camera (cameraDefault), Color
+#include "core/scene/scene.h"        // Scene (sceneBackup)
 #include "ui/panels/file_browser.h"
 #include "ui/panels/themes.h"
 
@@ -21,7 +22,6 @@
 #include "ImGuizmo.h"
 
 #include <string>
-#include <unordered_map>
 
 struct GLFWwindow;
 
@@ -30,30 +30,27 @@ namespace toon {
     // Editor vs. simulation state (M1.2): Editing poses the scene with nothing ticking;
     // Playing runs the fixed-timestep sim from TickEditor; Paused freezes it without
     // discarding progress. See ui/panels/playback_panel.cpp for the Play/Step/Stop transitions.
+    // A DIFFERENT axis from RuntimeState::AppState (app/app_state.h): EditorMode gates whether
+    // the editor's sim ticks; AppState is what an application is showing. In the editor AppState
+    // stays Playing and EditorMode decides; the player has no EditorMode.
     enum class EditorMode { Editing, Playing, Paused };
 
     struct EditorState {
-        GLFWwindow *window = nullptr;
+        // The engine half, shared with the player (app/runtime_state.h). Editor code reaches
+        // renderer/scene/camera/etc. through this (state.runtime.scene, state.runtime.renderer).
+        RuntimeState runtime;
 
-        Renderer renderer;
-        PhysicsWorld physicsWorld;
-        // BodyHandle (raw id) -> owning entity index, for this Play/Step session's contact
-        // events (app/physics_glue.h's DispatchContactEvents). Filled by BuildPhysicsWorld,
-        // cleared alongside physicsWorld.Clear() on Stop (see playback_panel.cpp).
-        std::unordered_map<uint32_t, int> bodyToEntity;
-        AudioEngine audio;
-        Scene scene;
         // Snapshot taken when Play starts, wholesale-restored on Stop (see playback_panel.cpp).
+        // Only the scene is snapshotted (physics/audio worlds are rebuilt from it), so this stays
+        // a Scene, not a whole RuntimeState.
         Scene sceneBackup;
-        Camera camera;
         Camera cameraDefault; // for the "Reset camera" button
-
-        // Style shared by every object each frame: band count + ambient floor (a global shading
-        // look). Outline color/width are per-object (Entity::material), but this scales all of
-        // their widths together.
-        Material style;
-        float outlineScale = 1.0f;
-        PostParams post;
+        // 2D editor mode (roadmap #14): the 3D yaw/pitch saved when entering 2D mode
+        // (app/editor_tick.h's SetEditorMode2D), restored when leaving it, so toggling back
+        // to 3D returns to the angle you left rather than resetting it. Defaults match
+        // Camera's own yaw/pitch defaults, for a sensible value before 2D mode is ever entered.
+        float saved3DYaw = 0.0f;
+        float saved3DPitch = 0.25f;
 
         Theme uiTheme = Theme::AmberYellow;
         float uiScale = 1.0f;
@@ -81,14 +78,12 @@ namespace toon {
         // "Contents" editor panel: browses assets/ with thumbnails.
         FileBrowser assetBrowser;
 
-        // Gates UpdateScripts (core/scene/script.h) -- lets scripts be paused without stopping
-        // the rest of the simulation.
-        bool runScripts = true;
-        // M2.1: overlay each collider-bearing entity's shape as a wireframe (Settings panel).
+        // Editor-only render trailers (drawn by RenderFrame after RenderScene, never in the
+        // player): the ground grid (roadmap #12, an authoring aid) and per-collider debug
+        // wireframes (M2.1). The sky gradient is NOT here -- it's shared world content, so its
+        // toggle + colors live on RuntimeState; the grid is editor-only, so its toggle is here.
+        bool showGrid = true;
         bool showColliders = false;
-        // M2.2: master volume + mute (Settings panel) -- applied via AudioEngine::SetMasterVolume.
-        float masterVolume = 1.0f;
-        bool audioMuted = false;
         // The Properties panel's "Preview"/"Stop Preview" button (see properties_panel.cpp):
         // one global audition slot, tracked by handle + which entity started it, so switching
         // entities or pressing the button again always stops the right (or any) preview.
@@ -108,12 +103,6 @@ namespace toon {
         bool openScenePopupRequested = false;
         bool saveScenePopupRequested = false;
         bool aboutPopupRequested = false;
-
-        double lastTime = 0.0;
-
-        // Fixed-timestep simulation clock (M1.1): gameplay state advances in fixed kFixedDt
-        // steps, decoupled from the variable render rate, via this accumulator.
-        double accumulator = 0.0;
 
         // Play/Pause/Step/Stop state (M1.2).
         EditorMode mode = EditorMode::Editing;

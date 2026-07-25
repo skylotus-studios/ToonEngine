@@ -10,7 +10,7 @@
 namespace toon {
 
     void DrawObjectsPanel(EditorState &state) {
-        Scene &scene = state.scene;
+        Scene &scene = state.runtime.scene;
 
         // Structural edits reorder the vector and invalidate indices, so the loop only
         // RECORDS a pending op / drop and applies them afterward.

@@ -27,6 +27,8 @@
 //============================================================================
 #include "core/audio/audio.h"
 
+#include "core/platform/paths.h" // Assets::Audio (exe-relative audio clip dir)
+
 #include "miniaudio.h"
 
 #include <cctype>
@@ -58,12 +60,12 @@ namespace toon {
         // AudioSource::clip (Entity component field, and the Properties panel's Clip text
         // box) is meant to be typed as just a filename, e.g. "demo_hum.wav" -- same "type the
         // asset's name, not a path" expectation the Asset Browser sets everywhere else in the
-        // editor. Resolve it against TOON_AUDIO_DIR unless it already looks like a full path
-        // (so a scene file that stores an absolute path, or a future asset-browser picker,
+        // editor. Resolve it against the audio/ asset dir unless it already looks like a full
+        // path (so a scene file that stores an absolute path, or a future asset-browser picker,
         // still works unchanged).
         std::string ResolveClipPath(const std::string &clip) {
             if (IsAbsoluteClipPath(clip)) { return clip; }
-            return std::string(TOON_AUDIO_DIR) + "/" + clip;
+            return Assets::Audio() + "/" + clip;
         }
 
     } // namespace

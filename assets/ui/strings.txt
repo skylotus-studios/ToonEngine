@@ -1,0 +1,16 @@
+# ToonEngine player-facing UI strings (roadmap #17).
+# Format: key = value, one per line; '#' starts a comment; keys are per core/ui/strings.h.
+# Loaded at startup and, in Debug builds, hot-reloaded live on save (see app/runtime_ui.cpp).
+# This is the roadmap #32 localization seam: a per-language copy of this file is all a
+# translation needs.
+
+title.heading      = ToonEngine
+menu.new_game      = New Game
+menu.continue      = Continue
+menu.quit          = Quit
+pause.heading      = Paused
+menu.resume        = Resume
+menu.quit_to_title = Quit to Title
+loading.label      = Loading...
+hud.time_label     = Time
+hud.pause_hint     = Esc: pause

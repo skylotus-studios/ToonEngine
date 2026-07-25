@@ -188,7 +188,8 @@ namespace toon {
         : name(other.name), parent(other.parent), transform(other.transform), prevSimTransform(other.prevSimTransform),
           worldMatrix(other.worldMatrix), prevWorldMatrix(other.prevWorldMatrix), mesh(other.mesh), model(other.model),
           material(other.material), primitive(other.primitive), modelPath(other.modelPath), light(other.light),
-          collider(other.collider), body(other.body), audioSource(other.audioSource) {
+          camera(other.camera), collider(other.collider), body(other.body), audioSource(other.audioSource),
+          animation(other.animation), sprite(other.sprite) {
         scripts.reserve(other.scripts.size());
         for (const ScriptComponent &src : other.scripts) {
             ScriptComponent dup;
@@ -248,6 +249,10 @@ namespace toon {
     void SnapshotSimState(Scene &scene) {
         for (Entity &e : scene.entities) {
             if (e.transform) { e.prevSimTransform = e.transform; }
+            // Roadmap #11 (skeletal animation): same "snapshot before this tick advances it"
+            // treatment as transform above, so Renderer::DrawModel's AnimationState carries a
+            // real previous pose for motion vectors, not last tick's time reused twice.
+            if (e.animation) { e.animation->prevTime = e.animation->time; }
         }
     }
 
@@ -343,6 +348,48 @@ namespace toon {
         }
         return false;
     }
+
+    bool GetActiveCamera(const Scene &scene, Camera &out) {
+        for (const Entity &e : scene.entities) {
+            if (!e.camera || !e.camera->primary) { continue; }
+            const CameraComponent &cc = *e.camera;
+
+            // Look direction = world image of local +Z (same aim convention as GetActiveLight);
+            // eye = the entity's world position. Mat4 is row-major (math.h).
+            Vec3 fwd{e.worldMatrix.m[8], e.worldMatrix.m[9], e.worldMatrix.m[10]};
+            if (Length(fwd) < 1e-8f) {
+                continue; // degenerate (e.g. zero-scaled) -- keep looking
+            }
+            fwd = Normalize(fwd);
+            const Vec3 eye{e.worldMatrix.m[12], e.worldMatrix.m[13], e.worldMatrix.m[14]};
+
+            // Invert SetCamera's view basis. There, RotationY(yaw)*RotationX(pitch) makes the
+            // look direction forward(yaw,pitch) = (-cos(pitch)sin(yaw), sin(pitch),
+            // cos(pitch)cos(yaw)) -- derived from those Diligent matrices, verified against
+            // SetEditorMode2D's yaw=pi/pitch=0 -> (0,0,-1) anchor. So:
+            out.pitch = std::asin(std::max(-1.0f, std::min(1.0f, fwd.y)));
+            out.yaw = std::atan2(-fwd.x, fwd.z);
+            // The orbit model puts the eye at pivot - forward*distance, so place the pivot one
+            // unit ahead of the entity along its look direction and use distance 1; the eye then
+            // lands exactly on the entity. Roll is dropped (the orbit camera has none).
+            out.distance = 1.0f;
+            out.pivot = {eye.x + fwd.x, eye.y + fwd.y, eye.z + fwd.z};
+
+            out.fovY = cc.fovY;
+            out.nearZ = cc.nearZ;
+            out.farZ = cc.farZ;
+            out.orthographic = cc.orthographic;
+            out.orthoHeight = cc.orthoHeight;
+            return true;
+        }
+        return false;
+    }
+
+    // --- Scene change requests (roadmap #19) ------------------------------------
+
+    void RequestSceneChange(Scene &scene, const char *path) { scene.requestedScenePath = path ? path : ""; }
+
+    bool HasPendingSceneChange(const Scene &scene) { return !scene.requestedScenePath.empty(); }
 
     // --- Hierarchy mutations ----------------------------------------------------
 

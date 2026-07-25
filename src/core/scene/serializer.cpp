@@ -8,6 +8,7 @@
 //============================================================================
 #include "core/scene/serializer.h"
 
+#include "core/platform/paths.h" // Assets::Sprite (exe-relative sprite texture paths)
 #include "core/rendering/primitives.h"
 #include "core/scene/script.h"
 
@@ -76,6 +77,29 @@ namespace toon {
             std::snprintf(buf, sizeof(buf), "  audio %s %.6f %.6f %d %d %d %d %.6f\n",
                           a.clip.empty() ? "-" : a.clip.c_str(), a.volume, a.pitch, a.loop ? 1 : 0, a.autoplay ? 1 : 0,
                           a.spatial ? 1 : 0, a.stream ? 1 : 0, a.maxDistance);
+            f << buf;
+        }
+
+        // "animation <clipIndex> <playing> <looping>". `time`/`prevTime` are deliberately NOT
+        // written: unlike `transform` (an authored pose), they're a transient playback cursor
+        // that only means anything mid-session -- same "runtime state, not scene data"
+        // treatment as RigidBodyComponent::handle/AudioSource::handle above, just without an
+        // actual handle to skip. A loaded entity always starts its clip fresh, from time 0.
+        void WriteAnimation(std::ofstream &f, const AnimationComponent &a) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "  animation %d %d %d\n", a.clipIndex, a.playing ? 1 : 0, a.looping ? 1 : 0);
+            f << buf;
+        }
+
+        // "sprite <texturePath|-> <tint xyzw> <uvRect xyzw> <flipX> <flipY>". `texture` (the
+        // runtime handle) is deliberately NOT written: like AudioSource::handle, it's rebuilt
+        // from `texturePath` on load, not part of the saved scene's data. `texturePath` is
+        // written as a single whitespace-free token, same convention as `model`/audio's clip.
+        void WriteSpriteComponent(std::ofstream &f, const SpriteComponent &s) {
+            char buf[384];
+            std::snprintf(buf, sizeof(buf), "  sprite %s %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d %d\n",
+                          s.texturePath.empty() ? "-" : s.texturePath.c_str(), s.tint.x, s.tint.y, s.tint.z, s.tint.w,
+                          s.uvRect.x, s.uvRect.y, s.uvRect.z, s.uvRect.w, s.flipX ? 1 : 0, s.flipY ? 1 : 0);
             f << buf;
         }
 
@@ -167,9 +191,19 @@ namespace toon {
                 WriteFloat(f, "  light.intensity", e.light->intensity);
             }
 
+            if (e.camera) {
+                const CameraComponent &c = *e.camera;
+                char buf[128];
+                std::snprintf(buf, sizeof(buf), "  camera %.6f %.6f %.6f %d %.6f %d\n", c.fovY, c.nearZ, c.farZ,
+                              c.orthographic ? 1 : 0, c.orthoHeight, c.primary ? 1 : 0);
+                f << buf;
+            }
+
             if (e.collider) { WriteCollider(f, *e.collider); }
             if (e.body) { WriteRigidBody(f, *e.body); }
             if (e.audioSource) { WriteAudioSource(f, *e.audioSource); }
+            if (e.animation) { WriteAnimation(f, *e.animation); }
+            if (e.sprite) { WriteSpriteComponent(f, *e.sprite); }
 
             // One line per script: "script <Name> <field...>"; the name resolves through
             // the registry on load (see below); the fields are whatever that script's own
@@ -187,18 +221,18 @@ namespace toon {
         return true;
     }
 
-    bool LoadScene(const char *path, Scene &scene, Camera &camera, Renderer &renderer) {
+    bool LoadSceneData(const char *path, Scene &out, Camera &outCamera, Renderer &renderer) {
         std::ifstream f(path);
         if (!f.is_open()) {
             std::fprintf(stderr, "Failed to load scene: %s\n", path);
             return false;
         }
 
-        // Parse into a side buffer and only replace `scene`/`camera` once the whole file is
-        // read. A malformed file then leaves the caller's current scene untouched, matching
+        // Parse into a side buffer and only fill `out`/`outCamera` once the whole file is
+        // read. A malformed file then leaves the caller's destination untouched, matching
         // this function's documented failure contract.
         Scene loaded;
-        Camera loadedCamera = camera;
+        Camera loadedCamera = outCamera;
         Entity *cur = nullptr;
         std::string line;
 
@@ -290,7 +324,7 @@ namespace toon {
                                                     mesh.indices.data(), static_cast<uint32_t>(mesh.indices.size()));
                 }
             } else if (key == "model") {
-                ss >> cur->modelPath; // a single token, fine for the baked TOON_MODELS_DIR paths this writes
+                ss >> cur->modelPath; // a single token, fine for the space-free asset paths this writes
                 cur->model = renderer.LoadModel(cur->modelPath.c_str());
             } else if (key == "material.baseColor") {
                 cur->material.baseColor = ParseVec3(ss);
@@ -310,6 +344,13 @@ namespace toon {
             } else if (key == "light.intensity") {
                 if (!cur->light) { cur->light.emplace(); }
                 ss >> cur->light->intensity;
+            } else if (key == "camera") {
+                CameraComponent c;
+                int ortho = 0, primary = 0;
+                ss >> c.fovY >> c.nearZ >> c.farZ >> ortho >> c.orthoHeight >> primary;
+                c.orthographic = ortho != 0;
+                c.primary = primary != 0;
+                cur->camera = c;
             } else if (key == "collider") {
                 std::string kind;
                 ss >> kind;
@@ -339,6 +380,29 @@ namespace toon {
                 a.spatial = spatialInt != 0;
                 a.stream = streamInt != 0;
                 cur->audioSource = a;
+            } else if (key == "animation") {
+                AnimationComponent a;
+                int playingInt = 0, loopingInt = 0;
+                ss >> a.clipIndex >> playingInt >> loopingInt;
+                a.playing = playingInt != 0;
+                a.looping = loopingInt != 0;
+                cur->animation = a; // time/prevTime stay 0 -- see WriteAnimation's own comment
+            } else if (key == "sprite") {
+                SpriteComponent s;
+                std::string texPath;
+                int flipXInt = 0, flipYInt = 0;
+                ss >> texPath >> s.tint.x >> s.tint.y >> s.tint.z >> s.tint.w >> s.uvRect.x >> s.uvRect.y >>
+                    s.uvRect.z >> s.uvRect.w >> flipXInt >> flipYInt;
+                s.texturePath = (texPath == "-") ? std::string() : texPath;
+                s.flipX = flipXInt != 0;
+                s.flipY = flipYInt != 0;
+                // srgb=true: a sprite composites into the linear HDR scene (see LoadTexture's
+                // own comment), unlike the asset-browser thumbnails this loader otherwise
+                // serves. texturePath is a filename resolved against the sprites/ asset dir (Assets::Sprite).
+                if (!s.texturePath.empty()) {
+                    s.texture = renderer.LoadTexture(Assets::Sprite(s.texturePath).c_str(), true);
+                }
+                cur->sprite = s;
             } else if (key == "script") {
                 std::string scriptName;
                 ss >> scriptName;
@@ -354,11 +418,25 @@ namespace toon {
 
         EnsureSceneRoot(loaded); // defensive: a hand-edited file might omit the root entity
         loaded.selected = -1;
+        loaded.requestedScenePath.clear(); // a freshly-loaded scene never arrives mid-transition
+
+        out = std::move(loaded);
+        outCamera = loadedCamera;
+
+        std::printf("Scene loaded: %s (%zu entities)\n", path, out.entities.size());
+        return true;
+    }
+
+    bool LoadScene(const char *path, Scene &scene, Camera &camera, Renderer &renderer) {
+        // Parse into a local first so a failure leaves `scene`/`camera` untouched (LoadSceneData
+        // guarantees that for its own out-params too; this just keeps the two entry points'
+        // contracts identical rather than relying on that from a distance).
+        Scene loaded;
+        Camera loadedCamera = camera;
+        if (!LoadSceneData(path, loaded, loadedCamera, renderer)) { return false; }
 
         scene = std::move(loaded);
         camera = loadedCamera;
-
-        std::printf("Scene loaded: %s (%zu entities)\n", path, scene.entities.size());
         return true;
     }
 

@@ -28,6 +28,22 @@ namespace toon {
         float intensity = 1.0f;
     };
 
+    // A camera carried by an entity (roadmap #15): the viewpoint the RUNTIME renders from (the
+    // editor uses its own orbit camera instead). Aimed by the entity's ROTATION exactly like
+    // LightComponent -- its local +Z axis in world space is the look direction -- and POSITIONED
+    // at the entity's world translation, so parenting a camera entity under a player entity is a
+    // follow rig with no extra machinery. Holds only projection params; the pose comes from the
+    // entity's worldMatrix (see GetActiveCamera), never duplicated here. The first entity whose
+    // camera is `primary`, in scene order, is the one that renders.
+    struct CameraComponent {
+        float fovY = 1.0472f;      // vertical field of view, radians (~60 deg); ignored when orthographic
+        float nearZ = 0.1f;
+        float farZ = 100.0f;
+        bool orthographic = false;
+        float orthoHeight = 10.0f; // world-space vertical extent when orthographic (the fovY analog)
+        bool primary = false;      // the view the runtime renders from; first primary in scene order wins
+    };
+
     // A collision shape carried by an entity (M2.1): the physics seam's ColliderShape/Vec3
     // vocabulary (core/physics/physics.h). An entity with a collider but no RigidBodyComponent is an
     // implicit static collider (a wall/floor); paired with one, it becomes a dynamic/kinematic
@@ -51,7 +67,7 @@ namespace toon {
     };
 
     // A sound emitter carried by an entity (M2.2): the audio seam's SoundDesc vocabulary
-    // (core/audio/audio.h). `clip` is a path under TOON_AUDIO_DIR, same "asset path on the
+    // (core/audio/audio.h). `clip` is a filename under the audio/ asset dir, same "asset path on the
     // component, GPU/audio resource behind a handle" split as Entity::modelPath/model. Autoplay
     // emitters start when a Play/Step session begins (app/audio_glue.cpp's BuildAudioWorld);
     // `handle` is runtime-only state (like RigidBodyComponent::handle above): populated then,
@@ -68,6 +84,48 @@ namespace toon {
         float maxDistance = 25.0f; // spatial only; see SoundDesc
         SoundHandle handle = SoundHandle::Invalid;
     };
+
+    // An animation clip playing on an entity's (skinned) model (roadmap #11: skeletal
+    // animation). `clipIndex` indexes the model's own animation list (Renderer::
+    // GetModelAnimationCount/Name); -1 = no clip selected, draws bind pose. Unlike
+    // AudioSource/RigidBodyComponent above, this holds no runtime handle: the bone-matrix
+    // palette is recomputed straight from the model + `time` at draw time (Renderer::DrawModel/
+    // DrawModelShadow's AnimationState param), so there's nothing to build fresh when a Play
+    // session starts and nothing to leave stale when one stops -- Stop's existing scene-backup
+    // revert (see "Play/Pause/Step" in docs/architecture.md) already covers this component for
+    // free, the same way it covers `transform`.
+    struct AnimationComponent {
+        int32_t clipIndex = -1;
+        float time = 0.0f;
+        // Previous fixed sim tick's `time`, for motion vectors (see Renderer::AnimationState);
+        // snapshotted by SnapshotSimState, the same treatment prevSimTransform gets below.
+        float prevTime = 0.0f;
+        bool playing = true;
+        bool looping = true;
+    };
+
+    // A flat, textured, alpha-blended quad carried by an entity (roadmap #13: 2D & sprites),
+    // drawn transform-oriented (no billboarding) in a separate transparent pass after the
+    // opaque toon pass; see Renderer::DrawSprite. Splits data the same way AudioSource above
+    // does: `texturePath` is a FILENAME relative to the sprites/ asset dir (not a full path,
+    // unlike modelPath/AudioSource::clip), serialized; `texture` is the runtime handle rebuilt
+    // from it on load via Assets::Sprite (core/platform/paths.h), never serialized, harmless to copy as a plain
+    // id -- same reasoning as AudioSource::handle). `uvRect` is an atlas sub-rect (xy =
+    // offset, zw = scale, default the full [0,1] texture); `flipX`/`flipY` mirror it by
+    // negating the relevant axis's offset/scale (applied by the app layer before DrawSprite,
+    // ToonEngineOld's convention, not branched in the shader).
+    struct SpriteComponent {
+        std::string texturePath;
+        TextureHandle texture = TextureHandle::Invalid;
+        Vec4 tint = {1.0f, 1.0f, 1.0f, 1.0f};
+        Vec4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
+        bool flipX = false;
+        bool flipY = false;
+    };
+
+    // (A sprite's user-facing texture filename -- SpriteComponent::texturePath, e.g. "icon.png"
+    // -- is resolved against the one sprites/ asset directory by Assets::Sprite in
+    // core/platform/paths.h, so authoring a sprite never needs a full path typed in by hand.)
 
     // One node in the scene. It renders either a procedural primitive (`mesh` set) or a loaded
     // glTF model (`model` set); `material` is the primitive's material, or the model's
@@ -100,6 +158,10 @@ namespace toon {
 
         std::optional<LightComponent> light; // set -> this entity is a (directional) light
 
+        // Camera (roadmap #15): set -> this entity is a viewpoint the runtime can render from.
+        // Positioned/aimed by the entity's transform (see CameraComponent / GetActiveCamera).
+        std::optional<CameraComponent> camera;
+
         // Physics (M2.1): a collider alone is a static collider (see ColliderComponent above);
         // paired with a RigidBodyComponent, the entity becomes a dynamic/kinematic mover.
         std::optional<ColliderComponent> collider;
@@ -107,6 +169,16 @@ namespace toon {
 
         // Audio (M2.2): a positional or non-positional sound emitter; see AudioSource above.
         std::optional<AudioSource> audioSource;
+
+        // Skeletal animation (roadmap #11): which clip of `model`'s own animation list is
+        // playing, and when; see AnimationComponent above. Only meaningful when `model` is
+        // set and Renderer::ModelHasSkin(model) is true.
+        std::optional<AnimationComponent> animation;
+
+        // 2D sprite (roadmap #13): a flat textured quad at this entity's transform,
+        // independent of mesh/model (nothing stops an entity from carrying both, though the
+        // demo scene never does). See SpriteComponent above.
+        std::optional<SpriteComponent> sprite;
 
         // Attached native scripts (core/scene/script.h): per-tick gameplay hooks (M1.3). A
         // std::unique_ptr member makes ScriptComponent, and therefore Entity, NOT implicitly
@@ -132,7 +204,33 @@ namespace toon {
     struct Scene {
         std::vector<Entity> entities;
         int selected = -1; // index into entities; -1 = none (editor selection)
+
+        // A gameplay script's request to replace this whole scene with another (roadmap #19).
+        // Runtime-only, never serialized -- the same treatment `selected` above already gets.
+        // Written by RequestSceneChange below and drained at a frame boundary by app/session.h's
+        // TickSceneTransition; NEVER acted on where it's set. Empty = nothing pending.
+        std::string requestedScenePath;
     };
+
+    // --- Scene change requests (roadmap #19) --------------------------------------
+    // The one route gameplay code has to ask for a level change. A Script only ever receives
+    // `Entity &self` and `Scene &scene` (core/scene/script.h) -- there is no context pointer or
+    // service locator, deliberately -- so the request rides on the Scene a script already holds.
+    //
+    // Requesting and performing are split because a script runs INSIDE UpdateScripts' walk of
+    // `entities`: swapping the scene there would free the very entity whose OnUpdate is still on
+    // the stack, leaving `self` dangling as execution returns into engine code. Godot defers
+    // change_scene_to_file for exactly this reason ("it may still be executing code"); Unreal's
+    // OpenLevel likewise only sets a travel URL that the next tick acts on. The same split also
+    // makes the request safe from OnCollision*, which fires while Jolt still owns every body.
+
+    // Ask for `path` to replace this scene. Last writer wins if called twice in one tick; a null
+    // or empty path clears any pending request.
+    void RequestSceneChange(Scene &scene, const char *path);
+
+    // True if a scene change is pending. Read by the fixed-step loop (to stop simulating a scene
+    // that's about to be destroyed) and by TickSceneTransition (to start the swap).
+    bool HasPendingSceneChange(const Scene &scene);
 
     // Ensure a root exists at index 0 (parent = -1, no transform). Call once, before adding
     // entities; existing entities are shifted down and re-parented to the new root.
@@ -177,6 +275,13 @@ namespace toon {
     // Leaves the out-params untouched and returns false if the scene has no light entity.
     // Uses cached world matrices (call after UpdateWorldTransforms).
     bool GetActiveLight(const Scene &scene, Vec3 &dirToLight, Vec3 &color, float &intensity);
+
+    // Find the first entity carrying a `primary` CameraComponent and fill `out` with the view it
+    // defines: eye at the entity's world position, look direction its local +Z (same convention
+    // as GetActiveLight), plus the component's projection params. Leaves `out` untouched and
+    // returns false if the scene has no primary camera (the runtime then keeps its fallback
+    // view). Uses cached world matrices (call after UpdateWorldTransforms).
+    bool GetActiveCamera(const Scene &scene, Camera &out);
 
     // --- Hierarchy mutations (editor operations; defined in scene.cpp) ----------
     // All keep the parents-before-children invariant (re-ordering as needed) and fix up
