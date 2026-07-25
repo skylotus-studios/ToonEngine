@@ -12,7 +12,9 @@
 #include "app/physics_glue.h"
 #include "app/picking.h"
 #include "app/runtime_render.h"
+#include "app/runtime_ui.h" // RenderHUD (roadmap #17: in-game UI during play-in-editor)
 
+#include <cstdint>
 #include <vector>
 
 namespace toon {
@@ -75,6 +77,15 @@ namespace toon {
                                        markerColor);
             }
         }
+
+        // In-game HUD during play-in-editor (roadmap #17): the shared RenderHUD, the same one the
+        // player runs, so the game HUD is testable in the editor. Only the passive Playing HUD shows
+        // here -- the Title/Pause menus drive SetAppState, which the editor doesn't use (its own
+        // EditorMode owns play/pause). Editing mode shows nothing.
+        const UIScreen hudScreen = (state.mode == EditorMode::Playing || state.mode == EditorMode::Paused)
+                                       ? UIScreen::Playing
+                                       : UIScreen::None;
+        RenderHUD(state.runtime, hudScreen);
     }
 
 } // namespace toon

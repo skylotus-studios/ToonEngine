@@ -285,6 +285,12 @@ namespace toon {
     // (Capsule, the largest, is ~200) with headroom to spare.
     static constexpr Uint32 kMaxWireframeVertices = 1024;
 
+    // In-game UI overlay (roadmap #17): a fixed-capacity dynamic vertex buffer remapped per
+    // DrawUI call, holding one frame's tessellated UI (6 verts per quad). 65536 verts is
+    // ~10.9k quads, comfortably above a dense HUD + menu's glyph + panel count; DrawUI clamps
+    // and warns past it, the same as DrawWireframe.
+    static constexpr Uint32 kMaxUIVertices = 65536;
+
     // GPU mirror of the toon_common.hlsli cbuffer. Field order/size MUST match it
     // (five row-major float4x4 rows + five float4 rows = 400 bytes, 16-aligned).
     struct ShaderConstants {
@@ -330,6 +336,17 @@ namespace toon {
         float4x4 world;             // for the quad's world-space normal (G-buffer)
         float4 tint;
         float4 uvRect; // xy = offset, zw = scale
+    };
+
+    // GPU mirror of ui.hlsl's Constants cbuffer (roadmap #17: in-game UI). screenSize maps
+    // pixel positions to NDC in the VS; atlasSize + pixelRange drive the MSDF median's
+    // screen-space edge anti-aliasing in the PS. 32 bytes: two float2 pack into one 16-byte
+    // row, pixelRange + pad fill the next, matching the .hlsl cbuffer's layout.
+    struct UIConstants {
+        float2 screenSize;
+        float2 atlasSize;
+        float pixelRange;
+        float pad0, pad1, pad2;
     };
 
     // GPU mirror of {model_fill,model_outline}_skinned.hlsl's SkinConstants cbuffer
@@ -512,6 +529,17 @@ namespace toon {
         RefCntAutoPtr<IShaderResourceBinding> spriteSRB;
         RefCntAutoPtr<IBuffer> spriteConstants;
         RefCntAutoPtr<IBuffer> spriteQuadVB;
+
+        // In-game UI overlay (roadmap #17): screen-space tinted quads + MSDF text drawn onto the
+        // resolved back buffer after EndScene (see CreateUIPipeline/DrawUI). One dynamic VB is
+        // remapped per batch; g_UIAtlas is DYNAMIC on the shared SRB, re-Set per DrawUI call (the
+        // font atlas, or uiWhiteTex for a solid-only batch) -- the same per-draw-varying-texture
+        // shape as spriteSRB's g_SpriteTex above.
+        RefCntAutoPtr<IPipelineState> uiPSO;
+        RefCntAutoPtr<IShaderResourceBinding> uiSRB;
+        RefCntAutoPtr<IBuffer> uiConstants;
+        RefCntAutoPtr<IBuffer> uiVB;
+        RefCntAutoPtr<ITexture> uiWhiteTex; // 1x1 white, bound when DrawUI gets no atlas (solid quads)
 
         // DiligentFX post effects (Bloom + SSAO) share a PostFXContext. It requires
         // depth + motion + camera to reach its "PSOs ready" gate (which both effects
@@ -1052,6 +1080,11 @@ namespace toon {
 
         if (!CreateSpritePipeline()) {
             std::fprintf(stderr, "Renderer: failed to create sprite pipeline\n");
+            return false;
+        }
+
+        if (!CreateUIPipeline()) {
+            std::fprintf(stderr, "Renderer: failed to create UI pipeline\n");
             return false;
         }
 
@@ -1724,6 +1757,135 @@ namespace toon {
         }
         m_impl->spritePSO->CreateShaderResourceBinding(&m_impl->spriteSRB, true);
         return m_impl->spriteSRB != nullptr;
+    }
+
+    // In-game UI overlay pipeline (roadmap #17): screen-space tinted quads + MSDF text, drawn
+    // straight onto the resolved back buffer after EndScene -- the same "1 RTV, no depth, alpha
+    // blend" shape as the wireframe/ImGui overlays, not the sprite's 3-target HDR G-buffer. One
+    // dynamic VB (kMaxUIVertices) is remapped per DrawUI batch; g_UIAtlas is DYNAMIC on the
+    // shared SRB (re-Set per call) with an immutable linear-clamp sampler for the atlas.
+    bool Renderer::CreateUIPipeline() {
+        IRenderDevice *device = m_impl->device;
+        IRenderStateCache *cache = m_impl->stateCache; // roadmap #10: shaders/PSOs route through this
+        const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
+
+        {
+            BufferDesc cbDesc;
+            cbDesc.Name = "ui constants";
+            cbDesc.Size = sizeof(UIConstants);
+            cbDesc.Usage = USAGE_DYNAMIC;
+            cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
+            cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            device->CreateBuffer(cbDesc, nullptr, &m_impl->uiConstants);
+            if (!m_impl->uiConstants) { return false; }
+        }
+        {
+            BufferDesc vbDesc;
+            vbDesc.Name = "ui VB";
+            vbDesc.Usage = USAGE_DYNAMIC;
+            vbDesc.BindFlags = BIND_VERTEX_BUFFER;
+            vbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
+            vbDesc.Size = static_cast<Uint64>(kMaxUIVertices) * sizeof(UIVertex);
+            device->CreateBuffer(vbDesc, nullptr, &m_impl->uiVB);
+            if (!m_impl->uiVB) { return false; }
+        }
+        {
+            // 1x1 opaque white, bound as g_UIAtlas for a solid-only batch (DrawUI given no
+            // atlas), so the PSO always has a valid SRV even before a font is loaded.
+            const Uint32 white = 0xFFFFFFFFu;
+            TextureDesc td;
+            td.Name = "ui white 1x1";
+            td.Type = RESOURCE_DIM_TEX_2D;
+            td.Width = 1;
+            td.Height = 1;
+            td.Format = TEX_FORMAT_RGBA8_UNORM;
+            td.BindFlags = BIND_SHADER_RESOURCE;
+            td.Usage = USAGE_IMMUTABLE;
+            TextureSubResData sub{&white, sizeof(white)};
+            TextureData init{&sub, 1};
+            device->CreateTexture(td, &init, &m_impl->uiWhiteTex);
+            if (!m_impl->uiWhiteTex) { return false; }
+        }
+
+        IShaderSourceInputStreamFactory *sf = m_impl->shaderFactory;
+        auto vs = CreateToonShader(cache, sf, SHADER_TYPE_VERTEX, "ui VS", "ui.hlsl", "VSMain");
+        auto ps = CreateToonShader(cache, sf, SHADER_TYPE_PIXEL, "ui PS", "ui.hlsl", "PSMain");
+        if (!vs || !ps) { return false; }
+
+        LayoutElement layoutElems[] = {
+            LayoutElement{0, 0, 2, VT_FLOAT32, False}, // ATTRIB0 pos (pixels)
+            LayoutElement{1, 0, 2, VT_FLOAT32, False}, // ATTRIB1 uv
+            LayoutElement{2, 0, 4, VT_FLOAT32, False}, // ATTRIB2 color
+            LayoutElement{3, 0, 1, VT_FLOAT32, False}, // ATTRIB3 mode
+            LayoutElement{4, 0, 4, VT_FLOAT32, False}, // ATTRIB4 params (rounded rect)
+            LayoutElement{5, 0, 4, VT_FLOAT32, False}, // ATTRIB5 borderColor (rounded rect)
+        };
+
+        GraphicsPipelineStateCreateInfo ci;
+        ci.PSODesc.Name = "ui PSO";
+        ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+
+        GraphicsPipelineDesc &gp = ci.GraphicsPipeline;
+        gp.NumRenderTargets = 1;
+        gp.RTVFormats[0] = sc.ColorBufferFormat; // resolved back buffer, same as wireframe/tonemap
+        gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        gp.RasterizerDesc.CullMode = CULL_MODE_NONE; // 2D quads: winding-agnostic
+        gp.DepthStencilDesc.DepthEnable = False;     // an overlay: no depth, always on top
+        gp.InputLayout.LayoutElements = layoutElems;
+        gp.InputLayout.NumElements = sizeof(layoutElems) / sizeof(layoutElems[0]);
+
+        // Straight-alpha blend (SrcAlpha/InvSrcAlpha), the same as sprite RT0 and what ui.hlsl's
+        // solid + text outputs both expect.
+        RenderTargetBlendDesc &rt0 = gp.BlendDesc.RenderTargets[0];
+        rt0.BlendEnable = True;
+        rt0.SrcBlend = BLEND_FACTOR_SRC_ALPHA;
+        rt0.DestBlend = BLEND_FACTOR_INV_SRC_ALPHA;
+        rt0.BlendOp = BLEND_OPERATION_ADD;
+        rt0.SrcBlendAlpha = BLEND_FACTOR_ONE;
+        rt0.DestBlendAlpha = BLEND_FACTOR_INV_SRC_ALPHA;
+        rt0.BlendOpAlpha = BLEND_OPERATION_ADD;
+
+        ci.pVS = vs;
+        ci.pPS = ps;
+
+        // Constants is shared STATIC (VS reads screenSize, PS reads atlasSize/pixelRange, so
+        // each stage binds its own copy -- same as wireframe/sprite); g_UIAtlas is DYNAMIC,
+        // re-Set per DrawUI call on the one shared uiSRB.
+        // g_UIAtlas is declared for BOTH stages: Diligent's combined-texture-sampler reflection
+        // surfaces it in the VS resource signature too (even though only PSMain samples it), so it
+        // must be bindable there as well or the draw fails validation ("no resource bound to
+        // g_UIAtlas in ui VS") and is skipped. DrawUI binds both.
+        ShaderResourceVariableDesc vars[] = {
+            {SHADER_TYPE_VERTEX, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_PIXEL, "Constants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC},
+            {SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "g_UIAtlas", SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC},
+        };
+        ci.PSODesc.ResourceLayout.Variables = vars;
+        ci.PSODesc.ResourceLayout.NumVariables = sizeof(vars) / sizeof(vars[0]);
+
+        SamplerDesc linClamp;
+        linClamp.MinFilter = FILTER_TYPE_LINEAR;
+        linClamp.MagFilter = FILTER_TYPE_LINEAR;
+        linClamp.MipFilter = FILTER_TYPE_LINEAR;
+        linClamp.AddressU = TEXTURE_ADDRESS_CLAMP;
+        linClamp.AddressV = TEXTURE_ADDRESS_CLAMP;
+        linClamp.AddressW = TEXTURE_ADDRESS_CLAMP;
+        ImmutableSamplerDesc immSamplers[] = {
+            {SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "g_UIAtlas", linClamp},
+        };
+        ci.PSODesc.ResourceLayout.ImmutableSamplers = immSamplers;
+        ci.PSODesc.ResourceLayout.NumImmutableSamplers = sizeof(immSamplers) / sizeof(immSamplers[0]);
+
+        cache->CreateGraphicsPipelineState(ci, &m_impl->uiPSO);
+        if (!m_impl->uiPSO) { return false; }
+        if (auto *v = m_impl->uiPSO->GetStaticVariableByName(SHADER_TYPE_VERTEX, "Constants")) {
+            v->Set(m_impl->uiConstants);
+        }
+        if (auto *p = m_impl->uiPSO->GetStaticVariableByName(SHADER_TYPE_PIXEL, "Constants")) {
+            p->Set(m_impl->uiConstants);
+        }
+        m_impl->uiPSO->CreateShaderResourceBinding(&m_impl->uiSRB, true);
+        return m_impl->uiSRB != nullptr;
     }
 
     bool Renderer::CreatePostFX() {
@@ -2669,6 +2831,63 @@ namespace toon {
 
         DrawAttribs draw;
         draw.NumVertices = 6; // the shared unit quad (CreateSpritePipeline), two triangles
+        draw.Flags = DRAW_FLAG_VERIFY_ALL;
+        m_impl->context->Draw(draw);
+    }
+
+    // --- In-game UI overlay (roadmap #17) ----------------------------------------
+
+    // Uploads one screen-space UI batch (tinted quads + MSDF text) and draws it onto the
+    // resolved back buffer. Call after EndScene(), the same timing as DrawWireframe/DrawGrid;
+    // it binds the back buffer itself (like DrawGrid's rebind) so it's correct regardless of
+    // whether the grid/wireframe overlays ran first. See UIVertex for the vertex format and
+    // CreateUIPipeline for the pipeline. g_UIAtlas is re-Set per call, the same per-draw-varying-
+    // texture pattern DrawSprite uses for g_SpriteTex.
+    void Renderer::DrawUI(const UIVertex *vertices, uint32_t vertexCount, TextureHandle atlas, float pixelRange) {
+        if (!vertices || vertexCount == 0 || !m_impl->uiPSO) { return; }
+        if (vertexCount > kMaxUIVertices) {
+            std::fprintf(stderr, "DrawUI: %u verts exceeds the %u max, clamping\n", vertexCount, kMaxUIVertices);
+            vertexCount = kMaxUIVertices;
+        }
+
+        // The atlas SRV (or the 1x1 white fallback for a solid-only batch) + its texel size,
+        // which ui.hlsl's MSDF median needs for its screen-pixel-range anti-aliasing.
+        const uint32_t texIdx = static_cast<uint32_t>(atlas);
+        ITexture *atlasTex = (texIdx != 0 && texIdx <= m_impl->textures.size() && m_impl->textures[texIdx - 1])
+                                 ? m_impl->textures[texIdx - 1].RawPtr()
+                                 : m_impl->uiWhiteTex.RawPtr();
+
+        const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
+        {
+            MapHelper<UIConstants> cb(m_impl->context, m_impl->uiConstants, MAP_WRITE, MAP_FLAG_DISCARD);
+            cb->screenSize = float2(static_cast<float>(sc.Width), static_cast<float>(sc.Height));
+            cb->atlasSize = float2(static_cast<float>(atlasTex->GetDesc().Width),
+                                   static_cast<float>(atlasTex->GetDesc().Height));
+            cb->pixelRange = pixelRange;
+        }
+        {
+            MapHelper<UIVertex> vb(m_impl->context, m_impl->uiVB, MAP_WRITE, MAP_FLAG_DISCARD);
+            UIVertex *dst = vb;
+            for (uint32_t i = 0; i < vertexCount; ++i) { dst[i] = vertices[i]; }
+        }
+
+        IBuffer *vbs[] = {m_impl->uiVB};
+        const Uint64 offsets[] = {0};
+        m_impl->context->SetVertexBuffers(0, 1, vbs, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                                          SET_VERTEX_BUFFERS_FLAG_RESET);
+
+        ITextureView *srv = atlasTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        if (auto *v = m_impl->uiSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_UIAtlas")) { v->Set(srv); }
+        if (auto *v = m_impl->uiSRB->GetVariableByName(SHADER_TYPE_VERTEX, "g_UIAtlas")) { v->Set(srv); }
+
+        ITextureView *rtv = m_impl->swapChain->GetCurrentBackBufferRTV();
+        m_impl->context->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+        m_impl->context->SetPipelineState(m_impl->uiPSO);
+        m_impl->context->CommitShaderResources(m_impl->uiSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+        DrawAttribs draw;
+        draw.NumVertices = vertexCount;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
         m_impl->context->Draw(draw);
     }

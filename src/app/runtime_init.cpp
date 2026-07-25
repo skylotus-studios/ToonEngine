@@ -6,6 +6,7 @@
 #include "app/app_state.h"
 #include "app/runtime_render.h"
 #include "app/runtime_tick.h"
+#include "app/runtime_ui.h" // RenderHUD (roadmap #17: the in-game HUD/menu)
 #include "core/input/input_system.h"
 #include "core/platform/paths.h" // Assets::Icon (exe-relative asset paths)
 
@@ -73,6 +74,7 @@ namespace toon {
             TickRuntime(rs, frameTime, sim);
 
             RenderScene(rs);
+            RenderHUD(rs, ScreenForAppState(rs.appState)); // in-game HUD/menus (roadmap #17)
             rs.renderer.EndFrame();
         }
     }

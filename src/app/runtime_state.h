@@ -17,6 +17,7 @@
 #include "core/physics/physics.h"
 #include "core/rendering/renderer.h" // Renderer, Camera, Material, PostParams, Color
 #include "core/scene/scene.h"
+#include "core/ui/ui.h" // UIContext + Font for the in-game UI (roadmap #17)
 
 #include <cstdint>
 #include <string>
@@ -80,6 +81,14 @@ namespace toon {
         LoadJob loadJob;
         // The scene the loader should bring up (seeded when entering Loading).
         std::string pendingScenePath;
+
+        // In-game UI (roadmap #17): the Fleury box cache + its MSDF font, driven by RenderHUD
+        // (app/runtime_ui.h) each frame after RenderScene. The font loads lazily on the first
+        // RenderHUD call, so the player and the editor's play-in-editor both get it with no extra
+        // init wiring.
+        UIContext ui;
+        Font uiFont;
+        bool uiFontLoaded = false;
     };
 
 } // namespace toon

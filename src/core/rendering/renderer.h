@@ -201,6 +201,23 @@ namespace toon {
         bool shadows = true;
     };
 
+    // One vertex of a screen-space UI batch (DrawUI, roadmap #17). `pos` is in PIXELS with the
+    // origin at the top-left of the window (the shader maps it to NDC), so the UI layer above the
+    // seam (core/ui/) works purely in pixels. `color` is straight (non-premultiplied) RGBA. `mode`
+    // selects the shading: 0 = solid fill (emit `color`); 1 = MSDF glyph (`uv` = atlas coord,
+    // median distance -> coverage, times `color`); 2 = rounded rect + SDF border (`uv` = pixel
+    // offset from the rect center, `params` = (halfW, halfH, cornerRadius, borderThickness), fill =
+    // `color`, border = `borderColor`). The UI layer tessellates every rect/glyph into these -- two
+    // triangles (6 verts) per quad, no index buffer -- and the renderer uploads and draws them.
+    struct UIVertex {
+        Vec2 pos;
+        Vec2 uv;
+        Vec4 color;
+        float mode = 0.0f;  // 0 = solid fill, 1 = MSDF text, 2 = rounded rect + border
+        Vec4 params{};      // mode 2: (halfW, halfH, cornerRadius, borderThickness), pixels
+        Vec4 borderColor{}; // mode 2: border color (zero for modes 0/1)
+    };
+
     // --- Renderer ---------------------------------------------------------------
     // Owns the graphics device, immediate context, and swap chain, and drives the
     // per-frame lifecycle. Backend-agnostic by construction (see file header).
@@ -381,6 +398,17 @@ namespace toon {
         // contract as DrawWireframe -- and BEFORE BeginUI().
         void DrawGrid();
 
+        // --- In-game UI overlay (roadmap #17) -----------------------------------
+        // Draw a screen-space UI batch (tinted quads + MSDF text) straight onto the resolved
+        // back buffer -- same after-EndScene / before-BeginUI timing contract as DrawWireframe/
+        // DrawGrid above, and the same LDR target the ImGui overlay uses (UI never runs through
+        // bloom/tone-map). `vertices` is a triangle list, 6 verts per quad, in pixel space (see
+        // UIVertex); `atlas` is the MSDF font atlas glyph quads sample (TextureHandle::Invalid
+        // binds a 1x1 white fallback, so a solid-only batch needs no font loaded); `pixelRange`
+        // is that atlas's MSDF distance range in texels (from its metrics), for the shader's
+        // screen-space edge anti-aliasing. A zero vertexCount is a no-op.
+        void DrawUI(const UIVertex *vertices, uint32_t vertexCount, TextureHandle atlas, float pixelRange);
+
         // --- Debug/editor UI (Dear ImGui) ---------------------------------------
         // Diligent's ImGui renderer backend (ImGuiImplDiligent) is confined to
         // renderer.cpp same as everything else; main.cpp only sees these four
@@ -406,6 +434,7 @@ namespace toon {
         bool CreateSkyPipeline();                                     // sky-gradient fullscreen PSO (DrawSky)
         bool CreateGridRenderer();                                    // DiligentFX CoordinateGridRenderer (DrawGrid)
         bool CreateSpritePipeline();                                  // transparent textured-quad PSO (DrawSprite)
+        bool CreateUIPipeline();                                       // screen-space UI quad + MSDF text PSO (DrawUI)
 
         // Roadmap #11 (skeletal animation): grow the shared skinning joints buffer (never
         // shrink it) to hold at least `neededElements` bone matrices, re-pointing every

@@ -41,8 +41,16 @@ namespace toon {
     // directly. See app/app_state.cpp.
     void SetAppState(RuntimeState &rs, AppState next);
 
-    // Per-frame AppState logic, called by the runtime loop after TickRuntime: Title waits for a
-    // keypress, Loading drains its queue, Paused watches for resume. See app/app_state.cpp.
+    // Per-frame AppState logic, called by the runtime loop after TickRuntime: Loading drains its
+    // queue, Playing/Paused watch for the pause/resume keypress. The Title/Pause menus themselves
+    // are drawn + driven by the in-game UI (roadmap #17, app/runtime_ui.cpp). See app/app_state.cpp.
     void TickAppState(RuntimeState &rs);
+
+    // New Game / Continue intents, shared so a menu button (app/runtime_ui.cpp) and any keyboard
+    // shortcut funnel through the same transition. BeginNewGame resets progress and enters Loading
+    // with the default scene; BeginContinue loads the quicksave (falling back to a fresh start if it
+    // can't be read) and enters Loading.
+    void BeginNewGame(RuntimeState &rs);
+    void BeginContinue(RuntimeState &rs);
 
 } // namespace toon

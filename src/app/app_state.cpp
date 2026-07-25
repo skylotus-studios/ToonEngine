@@ -85,6 +85,18 @@ namespace toon {
         }
     }
 
+    void BeginNewGame(RuntimeState &rs) {
+        rs.playtimeSeconds = 0.0f; // fresh progress; keep the default scene
+        SetAppState(rs, AppState::Loading);
+    }
+
+    void BeginContinue(RuntimeState &rs) {
+        // Point the loader at the saved scene + restore playtime; fall back to a fresh start if the
+        // save turned out unreadable (corrupt/newer) rather than stalling at the title.
+        if (!QuickLoad(rs)) { rs.playtimeSeconds = 0.0f; }
+        SetAppState(rs, AppState::Loading);
+    }
+
     void TickAppState(RuntimeState &rs) {
         // No default arm: every AppState decides its own per-frame behavior explicitly.
         switch (rs.appState) {
@@ -94,23 +106,11 @@ namespace toon {
                 SetAppState(rs, AppState::Title);
                 break;
             case AppState::Title:
-                // No text renderer yet (roadmap #17): a bare clear that waits for a keypress.
-                // New Game (N / Enter / Space) starts fresh; Continue (C) loads the save if one
-                // exists; Escape quits. A real title MENU with these as on-screen buttons waits on
-                // the in-game UI (roadmap #17); keyboard-driven is the demonstrable form today.
-                if (Input::WasKeyPressed(Input::Key::C) && SaveExists(kQuickSaveSlot)) {
-                    // Continue: point the loader at the saved scene + restore playtime. If the save
-                    // turned out unreadable (corrupt/newer), fall back to a fresh start rather than
-                    // stalling at the title.
-                    if (!QuickLoad(rs)) { rs.playtimeSeconds = 0.0f; }
-                    SetAppState(rs, AppState::Loading);
-                } else if (Input::WasKeyPressed(Input::Key::N) || Input::WasKeyPressed(Input::Key::Enter) ||
-                           Input::WasKeyPressed(Input::Key::Space)) {
-                    rs.playtimeSeconds = 0.0f; // New Game: fresh progress, keep the default scene
-                    SetAppState(rs, AppState::Loading);
-                } else if (Input::WasKeyPressed(Input::Key::Escape)) {
-                    SetAppState(rs, AppState::Quit);
-                }
+                // The title MENU (New Game / Continue / Quit) is drawn + driven by the in-game UI
+                // (roadmap #17, app/runtime_ui.cpp's RenderHUD, called each frame right after this):
+                // it routes New Game / Continue through BeginNewGame / BeginContinue and Quit through
+                // SetAppState, navigable by mouse, keyboard arrows + Enter, and gamepad. Nothing to
+                // poll here now.
                 break;
             case AppState::Loading:
                 DrainLoadJob(rs);

@@ -124,6 +124,12 @@ add_library(ToonRuntime STATIC
     src/core/platform/paths.cpp       # exe-relative asset path resolution (roadmap #16)
     src/core/rendering/renderer.cpp
     src/core/rendering/primitives.cpp
+    src/core/ui/text.h                # (header-only interface, listed for IDE visibility)
+    src/core/ui/text.cpp              # MSDF font load + text layout for the in-game UI (roadmap #17)
+    src/core/ui/ui.h                  # (header-only interface, listed for IDE visibility)
+    src/core/ui/ui.cpp                # Fleury immediate-over-cache UI core: box cache + layout + signals (roadmap #17)
+    src/core/ui/strings.h             # (header-only interface, listed for IDE visibility)
+    src/core/ui/strings.cpp           # player-facing string-key table (roadmap #17, localization-ready)
     src/core/scene/scene.cpp          # scene graph (uses Diligent float4x4 for world composition)
     src/core/physics/physics.cpp        # Jolt Physics backend behind the physics seam (M2.1)
     src/core/audio/audio.cpp            # miniaudio backend behind the audio seam (M2.2)
@@ -142,6 +148,8 @@ add_library(ToonRuntime STATIC
     src/app/app_state.cpp        # application state machine (Boot/Title/Loading/Playing/Paused/Quit) + LoadJob drain
     src/app/runtime_tick.cpp     # engine-half per-frame tick (fixed-timestep sim + presentation), shared with the player
     src/app/runtime_render.cpp   # scene render (shadow/sky/opaque/sprite/resolve), shared with the player
+    src/app/runtime_ui.h         # (header-only interface, listed for IDE visibility)
+    src/app/runtime_ui.cpp       # in-game HUD/menu driver (roadmap #17), shared with the player
     src/app/runtime_init.cpp     # runtime bring-up/teardown + the main loop (no ImGui)
     src/app/physics_glue.cpp     # collider-extent scaling + physics-world (re)construction
     src/app/audio_glue.cpp       # audio-world (re)construction from AudioSource-bearing entities
