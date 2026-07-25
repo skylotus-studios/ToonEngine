@@ -139,9 +139,9 @@ namespace toon {
         if ((drag.x * drag.x + drag.y * drag.y) > (kClickMaxDragPx * kClickMaxDragPx)) { return; }
 
         Vec3 rayOrigin, rayDir;
-        state.renderer.ScreenPointToRay(io.MousePos.x, io.MousePos.y, io.DisplaySize.x, io.DisplaySize.y, rayOrigin,
+        state.runtime.renderer.ScreenPointToRay(io.MousePos.x, io.MousePos.y, io.DisplaySize.x, io.DisplaySize.y, rayOrigin,
                                         rayDir);
-        state.scene.selected = PickEntity(state.scene, state.renderer, rayOrigin, rayDir);
+        state.runtime.scene.selected = PickEntity(state.runtime.scene, state.runtime.renderer, rayOrigin, rayDir);
     }
 
 } // namespace toon

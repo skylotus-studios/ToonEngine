@@ -33,14 +33,6 @@ namespace toon {
 
     void SpinScript::Load(std::istream &in) { in >> axis.x >> axis.y >> axis.z >> speed; }
 
-    namespace {
-        // Self-registers on program start (before main()) so the name -> factory registry
-        // can reconstruct a SpinScript from a saved scene or an in-memory Entity clone
-        // without either of those call sites knowing this type exists.
-        const bool kSpinScriptRegistered = [] {
-            RegisterScript(kSpinScriptName, [] { return std::make_unique<SpinScript>(); });
-            return true;
-        }();
-    } // namespace
+    void RegisterSpinScript() { RegisterScript(kSpinScriptName, [] { return std::make_unique<SpinScript>(); }); }
 
 } // namespace toon

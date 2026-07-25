@@ -51,8 +51,8 @@ namespace toon {
         ThumbnailCache thumbnails;
     };
 
-    // Sets the browsable root (pass TOON_ASSETS_DIR) and scans it. Call once before the
-    // first RenderFileBrowser.
+    // Sets the browsable root (pass Assets::Root(), core/platform/paths.h) and scans it. Call
+    // once before the first RenderFileBrowser.
     void InitFileBrowser(FileBrowser &browser, const char *rootDir);
 
     // Draws the "Asset Browser" window: breadcrumb, sortable table, preview pane. Returns

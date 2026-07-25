@@ -25,4 +25,8 @@ namespace toon {
         void Load(std::istream &in) override;
     };
 
+    // Add this type to the name registry. Called by RegisterBuiltinScripts (see
+    // core/scene/scripts/builtin_scripts.h) rather than by a self-registering static.
+    void RegisterSpinScript();
+
 } // namespace toon

@@ -28,7 +28,7 @@ namespace toon {
     // Everything Play needs to start one persistent (handled) sound: a scene emitter
     // (app/audio_glue.cpp's BuildAudioWorld) or a music track. `clip` is typically just a
     // filename (e.g. "demo_hum.wav"). audio.cpp resolves anything that isn't already an
-    // absolute path against TOON_AUDIO_DIR, so a full path also works if one is given.
+    // absolute path against the audio/ asset dir (core/platform/paths.h), so a full path also works if one is given.
     struct SoundDesc {
         std::string clip;
         float volume = 1.0f;
