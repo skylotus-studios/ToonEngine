@@ -8,7 +8,7 @@ non-essential expansion, the tail of the same ranked sequence, not a separate bu
 project's guiding principle is to build on Diligent Engine, not reinvent it.
 
 ```
-Shipped  ████████████████░░░░░░░░░░░░░░░░░░░  16 / 35 items
+Shipped  █████████████████░░░░░░░░░░░░░░░░░░  17 / 35 items
 ```
 
 ```mermaid
@@ -56,16 +56,16 @@ flowchart LR
         direction TB
         S15["Game runtime mode"]
         S16["Asset packaging"]
-        N17["In-game UI &amp; HUD"]
-        S15 --> S16 --> N17
+        N18["In-game UI &amp; HUD"]
+        S15 --> S16 --> N18
     end
 
     subgraph V07["v0.7"]
         direction TB
-        N18["Player save system"]
+        S17["Player save system"]
         N19["Level transitions"]
         N20["Resource manager"]
-        N18 --> N19 --> N20
+        S17 --> N19 --> N20
     end
 
     subgraph V08["v0.8"]
@@ -129,9 +129,9 @@ flowchart LR
     class S7,S8,S9 v03
     class S10,S11,S12 v04
     class S13,S14 v05
-    class N17 v06
-    class S15,S16 shipped
-    class N18,N19,N20 v07
+    class N18 v06
+    class S15,S16,S17 shipped
+    class N19,N20 v07
     class N21,N22,N23 v08
     class N24,N25,N26 v09
     class N27,N28,N29,N30 v10
@@ -199,11 +199,23 @@ flowchart LR
     CMake `install()` rules that stage the two executables, the `assets/` tree, and the engine
     DLLs into a relocatable folder, so a standalone build runs outside the dev tree. Writable
     user data (rebound bindings, saved scenes) stays on the read path for now, deferred to the
-    save system (item 18).
+    save system (item 17).
+17. **Player save/progress system**: a game-state document distinct from the `.scene` authoring
+    format, saving what a player does in a running game rather than a full scene dump. A
+    `core/save/savegame` module (a `SaveGame` of version, active scene, playtime, and an opaque
+    game-owned blob, plus versioned text read/write with a newer-version-rejects guard) writes
+    to a per-user writable directory a new `toon::UserData` path resolver supplies
+    (`%LOCALAPPDATA%/ToonEngine/saves/local`), the write-side twin of the read-only `Assets`
+    tree, so a read-only installed build still saves. The player's title screen gained New Game /
+    Continue plus an F5 quick-save and autosave-on-pause; the editor's Playback panel gained dev
+    Save/Load buttons over the same glue. The `local` path segment is the seam for Steam's
+    `{64BitSteamID}` (item 25); the real gameplay schema (inventory, unlock flags, checkpoints)
+    lands in the blob later as a data change. Display and graphics settings stay out of the save
+    path, per Valve's advice against syncing machine-specific configuration.
 
 ## What's Next, Most to Least Important
 
-17. **In-game UI and HUD, including text rendering.** Player-facing UI primitives (layout and
+18. **In-game UI and HUD, including text rendering.** Player-facing UI primitives (layout and
     anchoring, 9-slice, controller focus navigation) plus text rendering outside ImGui's font
     atlas. Dear ImGui is deliberately not the answer here; its own author's position is that
     it targets development and debug tools rather than end-user UI, and that it isn't designed
@@ -212,22 +224,14 @@ flowchart LR
     it is their unnamed prerequisite: both assume a player-facing UI system that doesn't exist.
     Route every player-facing string through a lookup key from the start, so the localization
     pipeline (item 32) is a data change later rather than a rewrite.
-18. **Player save/progress system**, distinct from the existing `.scene` authoring
-    serialization: a checkpoint/inventory/unlocked-state format for what a player actually does
-    in a running game, not a full scene dump. Ranked here rather than at the top of the list
-    because a save system running inside the editor process saves editor state; the runtime
-    above it is the real prerequisite. Save to a path that is unique per Steam user, which
-    Steam Auto-Cloud supplies through its `{64BitSteamID}` path variable, and keep display and
-    graphics settings out of that path: Valve's own cloud documentation advises against syncing
-    machine-specific configuration. Auto-Cloud is partner-site configuration rather than code,
-    so it's the cheaper option than `ISteamRemoteStorage` for a solo project.
 19. **Scene and level transitions.** Level changes requested from gameplay code rather than the
     editor's File menu, with physics bodies, audio handles, and scripts released in the right
     order, and something on screen while the load runs. Today `LoadSceneInto` is a synchronous
     full replace driven from a menu. This is a correctness item, not a convenience one: scene
     mutation is already deferred to tick boundaries because structural edits reorder
-    `Scene::entities`, so a mid-tick scene swap requested from a script is a crash. Ranked
-    directly after the save system because it's what makes the runtime's Loading state real.
+    `Scene::entities`, so a mid-tick scene swap requested from a script is a crash. Ranked here
+    because it's what makes the runtime's Loading state real, alongside the save system (item 17)
+    that persists which level a player reached.
 20. **Resource manager with reference counting.** A load-path cache and ownership model for
     textures, models, and audio clips. There's no dedupe today, so two sprites naming the same
     PNG create two GPU textures, and `Renderer::DestroyTexture` is the entire lifetime story;
@@ -265,7 +269,7 @@ flowchart LR
     and opens the release-readiness cluster the rest of this tier belongs to.
 26. **Settings menu.** A player-facing menu for display (resolution, fullscreen, VSync), input
     (a rebind UI over the already-shipped action-map system), and audio, built on the in-game
-    UI system from item 17 and replacing today's dev-only Settings panel for anything a player
+    UI system from item 18 and replacing today's dev-only Settings panel for anything a player
     rather than a developer needs to control. Steam's own launch checklist tests for exactly
     this, and ToonEngine has no player-facing display settings today. Two engine-side pieces
     land with it: an audio bus split (Master, Music, SFX through `ma_sound_group` behind the
@@ -316,7 +320,7 @@ flowchart LR
     CJK fallback fonts (the Noto and Source Han families rather than one atlas), plus declaring
     supported languages on the partner site's Depots page. Every user-facing string is a
     hard-coded C++ literal today. Not blocking for a Windows-only English first release, which
-    is why it ranks after 1.0, but the lookup-key indirection item 17 introduces is what keeps
+    is why it ranks after 1.0, but the lookup-key indirection item 18 introduces is what keeps
     this a data change rather than a rewrite of every menu. Also interacts with Steam Deck's
     legibility floor, since translated strings routinely run longer than the English source.
 33. **Linux support** (Vulkan). Expands the eventual audience, but Windows-only is a normal,

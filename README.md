@@ -157,16 +157,16 @@ flowchart LR
     direction TB
     S15["Game runtime mode"]
     S16["Asset packaging"]
-    N17["In-game UI &amp; HUD"]
-    S15 --> S16 --> N17
+    N18["In-game UI &amp; HUD"]
+    S15 --> S16 --> N18
   end
 
   subgraph V07["v0.7"]
     direction TB
-    N18["Player save system"]
+    S17["Player save system"]
     N19["Level transitions"]
     N20["Resource manager"]
-    N18 --> N19 --> N20
+    S17 --> N19 --> N20
   end
 
   subgraph V08["v0.8"]
@@ -230,9 +230,9 @@ flowchart LR
   class S7,S8,S9 v03
   class S10,S11,S12 v04
   class S13,S14 v05
-  class N17 v06
-  class S15,S16 shipped
-  class N18,N19,N20 v07
+  class N18 v06
+  class S15,S16,S17 shipped
+  class N19,N20 v07
   class N21,N22,N23 v08
   class N24,N25,N26 v09
   class N27,N28,N29,N30 v10
