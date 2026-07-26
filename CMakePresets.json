@@ -30,10 +30,24 @@
       "displayName": "Windows Release (Ninja + clang-cl / Vulkan)",
       "inherits": "windows-base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "agent-debug",
+      "displayName": "Agent Debug (isolated build dir; do not use interactively)",
+      "inherits": "windows-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "agent-release",
+      "displayName": "Agent Release (isolated build dir; do not use interactively)",
+      "inherits": "windows-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
     }
   ],
   "buildPresets": [
     { "name": "windows-debug", "configurePreset": "windows-debug" },
-    { "name": "windows-release", "configurePreset": "windows-release" }
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "agent-debug", "configurePreset": "agent-debug" },
+    { "name": "agent-release", "configurePreset": "agent-release" }
   ]
 }
