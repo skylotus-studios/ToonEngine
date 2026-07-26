@@ -10,9 +10,10 @@
 #
 # This adds the `develop` and `main` worktrees as siblings of this checkout,
 # initializes their submodules recursively, and re-links CLAUDE.md,
-# MEMORY.md, ARCHIVE.md, and the project/user Claude skills, agents,
-# commands, and settings.json from this branch so both worktrees and your
-# global Claude Code config (~/.claude) come back exactly as they were.
+# MEMORY.md, ARCHIVE.md, both style guides, and the project/user Claude
+# skills, agents, commands, and settings.json from this branch so both
+# worktrees and your global Claude Code config (~/.claude) come back exactly
+# as they were.
 #
 # Safe to re-run: existing worktrees and correct symlinks are left alone.
 
@@ -65,11 +66,13 @@ git -C "$MAIN" submodule update --init --recursive
 
 echo "==> Project-level Claude files (develop, main)"
 for W in "$DEVELOP" "$MAIN"; do
-  link "$HERE/claude.md"      "$W/CLAUDE.md"
-  link "$HERE/memory.md"      "$W/MEMORY.md"
-  link "$HERE/archive.md"     "$W/ARCHIVE.md"
-  link "$HERE/project/skills" "$W/.claude/skills"
-  link "$HERE/project/agents" "$W/.claude/agents"
+  link "$HERE/claude.md"           "$W/CLAUDE.md"
+  link "$HERE/memory.md"           "$W/MEMORY.md"
+  link "$HERE/archive.md"          "$W/ARCHIVE.md"
+  link "$HERE/cpp-style-guide.md"  "$W/docs/cpp-style-guide.md"
+  link "$HERE/md-style-guide.md"   "$W/docs/md-style-guide.md"
+  link "$HERE/project/skills"      "$W/.claude/skills"
+  link "$HERE/project/agents"      "$W/.claude/agents"
 done
 
 echo "==> User-level Claude files (~/.claude)"
