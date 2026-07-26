@@ -20,20 +20,22 @@ Ordered steps, starting from a machine with nothing on it.
    to taste; the rest of these steps assume `C:/dev/ToonEngine`):
 
    ```
-   git clone --branch backup <remote-url> C:/dev/ToonEngine/backup
+   git clone --branch backup https://github.com/skylotus-studios/ToonEngine C:/dev/ToonEngine/backup
    cd C:/dev/ToonEngine/backup
    ```
 
-3. **Run the bootstrap script.** From a Git Bash shell:
-
-   ```
-   ./bootstrap.sh
-   ```
-
-   From `cmd.exe` (no Git Bash shell needed — it finds and calls into one for you):
+3. **Run the bootstrap script.** From `cmd.exe` — no prerequisites beyond having cloned this
+   repo; it runs on PowerShell, which ships with every supported version of Windows, and does
+   not touch Git Bash or WSL:
 
    ```
    bootstrap.cmd
+   ```
+
+   From a Git Bash / macOS / Linux shell instead:
+
+   ```
+   ./bootstrap.sh
    ```
 
    Either way, this adds the `develop` and `main` worktrees as siblings of this checkout, runs
@@ -44,8 +46,8 @@ Ordered steps, starting from a machine with nothing on it.
 
    Symlink creation on Windows needs either Developer Mode on
    (Settings > Privacy & security > For developers) or an elevated shell. If the script's
-   privilege check reports neither, enable Developer Mode (or re-run elevated) and run
-   `./bootstrap.sh` again — it will only retry the links that failed.
+   privilege check reports neither, enable Developer Mode (or re-run elevated) and run it
+   again — it will only retry the links that failed.
 
 4. **Pull LFS assets** in both worktrees (models used by the reference `ToonEngineOld` copy and
    any other LFS-tracked content):
