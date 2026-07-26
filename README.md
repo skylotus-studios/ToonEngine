@@ -40,19 +40,22 @@ Ordered steps, starting from a machine with nothing on it.
    Either way, this adds the `develop` and `main` worktrees as siblings of this checkout, runs
    `git submodule update --init --recursive` in both, and re-links `CLAUDE.md`, `MEMORY.md`,
    `ARCHIVE.md`, both style guides, `.claude/skills`, `.claude/agents`, and `.agent` into each
-   worktree from the files on this branch. It prints the link strategy up front and a
+   worktree from the files on this branch. It prints a symlink check up front and a
    PASS/FAIL line per link at the end; re-running it is always safe.
 
-   No admin rights or Developer Mode needed. Creating a symbolic link on Windows requires
-   `SeCreateSymbolicLinkPrivilege`, which a plain logon session usually lacks, so the script
-   tests for it and falls back to junctions for directories and hard links for files. Those
-   need no privilege and resolve identically for reading and for editing in place, so
-   `develop/CLAUDE.md` and `backup/claude.md` stay one file either way.
+   Every link is a symbolic link. Creating one on Windows requires
+   `SeCreateSymbolicLinkPrivilege`, which a normal logon session lacks unless it is elevated
+   or Developer Mode was already on when the session started. When the script finds it cannot
+   create symlinks, it re-runs the link step alone with administrator rights, which costs one
+   UAC prompt. Approve it and the links are created; the prompt can open behind the console
+   window. Nothing else elevates, git included, so no repo file ends up owned by
+   Administrator.
 
-   One caveat comes with the hard-link fallback: an editor that saves by writing a new file
-   and renaming it over the old one breaks the link, leaving two files that no longer track
-   each other. Re-running the script detects that and reports it rather than silently
-   overwriting either copy.
+   Links that already point at the right target are left alone, so a re-run with nothing to
+   do never prompts. A junction or a misaimed symlink left by an earlier version is replaced
+   with a correct symlink, and nothing is removed until its replacement is ready, so a
+   declined prompt cannot leave a destination empty. Pass `-NoElevate` to skip the prompt
+   entirely and have the affected links reported as failures instead.
 
 4. Pull LFS assets in both worktrees (models used by the reference `ToonEngineOld` copy and
    any other LFS-tracked content):

@@ -11,10 +11,10 @@
 #   ./bootstrap.sh          # or bootstrap.cmd from cmd.exe
 #
 # On Windows this hands off to bootstrap.ps1, which is the single source of
-# truth for the Windows link strategy (symlink when the session can make one,
-# otherwise junction for directories and hard link for files, neither of
-# which needs any privilege). The native path below runs on macOS and Linux,
-# where an unprivileged symlink always works.
+# truth for the Windows link strategy: every link is a symbolic link, and if
+# the session lacks SeCreateSymbolicLinkPrivilege the link step alone re-runs
+# elevated behind one UAC prompt. The native path below runs on macOS and
+# Linux, where an unprivileged symlink always works.
 #
 # This adds the `develop` and `main` worktrees as siblings of this checkout,
 # initializes their submodules recursively, and re-links CLAUDE.md,
