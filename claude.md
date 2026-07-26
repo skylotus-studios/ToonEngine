@@ -79,11 +79,11 @@ This file, `MEMORY.md`, `ARCHIVE.md`, both style guides, and `.claude/skills` an
 `.claude/agents` are gitignored on `develop` and `main`, and live on the orphan `backup` branch
 (`claude.md`, `memory.md`, `archive.md`, `cpp-style-guide.md`, `md-style-guide.md`,
 `project/skills`, `project/agents`), checked out as the sibling worktree `../backup` and
-symlinked into place. `backup` also carries the user-level Claude Code config
-(`user/skills`, `user/agents`, `user/commands`, `settings.json`), symlinked into `~/.claude`.
-None of this is pushed from `develop` or `main`; editing any of it changes the `backup` branch.
-`bootstrap.sh` on `backup` rebuilds this whole layout (both worktrees, submodules, and every
-symlink) from a single clone of that branch.
+symlinked into place. None of this is pushed from `develop` or `main`; editing any of it changes
+the `backup` branch. `bootstrap.sh` on `backup` rebuilds this whole layout (both worktrees,
+submodules, and every symlink) from a single clone of that branch. Your global Claude Code
+config (`~/.claude`) is backed up separately in the `ClaudeUserBackup` repo, unrelated to this
+branch.
 
 ## Skills
 

@@ -1,2 +1,0 @@
-DECISION: $ARGUMENTS.
-Explain the options like I'm technically literate but new to C++ and [build systems / graphics / netcode]. One concrete analogy per option. For each: what it is, what it costs now, what it costs later, what it makes impossible. Then: what THIS project specifically pushes toward, your recommendation, your confidence, and the one thing that would change your mind. Do not implement anything — I'll decide and tell you.

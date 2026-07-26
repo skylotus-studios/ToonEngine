@@ -10,10 +10,10 @@
 #
 # This adds the `develop` and `main` worktrees as siblings of this checkout,
 # initializes their submodules recursively, and re-links CLAUDE.md,
-# MEMORY.md, ARCHIVE.md, both style guides, and the project/user Claude
-# skills, agents, commands, and settings.json from this branch so both
-# worktrees and your global Claude Code config (~/.claude) come back exactly
-# as they were.
+# MEMORY.md, ARCHIVE.md, both style guides, and the project-level Claude
+# skills and agents from this branch so both worktrees come back exactly
+# as they were. Your global Claude Code config (~/.claude) is backed up
+# separately in the ClaudeUserBackup repo — not here.
 #
 # Safe to re-run: existing worktrees and correct symlinks are left alone.
 
@@ -75,14 +75,6 @@ for W in "$DEVELOP" "$MAIN"; do
   link "$HERE/project/agents"      "$W/.claude/agents"
 done
 
-echo "==> User-level Claude files (~/.claude)"
-USER_CLAUDE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-mkdir -p "$USER_CLAUDE"
-link "$HERE/user/skills"   "$USER_CLAUDE/skills"
-link "$HERE/user/agents"   "$USER_CLAUDE/agents"
-link "$HERE/user/commands" "$USER_CLAUDE/commands"
-link "$HERE/settings.json" "$USER_CLAUDE/settings.json"
-
 cat <<EOF
 ==> Done.
 
@@ -91,5 +83,6 @@ $PARENT/
   main/     (branch: main)
   backup/   (branch: backup, this checkout)
 
-~/.claude/{skills,agents,commands,settings.json} now point into backup/user/.
+Restore your global Claude Code config (~/.claude) separately from the
+ClaudeUserBackup repo.
 EOF
