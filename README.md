@@ -3,8 +3,9 @@
 This is an orphan branch. It has no relation to `develop` or `main`'s history and holds only
 files that must survive a wiped machine but never get pushed as part of the app: `CLAUDE.md`,
 `MEMORY.md`, `ARCHIVE.md`, both style guides, and the project-level Claude skills, agents, and
-`.agent` scratch directory. `bootstrap.sh` rebuilds the whole layout: both `develop` and `main`
-worktrees, their submodules, and every symlink, from a single clone of this branch.
+`.agent` scratch directory. `bootstrap.cmd` (Windows) and `bootstrap.sh` (macOS, Linux) rebuild
+the whole layout: both `develop` and `main` worktrees, their submodules, and every link, from a
+single clone of this branch.
 
 ## Recovery: Rebuilding on a New Machine from Nothing
 
@@ -39,13 +40,19 @@ Ordered steps, starting from a machine with nothing on it.
    Either way, this adds the `develop` and `main` worktrees as siblings of this checkout, runs
    `git submodule update --init --recursive` in both, and re-links `CLAUDE.md`, `MEMORY.md`,
    `ARCHIVE.md`, both style guides, `.claude/skills`, `.claude/agents`, and `.agent` into each
-   worktree from the files on this branch. It prints a privilege check up front and a
+   worktree from the files on this branch. It prints the link strategy up front and a
    PASS/FAIL line per link at the end; re-running it is always safe.
 
-   Symlink creation on Windows needs either Developer Mode on
-   (Settings > Privacy & security > For developers) or an elevated shell. If the script's
-   privilege check reports neither, enable Developer Mode (or re-run elevated) and run it
-   again; it will only retry the links that failed.
+   No admin rights or Developer Mode needed. Creating a symbolic link on Windows requires
+   `SeCreateSymbolicLinkPrivilege`, which a plain logon session usually lacks, so the script
+   tests for it and falls back to junctions for directories and hard links for files. Those
+   need no privilege and resolve identically for reading and for editing in place, so
+   `develop/CLAUDE.md` and `backup/claude.md` stay one file either way.
+
+   One caveat comes with the hard-link fallback: an editor that saves by writing a new file
+   and renaming it over the old one breaks the link, leaving two files that no longer track
+   each other. Re-running the script detects that and reports it rather than silently
+   overwriting either copy.
 
 4. Pull LFS assets in both worktrees (models used by the reference `ToonEngineOld` copy and
    any other LFS-tracked content):
