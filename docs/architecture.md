@@ -17,6 +17,45 @@ construction. Physics (M2.1) added a second, twin abstraction layer the same way
 Physics type is quarantined inside `core/physics/physics.cpp` (see "The physics abstraction layer"
 below).
 
+## Current State
+
+The app opens a window, creates a Vulkan device and swap chain, and each frame draws a small
+demo scene: procedural primitives (sphere, cube, torus, plane) and a loaded glTF model, all
+nodes in an entity-tree scene graph with hierarchy-composed world transforms. Everything is
+cel-shaded with a banded diffuse fill plus an inverted-hull outline (per-object color and
+width), lit by cascaded shadow maps (Diligent's `ShadowMapManager`) from the scene light, and
+rendered into an HDR, normal, and motion-vector G-buffer. A DiligentFX post chain (SSAO,
+optional TAA, DoF, and SSR, then Bloom) resolves through ACES tone-mapping to the back buffer.
+
+A docked Dear ImGui editor with three themes provides an Objects hierarchy panel, a Properties
+inspector with an ImGuizmo gizmo, a Settings panel covering every post effect and a collider
+debug wireframe toggle, and an Asset Browser with thumbnails. Clicking an entity in the
+viewport selects it through a geometric ray-vs-bounds pick rather than a physics raycast, so
+it works in Editing mode for every visible entity whether or not it has a collider. An editor
+camera and a rebindable action-map input system (mouse, keyboard, gamepad) drive it, with
+input suppressed while the pointer is over the UI. HLSL shaders cross-compile to SPIR-V at
+runtime.
+
+Gameplay state advances through per-entity native scripts (a demo spin today) and Jolt Physics
+rigid bodies (independent Collider and Rigid Body components; box, sphere, and capsule shapes)
+on a fixed 60 Hz sim tick, decoupled from the render rate and interpolated into it, and only
+while the explicit Editing / Playing / Paused mode is set to Playing. Play, Step, and Stop
+controls live in a Playback panel. Stop always reverts the scene, and the physics world, to
+the state they were in before Play started. miniaudio drives positional 3D SFX and music
+through an `AudioSource` entity component, its listener tracking the interpolated editor
+camera each rendered frame.
+
+## Platform Support
+
+| Platform | Status  | Backend                 | Notes |
+|----------|---------|-------------------------|-------|
+| Windows  | active  | Vulkan                  | primary dev target; D3D11/D3D12/OpenGL disabled |
+| Linux    | planned | Vulkan                  | X11 handles wired; Wayland fields exist |
+| macOS    | planned | Vulkan via MoltenVK     | needs `NSView` from a GLFW Cocoa `.mm` helper |
+
+Per-platform IDE setup lives in [clion-setup-windows.md](clion-setup-windows.md),
+[clion-setup-linux.md](clion-setup-linux.md), and [clion-setup-macos.md](clion-setup-macos.md).
+
 ## The Renderer Abstraction Layer
 
 `core/rendering/renderer.h` is the one header the rest of the engine includes for GPU work. Its file
