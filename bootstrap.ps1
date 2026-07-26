@@ -27,14 +27,16 @@ $Main    = Join-Path $Parent 'main'
 $script:Results   = New-Object System.Collections.Generic.List[string]
 $script:FailCount = 0
 
-# Detects whether symlink creation is likely to work on this machine: either
-# an elevated (Run as Administrator) shell, or Developer Mode enabled.
+# Detects whether symlink creation actually works on this machine, by trying
+# it for real. Neither "running elevated" nor the Developer Mode registry
+# flag is trustworthy on its own: Developer Mode grants
+# SeCreateSymbolicLinkPrivilege via a local security policy update that an
+# already-open logon session does not pick up until sign-out/sign-in, so the
+# flag can read "on" while symlink creation still fails. A live probe is the
+# only ground truth.
 function Test-Elevation {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Host "==> Privilege check: OK (running elevated)."
-        return
-    }
+    $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
     $devMode = $false
     try {
@@ -43,15 +45,33 @@ function Test-Elevation {
         $devMode = ($val -eq 1)
     } catch {}
 
-    if ($devMode) {
-        Write-Host "==> Privilege check: OK (Developer Mode is enabled)."
+    $probeTarget = Join-Path $env:TEMP "bootstrap-probe-target-$PID.tmp"
+    $probeLink   = Join-Path $env:TEMP "bootstrap-probe-link-$PID.tmp"
+    "probe" | Out-File -FilePath $probeTarget -Encoding ascii
+    $canLink = $false
+    try {
+        New-Item -ItemType SymbolicLink -Path $probeLink -Target $probeTarget -ErrorAction Stop | Out-Null
+        $canLink = $true
+    } catch {}
+    Remove-Item -Force -ErrorAction SilentlyContinue $probeTarget
+    Remove-Item -Force -ErrorAction SilentlyContinue $probeLink
+
+    if ($canLink) {
+        $why = if ($isAdmin) { "running elevated" } elseif ($devMode) { "Developer Mode is enabled" } else { "symlink privilege already granted" }
+        Write-Host "==> Privilege check: OK ($why, verified by creating a real test symlink)."
         return
     }
 
-    Write-Host "==> Privilege check: NOT elevated and Developer Mode is NOT enabled."
-    Write-Host "    Symlink creation below will most likely fail. Fix one of:"
-    Write-Host "      - Settings > Privacy & security > For developers > Developer Mode (On)"
-    Write-Host "      - re-run this script from an elevated (Run as Administrator) shell"
+    Write-Host "==> Privilege check: FAILED -- a real test symlink could not be created."
+    if ($devMode -and -not $isAdmin) {
+        Write-Host "    Developer Mode is reported on, but this logon session does not yet have"
+        Write-Host "    the symlink privilege -- sign out and back in (or reboot), then re-run."
+    } else {
+        Write-Host "    Symlink creation below will fail. Fix one of:"
+        Write-Host "      - Settings > Privacy & security > For developers > Developer Mode (On),"
+        Write-Host "        then sign out and back in"
+        Write-Host "      - re-run this script from an elevated (Run as Administrator) shell"
+    }
     Write-Host "    Continuing anyway -- failures are reported per-link below."
 }
 

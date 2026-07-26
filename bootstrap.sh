@@ -35,13 +35,19 @@ FAIL_COUNT=0
 # Windows requires either an elevated (Run as Administrator) shell or
 # Developer Mode enabled; other platforms create symlinks natively as any
 # user, so there is nothing to check there.
+# Neither "running elevated" nor the Developer Mode registry flag is
+# trustworthy on its own: Developer Mode grants SeCreateSymbolicLinkPrivilege
+# via a local security policy update that an already-open logon session does
+# not pick up until sign-out/sign-in, so the flag can read "on" while symlink
+# creation still fails. A live probe -- actually creating a throwaway symlink
+# -- is the only ground truth.
 check_elevation() {
   if ! command -v powershell.exe >/dev/null 2>&1; then
     echo "==> Privilege check: not Windows (or no powershell.exe) -- symlinks need no special privilege here."
     return 0
   fi
 
-  local is_admin dev_mode
+  local is_admin dev_mode probe_target probe_link can_link
   is_admin="$(powershell.exe -NoProfile -Command \
     '([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)' \
     2>/dev/null | tr -d '\r\n')"
@@ -49,19 +55,39 @@ check_elevation() {
     '(Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" -Name AllowDevelopmentWithoutDevLicense -ErrorAction SilentlyContinue).AllowDevelopmentWithoutDevLicense' \
     2>/dev/null | tr -d '\r\n')"
 
-  if [ "$is_admin" = "True" ]; then
-    echo "==> Privilege check: OK (running elevated)."
-    return 0
+  probe_target="${TMPDIR:-/tmp}/bootstrap-probe-target-$$"
+  probe_link="${TMPDIR:-/tmp}/bootstrap-probe-link-$$"
+  echo probe > "$probe_target"
+  can_link=0
+  if ln -s "$probe_target" "$probe_link" 2>/dev/null && [ -L "$probe_link" ]; then
+    can_link=1
+  else
+    rm -f "$probe_link"
+    powershell.exe -NoProfile -Command \
+      "New-Item -ItemType SymbolicLink -Path '$(cygpath -w "$probe_link")' -Target '$(cygpath -w "$probe_target")' -Force | Out-Null" \
+      2>/dev/null
+    [ -L "$probe_link" ] && can_link=1
   fi
-  if [ "$dev_mode" = "1" ]; then
-    echo "==> Privilege check: OK (Developer Mode is enabled)."
+  rm -f "$probe_target" "$probe_link"
+
+  if [ "$can_link" = "1" ]; then
+    local why="symlink privilege already granted"
+    [ "$is_admin" = "True" ] && why="running elevated"
+    [ "$is_admin" != "True" ] && [ "$dev_mode" = "1" ] && why="Developer Mode is enabled"
+    echo "==> Privilege check: OK ($why, verified by creating a real test symlink)."
     return 0
   fi
 
-  echo "==> Privilege check: NOT elevated and Developer Mode is NOT enabled." >&2
-  echo "    Symlink creation below will most likely fail. Fix one of:" >&2
-  echo "      - Settings > Privacy & security > For developers > Developer Mode (On)" >&2
-  echo "      - re-run this script from an elevated (Run as Administrator) shell" >&2
+  echo "==> Privilege check: FAILED -- a real test symlink could not be created." >&2
+  if [ "$dev_mode" = "1" ] && [ "$is_admin" != "True" ]; then
+    echo "    Developer Mode is reported on, but this logon session does not yet have" >&2
+    echo "    the symlink privilege -- sign out and back in (or reboot), then re-run." >&2
+  else
+    echo "    Symlink creation below will fail. Fix one of:" >&2
+    echo "      - Settings > Privacy & security > For developers > Developer Mode (On)," >&2
+    echo "        then sign out and back in" >&2
+    echo "      - re-run this script from an elevated (Run as Administrator) shell" >&2
+  fi
   echo "    Continuing anyway -- failures are reported per-link below." >&2
   return 1
 }
