@@ -142,6 +142,51 @@ Write-Host "==> Submodules"
 git -C $Develop submodule update --init --recursive
 git -C $Main submodule update --init --recursive
 
+# ---------------------------------------------------- short-path build junctions
+# DiligentCore's own headers chain long relative "../../X/interface" includes.
+# For at least one header (GraphicsTools -> ... -> Platforms -> Basic/interface)
+# the raw, uncollapsed path ninja sees can exceed Windows' 260-char MAX_PATH once
+# combined with a checkout path as long as "...\ToonEngine\develop\...", and
+# ninja's /showIncludes-based dependency tracking then fails with "path too
+# long" -- even though clang-cl compiles the file fine. Windows long-path
+# support does not help (confirmed): the failure is ninja's own internal string
+# handling, reproduced on ninja 1.11.1 and 1.13.2 alike, before it ever asks
+# Windows to open the file. A short-path directory junction sidesteps it
+# entirely without touching DiligentCore's (git-submodule, upstream-tracked)
+# source. Junctions need no elevation, unlike the symlinks below.
+Write-Host "==> Short-path build junctions"
+$JUNCTIONS = @(
+    @{ Path = 'C:\ted'; Target = $Develop }
+    @{ Path = 'C:\tem'; Target = $Main }
+)
+foreach ($j in $JUNCTIONS) {
+    if (Test-Path -LiteralPath $j.Path) {
+        if (Test-ReparsePoint $j.Path) {
+            $item = Get-Item -Force -LiteralPath $j.Path
+            $cur  = $item.Target
+            if ($cur -is [array]) { $cur = $cur | Select-Object -First 1 }
+            if ($cur) { $cur = $cur -replace '^\\\?\?\\', '' }
+            if ($item.LinkType -eq 'Junction' -and $cur -and ($cur.TrimEnd('\') -ieq $j.Target.TrimEnd('\'))) {
+                Write-Host "    $($j.Path) -> $($j.Target) (already linked)"
+            } else {
+                Write-Host "    Refusing to overwrite $($j.Path): reparse point aimed elsewhere ($cur)"
+            }
+            continue
+        }
+        Write-Host "    Refusing to overwrite $($j.Path): a real file or directory is already there"
+        continue
+    }
+    try {
+        New-Item -ItemType Junction -Path $j.Path -Target $j.Target -ErrorAction Stop | Out-Null
+        Write-Host "    $($j.Path) -> $($j.Target) (created)"
+    } catch {
+        Write-Host "    FAILED to create $($j.Path) -> $($j.Target): $($_.Exception.Message)"
+    }
+}
+Write-Host "    Configure/build from these short paths (e.g. 'cmake --preset agent-debug'"
+Write-Host "    from C:\ted), not from the long checkout path, to avoid ninja's ~260-char"
+Write-Host "    include-path limit tripping on DiligentCore's header chains."
+
 Write-Host "==> Project-level Claude files (develop, main)"
 
 # Ordered record of every link, so results print in declaration order.

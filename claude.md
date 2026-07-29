@@ -33,7 +33,11 @@ Presets are `windows-debug` and `windows-release`, building into `build/<preset>
 engine DLLs copied next to the executable. The `/verify` skill builds, launches, and captures a
 screenshot; this machine has no live input desktop.
 
-## The Five Hard Rules
+Agents always build with `--preset agent-*` (`agent-debug` / `agent-release`), an isolated
+configure/build dir with compile commands exported for clangd; `cmake-build-*` is off-limits —
+CLion owns those.
+
+## The Six Hard Rules
 
 Full reasoning for each is in [docs/invariants.md](docs/invariants.md). Break one only with a
 stated reason, and update that file when you do.
@@ -52,6 +56,8 @@ stated reason, and update that file when you do.
    required: it does not compile under clang-cl.
 5. **C++17, clang everywhere, target-based CMake only.** Dependencies are git submodules under
    `external/`; no vcpkg. Hold Diligent objects in `RefCntAutoPtr<>`.
+6. **Never re-baseline to make a build green.** Re-baselining requires a stated intended visual
+   change, and Nate looks at the diff image.
 
 ## Where Things Live
 

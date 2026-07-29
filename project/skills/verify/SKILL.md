@@ -1,103 +1,68 @@
 ---
 name: verify
-description: Build, launch, and screenshot-verify ToonEngine.exe. Documents a hard environment limitation: synthetic input injection (SendInput) does not reach any window here, and the fallback verification approach that works around it. Use before claiming a UI/interaction change is confirmed working.
+description: Run ToonEngine's tiered CI harness (scripts/verify.py fast|full|deep) and report a straight pass/fail. Triggers on "verify", "run verify", "is it green". Not for a live interactive/UI smoke check -- see verify-build-launch-screenshot-archived for that.
 ---
 
-# verify: ToonEngine Build/Launch/Capture, and the Input-Injection Limitation
+# verify: ToonEngine's Tiered Verification Harness
 
-## Build + Launch (Works Reliably)
+Runs `scripts/verify.py`, which already wires together every CI-shaped tool in this repo
+(`--sim-only`, `--hash-every`, `metrics.json`/`metrics_diff.py`, `--headless-render`, the
+golden tests, `--scene-roundtrip`, `--resize-soak`, ToonUnitTests, the SaveGame round-trip, an
+ASan build) into three gates. This skill does not reimplement any of that logic -- it just
+invokes the script honestly and reports what it says.
+
+## Step 1: Pick a Tier
+
+If the user's request already names a tier (fast/full/deep), use it. Otherwise ask:
+
+- **fast** (default) -- configure+build, unit tests, a `--sim-only` hash smoke check, a scene
+  load/save idempotency check, player-purity check. Pre-commit weight, <90s budget.
+- **full** -- fast + structural golden-image tests, a `metrics.json` diff against the checked-in
+  baseline, a Vulkan-validation-errors-must-be-zero check.
+- **deep** -- full + a 20-run determinism soak, an ASan `--sim-only` run, an install smoke test,
+  a resize soak, the SaveGame compat check.
+
+## Step 2: Run It
 
 ```
-cmake --build --preset windows-debug
-Start-Process build\windows-debug\ToonEngine.exe
+python scripts/verify.py --tier <fast|full|deep>
 ```
 
-Works from a bare shell as long as `build/windows-debug` is already configured *and*
-`CMakeLists.txt` hasn't changed since: ninja caches tool paths from the last successful
-configure, so the VS Developer environment doesn't need importing for a source-only
-incremental build. A from-scratch *configure* does need it, and so does any build that
-edits `CMakeLists.txt` (e.g. adding a new source file), which forces a reconfigure as the
-build's first step, and DiligentTools' library-combining step invokes `lib.exe` by bare
-name at build time, which fails with `'lib.exe' is not recognized` from a plain shell (see
-repo MEMORY.md → "Build gotchas"). There's no repo script for importing the VS env
-(deliberately; don't recreate one). Import it inline, chained into the *same* shell
-invocation as the build itself (env vars set in one tool call don't persist to the next):
+Run from `REPO_ROOT`; the script itself handles the `C:\ted` short-path junction for
+configure/build when present (see repo MEMORY.md -> "Agent-preset build environment"). Do not
+pre-import the VS Developer environment yourself unless the run reports a `lib.exe`/`CMAKE_MT`
+failure -- the script's own `configure`/`build` steps are what need it, and importing it wastes
+a step if the build dir is already configured and warm.
 
-```powershell
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-$devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
-cmd /c "`"$devCmd`" -arch=x64 -host_arch=x64 -no_logo && set" | ForEach-Object {
-    if ($_ -match '^([^=]+)=(.*)$') { Set-Item "Env:$($matches[1])" $matches[2] }
-}
-cmake --build --preset windows-debug
-```
+## Step 3: Report
 
-**Cold start is slow on a debug build: wait ~10-12s before trusting any capture.**
-First-run HLSL→SPIR-V cross-compilation + Vulkan PSO creation (debug validation layers on)
-can block the app past a short retry budget; captures taken too early come back solid white
-even though the app is running fine. Sleep ~10s after the window handle appears, *then*
-start capturing/driving.
+Report the script's own summary table verbatim (it already prints `TIER / CHECK / STATUS /
+TIME`), plus the **actual process exit code** (`0` or `1` -- read it, don't infer it from the
+table). A row can be `PASS`, `SKIP`, `known-failing: item N -- ...` (an `xfail.json` entry,
+shown in yellow, does not fail the run), or `FAIL -- ...` (red, sets exit 1).
 
-## Screenshotting (Works Reliably)
+**Never report a nonzero exit as success, and never re-baseline to make a run green** -- both
+per the Six Hard Rules (rule 6) and per this skill's own purpose. If a `full`/`deep` run's
+`metrics_diff` or `golden_tests` step fails, that is real signal, not noise to paper over; a
+re-baseline needs a stated intended visual change and Nate looking at the diff image, which is
+outside this skill's scope to decide.
 
-Vulkan swap-chain windows are GDI-black via normal screen copy. Use `PrintWindow` with
-`PW_RENDERFULLCONTENT = 2`, and make the *capturing* process per-monitor DPI-aware
-(`SetProcessDpiAwarenessContext(-4)`) or right-docked panels get cropped on a scaled
-display. Retry on an all-white frame (present race / still-compiling). Sample a few
-pixels, not just one. See repo `MEMORY.md` → "Screenshotting the window" for the original
-writeup; a working PowerShell + P/Invoke harness (`Capture-Window` etc.) was built ad hoc
-during a verification session. Reconstruct similarly if needed: it's straightforward GDI+
-P/Invoke.
+## Step 4: On Failure, Offer Exactly Two Next Actions
 
-## The Hard Limitation: Synthetic Input Does Not Reach Any Window Here
+Don't sprawl into a longer menu. Offer:
 
-**`SendInput`-injected mouse/keyboard events have zero effect in this environment: on
-ANY window, not just ToonEngine.** This was proven decisively, not assumed:
+1. **"investigate [failing check]"** -- read that step's own captured output/log (the summary
+   row's `FAIL -- ...` detail is already a truncated tail of it; the step functions in
+   `scripts/verify.py` show where the full output or backing artifact lives).
+2. **"show me the artifact"** -- surface the concrete evidence for that check:
+   - `metrics_diff` failures: the metrics JSON at `artifacts/verify/metrics_diff_metrics.json`
+     (or `sim_only_smoke_metrics.json` for the fast-tier smoke check) diffed against
+     `tests/baselines/metrics.json` via `scripts/metrics_diff.py`.
+   - `golden_tests` / `vulkan_validation` failures: `artifacts/golden/<test>/metrics.json` and
+     whatever diff image `scripts/run_golden_tests.py` wrote alongside it.
+   - `determinism_soak` failures: the first divergent tick, from comparing
+     `artifacts/verify/soak_<i>.json` across runs.
+   - `scene_roundtrip` failures: the two scene files under `artifacts/verify/roundtrip/`
+     (`pass1.scene` vs `pass2.scene`) that should have matched.
 
-- `SendInput` reports success (events accepted, `GetLastError() == 0`).
-- `SetForegroundWindow` + `GetForegroundWindow()` agree the target window is foreground.
-- Yet a plain **WinForms `TextBox` created in the same PowerShell process**, with
-  `.Focused == true` confirmed at the .NET level, received *zero* characters after
-  `SendInput`-ing "hello" one key at a time. That test has no cross-process, elevation,
-  UIPI, or GLFW-specific variable left to blame. It's conclusive: this session's
-  PowerShell has no live input desktop to inject into.
-- Consequence: any apparent state change observed on a ToonEngine window during a
-  verification session (selection, gizmo mode, checkboxes) that wasn't screenshotted
-  immediately before AND after a specific scripted action is **not attributable to the
-  script**: it may be the user's own hands on a real keyboard/mouse in their real
-  interactive session, running the same freshly-built exe in parallel. Don't assume a
-  process you didn't just launch is "yours," and don't trust apparent-but-unverified state
-  changes as evidence.
-- Don't re-litigate this per session: it cost a long debugging chain (foreground-lock
-  theories, elevation/UIPI theories, repeated-Alt-tap theories, cold-start-race theories,
-  all individually plausible, all individually ruled out) before the WinForms test made it
-  unambiguous. If a future session needs to re-confirm the environment hasn't changed, the
-  WinForms `TextBox` test above is the fastest decisive check: a few lines, no process
-  launch, no window-discovery ambiguity.
-
-## What to Do Instead, Given the Limitation
-
-Interactive behavior (does hotkey X actually toggle Y when pressed) **cannot be verified
-live in this environment**. Fall back to, in order of strength:
-
-1. **Clean build** (`cmake --build`, exit 0): table stakes, not sufficient alone.
-2. **API-signature verification against the vendored headers**, not memory/training data.
-   For ImGui: `external/imgui/imgui.h`. For ImGuizmo:
-   `external/ImGuizmo/src/ImGuizmo.h`. Grep the exact signatures the diff calls
-   (`IsKeyPressed`, `Manipulate`'s parameter order, struct fields like `io.KeyCtrl`) and
-   confirm every call matches: this is real evidence the code compiles *and* means what
-   it looks like it means, not just that clang-cl accepted it.
-3. **Static screenshot confirmation**: launch, wait out cold start, screenshot. Confirm
-   new UI elements render with correct labels/values/layout. If the session happens to
-   observe the target control in more than one state (e.g. a conditional field that
-   changes label per mode) across *any* screenshots taken, that cross-validates the
-   branching logic even without attributing the transition to a specific action.
-4. **Ask the user for a manual smoke test.** They have a real keyboard/mouse in a real
-   interactive session: a 30-second manual check on their end is strictly better evidence
-   than anything achievable here. Say so plainly rather than presenting (1)-(3) as if they
-   were equivalent to a live-driven PASS.
-
-Report this honestly as **BLOCKED** for the interactive-behavior claim specifically (per
-the `verify` skill's own guidance: never silently downgrade "couldn't observe it" into a
-PASS) while still giving full credit for what (1)-(3) actually established.
+Wait for the user to pick one rather than dumping both proactively.
