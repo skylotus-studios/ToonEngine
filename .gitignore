@@ -29,6 +29,10 @@ Thumbs.db
 /build_*.txt
 /configure_*.txt
 
+# scripts/verify.py's own scratch output (golden-run frames, metrics JSON, roundtrip
+# scenes, soak results) -- generated fresh by every run, never committed.
+/artifacts/
+
 # Local-only Claude Code permission state -- machine-specific, never shared.
 .claude/settings.local.json
 
