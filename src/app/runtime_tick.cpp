@@ -8,6 +8,7 @@
 #include "core/audio/audio.h"
 #include "core/camera/camera.h"
 #include "core/input/input_system.h"
+#include "core/platform/clock.h" // Clock::Now (the frame delta's source; see clock.h)
 
 #include <GLFW/glfw3.h>
 
@@ -15,9 +16,6 @@
 #include <cmath>
 
 namespace toon {
-
-    // Simulation rate: 60 Hz. The render rate is decoupled from this (see the accumulator).
-    static constexpr double kFixedDt = 1.0 / 60.0;
 
     double RuntimeBeginFrame(RuntimeState &rs) {
         // BeginFrame BEFORE PollEvents: it snapshots previous state and clears this frame's
@@ -33,7 +31,7 @@ namespace toon {
         // a synchronous scene load does the same) doesn't dump a large time debt into the
         // accumulator and trigger a many-step "spiral of death" catch-up burst; the sim just
         // falls a bit behind wall-clock instead.
-        const double now = glfwGetTime();
+        const double now = Clock::Now();
         double frameTime = now - rs.lastTime;
         rs.lastTime = now;
         if (frameTime > 0.25) { frameTime = 0.25; }

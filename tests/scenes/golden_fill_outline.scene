@@ -1,0 +1,79 @@
+# ToonEngine golden scene -- toon fill + inverted-hull outline.
+#
+# Isolates Renderer::DrawMesh's two-pass toon draw (docs/invariants.md's "The Toon Draw"):
+# outline pass (inverted hull, extruded along the normal, front faces culled) then the banded
+# fill pass. Three primitives with distinct baseColor/outlineColor/bands so a broken outline
+# width, a flipped winding, or a wrong band count each show up as a visibly different silhouette
+# or fill step, not just a slightly-off pixel.
+#
+# MUST be run with `ToonPlayer --headless-render --post off` (scripts/run_golden_tests.py does
+# this): bloom/SSAO/DoF/SSR/TAA are all non-deterministic frame-to-frame (temporal accumulation,
+# jitter), so a golden capture with any of them on would never diff-match itself run over run.
+# Shadows are left on (the renderer's own default) -- deterministic, and not what this scene is
+# isolating, but there's no reason to fight the default for a scene that doesn't care either way.
+#
+# No rigidbody, no script: fully static, so every rendered frame after the first is identical --
+# nothing to let "settle" before the capture frame.
+
+camera.pivot 0.000000 1.000000 0.000000
+camera.distance 7.000000
+camera.yaw 0.400000
+camera.pitch 0.300000
+camera.fov 0.900000
+
+entity "Scene"
+  parent -1
+
+entity "Sun"
+  parent 0
+  position 0.000000 6.000000 -4.000000
+  rotation -0.684440 0.427860 0.000000 0.590380
+  scale 1.000000 1.000000 1.000000
+  light.color 1.000000 0.980000 0.920000
+  light.intensity 1.000000
+
+entity "Camera"
+  parent 0
+  position 0.000000 3.500000 -7.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  camera 0.900000 0.100000 100.000000 0 7.000000 1
+
+entity "Cube"
+  parent 0
+  position -2.000000 1.000000 0.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive cube 1.000000
+  material.baseColor 0.850000 0.300000 0.350000
+  material.outlineColor 0.050000 0.050000 0.070000
+  material.outlineWidth 0.040000
+  material.bands 3.000000
+  material.ambient 0.250000
+  material.roughness 0.900000
+
+entity "Sphere"
+  parent 0
+  position 0.000000 1.000000 0.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive sphere 0.650000 24 32
+  material.baseColor 0.400000 0.550000 0.900000
+  material.outlineColor 0.060000 0.100000 0.200000
+  material.outlineWidth 0.040000
+  material.bands 4.000000
+  material.ambient 0.250000
+  material.roughness 0.900000
+
+entity "Torus"
+  parent 0
+  position 2.000000 1.000000 0.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive torus 0.650000 0.220000 24 32
+  material.baseColor 0.950000 0.650000 0.200000
+  material.outlineColor 0.200000 0.100000 0.020000
+  material.outlineWidth 0.040000
+  material.bands 5.000000
+  material.ambient 0.250000
+  material.roughness 0.900000

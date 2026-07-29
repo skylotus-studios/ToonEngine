@@ -26,6 +26,7 @@ namespace toon {
         namespace {
 
             std::string g_root; // resolved once by Init(); every accessor below reads it
+            bool g_usedFallback = false; // set alongside g_root; see UsedFallback()'s own comment
 
             // The directory containing the running executable, or an empty path if the platform
             // query fails or isn't implemented yet -- Init() then falls back to TOON_ASSET_ROOT.
@@ -60,15 +61,19 @@ namespace toon {
                 const std::filesystem::path bundled = exeDir / "assets";
                 if (std::filesystem::exists(bundled, ec)) {
                     g_root = bundled.string();
+                    g_usedFallback = false;
                     return;
                 }
             }
             // Otherwise fall back to the source-tree path CMake baked in (development runs out of
             // build/<preset>/, where nothing staged assets next to the exe).
             g_root = TOON_ASSET_ROOT;
+            g_usedFallback = true;
         }
 
         const std::string &Root() { return g_root; }
+
+        bool UsedFallback() { return g_usedFallback; }
 
         std::string Shaders() { return g_root + "/shaders"; }
         std::string Models() { return g_root + "/models"; }

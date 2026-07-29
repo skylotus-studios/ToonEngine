@@ -1,0 +1,75 @@
+{
+  "alloc": {
+    "count_after_init": null,
+    "peak_bytes": 25165824
+  },
+  "assets": {
+    "fallback_used": true
+  },
+  "audio": {
+    "handles_leaked": 0,
+    "voices_active": 0
+  },
+  "gpu": {
+    "mem_bytes": null
+  },
+  "jolt": {
+    "active_bodies": 0,
+    "bodies": 2,
+    "contacts": 37
+  },
+  "render": {
+    "draw_calls": null,
+    "frame_ms": {
+      "p50": null,
+      "p99": null
+    },
+    "pso_switches": null
+  },
+  "scripts": {
+    "order_hash": "35ccf7b75b2bcf68",
+    "ran": 599
+  },
+  "sim": {
+    "state_hash": [
+      {
+        "hash": "601ae66c56fbb852",
+        "tick": 0
+      },
+      {
+        "hash": "3264b0430d154fb7",
+        "tick": 100
+      },
+      {
+        "hash": "d85a34995baa74fa",
+        "tick": 200
+      },
+      {
+        "hash": "cb5739a00850b612",
+        "tick": 300
+      },
+      {
+        "hash": "cb193cdb0a543fac",
+        "tick": 400
+      },
+      {
+        "hash": "b541f463ec686f05",
+        "tick": 500
+      }
+    ],
+    "tick_ms": {
+      "p50": 0.016399999999999748,
+      "p99": 0.13589999999999958
+    }
+  },
+  "ui": {
+    "boxes_live": null,
+    "boxes_pruned": null
+  },
+  "vulkan": {
+    "device_extensions": null,
+    "instance_extensions": null,
+    "validation_errors": null,
+    "validation_warnings": null
+  }
+}

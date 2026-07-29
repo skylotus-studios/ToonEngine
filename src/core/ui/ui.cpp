@@ -322,9 +322,15 @@ namespace toon {
     void UI_EndBuild(UIContext &ui) {
         // Prune boxes not touched this build (erasing from the node-based map keeps every other
         // box's address stable, so the live tree built this frame is unaffected).
+        const size_t sizeBeforePrune = ui.cache.size();
         for (auto it = ui.cache.begin(); it != ui.cache.end();) {
             it = (it->second.lastBuildIndex != ui.buildIndex) ? ui.cache.erase(it) : std::next(it);
         }
+        // app/metrics.h's ui.boxes_live/boxes_pruned (--headless-render only; RenderHUD never
+        // runs under --sim-only, so these stay at their zero default there).
+        ui.boxesLive = static_cast<uint32_t>(ui.cache.size());
+        ui.boxesPruned = static_cast<uint32_t>(sizeBeforePrune - ui.cache.size());
+
         if (!ui.root) { return; }
 
         SolveStandalone(ui, ui.root);

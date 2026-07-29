@@ -231,8 +231,49 @@ namespace toon {
 
         // Create the device + swap chain for `window` (a GLFW window created with
         // the GLFW_NO_API hint). Returns false on failure (details go to stderr).
-        bool Init(GLFWwindow *window);
+        //
+        // `strictValidation`, default false (every existing call site is unchanged): forces
+        // Vulkan validation to its strictest level regardless of build config (Debug builds
+        // already turn on a lighter default validation level; see docs/architecture.md-adjacent
+        // reasoning in renderer.cpp's own comment) and installs a debug-message callback that
+        // counts errors/warnings, read back via ValidationErrorCount/ValidationWarningCount
+        // below. Used by app/headless_render.h's --headless-render mode; the editor and the
+        // normal player never pass true, so their behavior is byte-identical to before this
+        // parameter existed.
+        bool Init(GLFWwindow *window, bool strictValidation = false);
         void Shutdown();
+
+        // True once Init has successfully created the graphics device. False before Init, after a
+        // failed Init, and after Shutdown -- and permanently in a run that never calls Init at all
+        // (app/sim_runtime.h's --sim-only mode, which asserts on this every tick to prove no
+        // device was created rather than merely trusting that it avoided the call). This is a
+        // lifecycle query on the seam's OWN state, not a Diligent call wrapped one-to-one; every
+        // device-touching entry point below early-outs when it returns false, so a device-less
+        // Renderer is inert rather than a crash.
+        bool HasDevice() const;
+
+        // --- Metrics (app/metrics.h), --headless-render only --------------------
+        // Cumulative counts since the debug-message callback was installed (Init's
+        // strictValidation), for app/metrics.h's vulkan.validation_errors/warnings and
+        // app/headless_render.h's nonzero-exit-on-error requirement. Always 0 when Init was
+        // never called with strictValidation=true.
+        uint32_t ValidationErrorCount() const;
+        uint32_t ValidationWarningCount() const;
+
+        // Draw calls / PSO binds issued so far THIS FRAME (reset at the top of
+        // BeginShadowPass, the first call in a frame's real sequence) -- app/metrics.h's
+        // render.draw_calls/pso_switches. Read after RenderHUD, before EndFrame, so both
+        // reflect the whole frame just built.
+        uint32_t DrawCallCount() const;
+        uint32_t PSOSwitchCount() const;
+
+        // Reads the swap chain's CURRENT back buffer (whatever the last BeginFrame/EndScene/
+        // DrawUI sequence left in it) and writes it to `path` as a PNG. Call AFTER RenderHUD and
+        // BEFORE EndFrame -- EndFrame's Present() transitions the back buffer out of a
+        // CPU-readable layout. Returns false (logs to stderr) on failure; false with no device
+        // (HasDevice() is false) rather than a crash, same contract as every other device-backed
+        // entry point on this class.
+        bool CaptureFrameToPNG(const char *path) const;
 
         // Per-frame: bind the back buffer and clear it, then present.
         void BeginFrame(const Color &clearColor);

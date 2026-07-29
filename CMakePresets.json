@@ -16,7 +16,12 @@
         "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl",
         "CMAKE_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_COMPILER_LAUNCHER": "sccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "sccache"
+      },
+      "environment": {
+        "SCCACHE_MAX_FRAME_LENGTH": "1073741824"
       }
     },
     {
@@ -32,22 +37,47 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
     },
     {
+      "name": "agent-base",
+      "hidden": true,
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_POLICY_DEFAULT_CMP0141": "NEW",
+        "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "Embedded",
+        "GENERATE_DEBUG_SYMBOLS": { "type": "BOOL", "value": "OFF" }
+      }
+    },
+    {
       "name": "agent-debug",
       "displayName": "Agent Debug (isolated build dir; do not use interactively)",
-      "inherits": "windows-base",
+      "inherits": "agent-base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
     {
       "name": "agent-release",
       "displayName": "Agent Release (isolated build dir; do not use interactively)",
-      "inherits": "windows-base",
+      "inherits": "agent-base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "agent-debug-asan",
+      "displayName": "Agent ASan (RelWithDebInfo + AddressSanitizer; isolated build dir; scripts/verify.py deep tier only)",
+      "inherits": "agent-release",
+      "cacheVariables": { "TOONENGINE_ASAN": "ON" }
     }
   ],
   "buildPresets": [
-    { "name": "windows-debug", "configurePreset": "windows-debug" },
-    { "name": "windows-release", "configurePreset": "windows-release" },
-    { "name": "agent-debug", "configurePreset": "agent-debug" },
-    { "name": "agent-release", "configurePreset": "agent-release" }
+    {
+      "name": "build-base",
+      "hidden": true,
+      "configurePreset": "windows-debug",
+      "environment": {
+        "SCCACHE_MAX_FRAME_LENGTH": "1073741824"
+      }
+    },
+    { "name": "windows-debug", "inherits": "build-base", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "inherits": "build-base", "configurePreset": "windows-release" },
+    { "name": "agent-debug", "inherits": "build-base", "configurePreset": "agent-debug" },
+    { "name": "agent-release", "inherits": "build-base", "configurePreset": "agent-release" },
+    { "name": "agent-debug-asan", "inherits": "build-base", "configurePreset": "agent-debug-asan" }
   ]
 }

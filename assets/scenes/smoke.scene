@@ -1,0 +1,101 @@
+# ToonEngine scene -- the --sim-only smoke scene.
+#
+# Purpose-built for `ToonPlayer.exe --sim-only` (app/sim_runtime.h): it exercises every system
+# the headless sim drives, in one self-contained scene that never ends or transitions, so a run
+# of N ticks measures N ticks of simulation and nothing else.
+#
+#   Ground + Ball  -- physics: a dynamic rigid body falls, lands, and keeps generating contact
+#                     events against a static collider for the rest of the run.
+#   Spinner        -- scripts: SpinScript::OnUpdate mutates a transform every fixed tick.
+#   Animator       -- the animation tick path. It deliberately carries an AnimationComponent
+#                     with NO model: a headless run loads no models at all, so this is what an
+#                     animated entity actually looks like there. Clip duration reads 0, which
+#                     means the clip time advances but never loops -- sim-only warns about
+#                     exactly this. Give it a `model` line to see the windowed behavior instead.
+#   Camera         -- primary, so TickRuntime's GetActiveCamera path runs like it does in the
+#                     player rather than sitting on the loader's fallback view.
+#
+# Renders fine in the normal player and the editor too; there is nothing headless-specific in
+# the format. `--sim-only --scene assets/scenes/default.scene` is the companion run that also
+# covers level transitions, which this one deliberately leaves out.
+
+camera.pivot 0.000000 1.000000 0.000000
+camera.distance 14.000000
+camera.yaw 0.000000
+camera.pitch 0.250000
+camera.fov 1.047200
+
+entity "Scene"
+  parent -1
+
+entity "Sun"
+  parent 0
+  position 0.000000 6.000000 -4.000000
+  rotation -0.684440 0.427860 0.000000 0.590380
+  scale 1.000000 1.000000 1.000000
+  light.color 1.000000 0.980000 0.920000
+  light.intensity 1.000000
+
+entity "Camera"
+  parent 0
+  position 0.000000 4.500000 -12.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  camera 1.047200 0.100000 100.000000 0 10.000000 1
+
+entity "Ground"
+  parent 0
+  position 0.000000 0.000000 0.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive plane 12.000000
+  material.baseColor 0.290000 0.420000 0.350000
+  material.outlineColor 0.060000 0.100000 0.080000
+  material.outlineWidth 0.020000
+  material.bands 4.000000
+  material.ambient 0.250000
+  material.roughness 0.800000
+  collider box 12.000000 0.100000 12.000000
+
+entity "Ball"
+  parent 0
+  position 0.000000 6.000000 0.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive sphere 0.500000 24 32
+  material.baseColor 0.950000 0.650000 0.200000
+  material.outlineColor 0.200000 0.100000 0.020000
+  material.outlineWidth 0.030000
+  material.bands 4.000000
+  material.ambient 0.250000
+  material.roughness 0.500000
+  collider sphere 0.500000 0.000000 0.000000
+  rigidbody dynamic 1.000000 0.500000 0.450000
+
+entity "Spinner"
+  parent 0
+  position -4.500000 1.000000 2.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive cube 0.750000
+  material.baseColor 0.850000 0.300000 0.350000
+  material.outlineColor 0.180000 0.040000 0.060000
+  material.outlineWidth 0.030000
+  material.bands 4.000000
+  material.ambient 0.250000
+  material.roughness 0.500000
+  script Spin 0.000000 1.000000 0.000000 1.500000
+
+entity "Animator"
+  parent 0
+  position 4.500000 1.000000 2.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive torus 0.750000 0.240000 24 32
+  material.baseColor 0.400000 0.550000 0.900000
+  material.outlineColor 0.060000 0.100000 0.200000
+  material.outlineWidth 0.030000
+  material.bands 4.000000
+  material.ambient 0.250000
+  material.roughness 0.500000
+  animation 0 1 1

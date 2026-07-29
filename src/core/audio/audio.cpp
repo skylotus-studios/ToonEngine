@@ -243,4 +243,6 @@ namespace toon {
         ma_engine_set_volume(&m_impl->engine, volume);
     }
 
+    size_t AudioEngine::ActiveVoiceCount() const { return m_impl->handled.size(); }
+
 } // namespace toon

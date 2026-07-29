@@ -17,7 +17,11 @@ namespace toon {
     // framebuffer-resize hook, and the scene to bring up (recorded as pendingScenePath; the
     // Loading state actually loads it). Does NOT touch ImGui. Returns false on a fatal failure
     // (renderer init), having logged it. appState is left at Boot for the loop to advance.
-    bool InitRuntime(RuntimeState &rs, GLFWwindow *window, const char *scenePath);
+    //
+    // `strictValidation`, default false (every existing call site is unchanged): forwarded to
+    // Renderer::Init -- see that parameter's own comment in core/rendering/renderer.h. Used by
+    // app/headless_render.h's --headless-render mode.
+    bool InitRuntime(RuntimeState &rs, GLFWwindow *window, const char *scenePath, bool strictValidation = false);
 
     // Drive frames until the app requests Quit or the window is closed. One frame is:
     // RuntimeBeginFrame -> TickAppState -> TickRuntime -> RenderScene -> EndFrame. Advancing the

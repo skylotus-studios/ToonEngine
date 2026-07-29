@@ -124,6 +124,10 @@ int main(int argc, char **argv) {
     toon::Input::Shutdown();
     toon::ShutdownFileBrowser(state.assetBrowser,
                               state.runtime.renderer); // frees cached thumbnails; must run before the device does
+    // See app/runtime_init.cpp's ShutdownRuntime for why this call is required, not optional:
+    // without it, miniaudio's background audio thread outlives the AudioEngine memory it reads,
+    // a use-after-free race this editor teardown path had too.
+    state.runtime.audio.Shutdown();
     state.runtime.physicsWorld.Shutdown();
     state.runtime.renderer.Shutdown();
     glfwDestroyWindow(window);

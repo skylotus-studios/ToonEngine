@@ -12,10 +12,9 @@
 #include "app/save_glue.h"          // QuickSave/QuickLoad + kQuickSaveSlot (roadmap #18)
 #include "app/session.h"            // BeginSession/EndSession + BeginFadeIn (roadmap #19)
 #include "core/input/input_system.h"
+#include "core/platform/clock.h"    // Clock::Now (sim-clock reset on entering Playing)
 #include "core/save/savegame.h"     // SaveExists (title "Continue" affordance)
 #include "core/scene/serializer.h"  // LoadScene
-
-#include <GLFW/glfw3.h> // glfwGetTime (sim-clock reset on entering Playing)
 
 namespace toon {
     namespace {
@@ -75,7 +74,7 @@ namespace toon {
                 // and fire a burst of catch-up ticks -- a visible physics lurch. The 0.25s
                 // frameTime clamp in RuntimeBeginFrame guards a single stall; this guards the
                 // transition itself, which the clamp alone wouldn't (0.25s is still 15 ticks).
-                rs.lastTime = glfwGetTime();
+                rs.lastTime = Clock::Now();
                 rs.accumulator = 0.0;
                 break;
             case AppState::Paused:

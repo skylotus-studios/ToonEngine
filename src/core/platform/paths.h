@@ -31,6 +31,15 @@ namespace toon {
         // Empty until Init() has run.
         const std::string &Root();
 
+        // True if Init() fell back to the baked source-tree path (TOON_ASSET_ROOT) rather than
+        // finding a packaged assets/ next to the executable. Meaningless (false) before Init()
+        // runs. app/metrics.h's assets.fallback_used: in a properly installed/packaged build this
+        // must be false -- true there means the shipped exe is silently reading a developer's
+        // source checkout instead of its own staged assets/, the exact failure this flag exists
+        // to catch. It is legitimately true for every ordinary build/<preset>/ dev run, where
+        // nothing has staged assets/ next to the exe.
+        bool UsedFallback();
+
         // Per-category directories (no trailing slash), each Root() + a fixed subpath.
         std::string Shaders();
         std::string Models();

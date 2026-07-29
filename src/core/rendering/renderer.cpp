@@ -40,6 +40,7 @@
 #endif
 #endif
 
+#include "DebugOutput.h" // SetDebugMessageCallback (--headless-render's strict-validation counting)
 #include "EngineFactoryVk.h"
 #include "RenderDevice.h"
 #include "DeviceContext.h"
@@ -117,6 +118,8 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <filesystem> // CaptureFrameToPNG: create_directories for the capture path's parent dir
+#include <fstream>    // CaptureFrameToPNG: writing the encoded PNG bytes
 #include <memory>
 #include <string>
 #include <vector>
@@ -397,6 +400,41 @@ namespace toon {
     };
 #endif
 
+    // --- Strict validation (--headless-render only) -----------------------------------------
+    // Diligent's Vulkan backend already funnels validation-layer messages through its own
+    // LOG_ERROR_MESSAGE/LOG_WARNING_MESSAGE calls (VulkanUtilities/Debug.cpp), which route
+    // through this single process-global callback -- so installing ours here is how both the
+    // metrics.json counts AND app/headless_render.cpp's nonzero-exit-on-error requirement are
+    // satisfied, with no Vulkan-specific code of our own. File-static, not an Impl member:
+    // Diligent's callback type is a plain C function pointer, and only one Renderer exists in
+    // this process at a time. Only installed when Init's strictValidation is true (see Init
+    // below) -- the editor and the normal player never call SetDebugMessageCallback at all, so
+    // they keep Diligent's own default OutputDebugMessage behavior unchanged.
+    std::atomic<uint32_t> g_validationErrorCount{0};
+    std::atomic<uint32_t> g_validationWarningCount{0};
+
+    void DILIGENT_CALL_TYPE StrictValidationCallback(DEBUG_MESSAGE_SEVERITY severity, const Char *message,
+                                                      const Char *function, const Char *file, int line) {
+        // Mirrors Diligent's own default OutputDebugMessage formatting closely enough that
+        // nothing is lost by overriding it -- still goes to stderr, still names where it came
+        // from.
+        const char *severityStr = severity == DEBUG_MESSAGE_SEVERITY_INFO      ? "Info"
+                                  : severity == DEBUG_MESSAGE_SEVERITY_WARNING  ? "Warning"
+                                  : severity == DEBUG_MESSAGE_SEVERITY_ERROR    ? "Error"
+                                                                                : "Fatal Error";
+        std::fprintf(stderr, "Diligent %s: %s", severityStr, message ? message : "");
+        if (function || file) {
+            std::fprintf(stderr, " (%s @ %s, line %d)", function ? function : "?", file ? file : "?", line);
+        }
+        std::fprintf(stderr, "\n");
+
+        if (severity == DEBUG_MESSAGE_SEVERITY_ERROR || severity == DEBUG_MESSAGE_SEVERITY_FATAL_ERROR) {
+            g_validationErrorCount.fetch_add(1, std::memory_order_relaxed);
+        } else if (severity == DEBUG_MESSAGE_SEVERITY_WARNING) {
+            g_validationWarningCount.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
     // All Diligent state hides here, behind the PIMPL boundary.
     struct Renderer::Impl {
         RefCntAutoPtr<IRenderDevice> device;
@@ -585,6 +623,32 @@ namespace toon {
         RefCntAutoPtr<IShaderResourceBinding> modelShadowSkinnedSRB;
         RefCntAutoPtr<ISampler> shadowSampler; // comparison sampler for g_ShadowMap_sampler
         Uint32 currentShadowCascade = 0;       // set by BeginShadowCascade, read by DrawMeshShadow/DrawModelShadow
+
+        // --- Draw-call / PSO-switch counters (app/metrics.h's render.draw_calls/pso_switches,
+        // --headless-render only) --------------------------------------------------------------
+        // Reset once per frame in BeginShadowPass, the first call in a frame's real sequence
+        // (RenderScene calls it before BeginFrame). Every SetPipelineState/Draw/DrawIndexed call
+        // in this file routes through the three Counted* wrappers below instead of calling
+        // `context` directly, so these stay accurate with no per-call-site bookkeeping burden.
+        IPipelineState *lastBoundPSO = nullptr;
+        Uint32 drawCallCount = 0;
+        Uint32 psoSwitchCount = 0;
+
+        void CountedSetPSO(IPipelineState *pso) {
+            if (pso != lastBoundPSO) {
+                ++psoSwitchCount;
+                lastBoundPSO = pso;
+            }
+            context->SetPipelineState(pso);
+        }
+        void CountedDraw(const DrawAttribs &attribs) {
+            ++drawCallCount;
+            context->Draw(attribs);
+        }
+        void CountedDrawIndexed(const DrawIndexedAttribs &attribs) {
+            ++drawCallCount;
+            context->DrawIndexed(attribs);
+        }
 
         HLSL::CameraAttribs postCamera{};
         // Last frame's postCamera -- a REAL previous-camera snapshot for PostFXContext
@@ -944,7 +1008,18 @@ namespace toon {
         m_impl = nullptr;
     }
 
-    bool Renderer::Init(GLFWwindow *window) {
+    bool Renderer::HasDevice() const { return m_impl && m_impl->device; }
+
+    uint32_t Renderer::ValidationErrorCount() const {
+        return g_validationErrorCount.load(std::memory_order_relaxed);
+    }
+    uint32_t Renderer::ValidationWarningCount() const {
+        return g_validationWarningCount.load(std::memory_order_relaxed);
+    }
+    uint32_t Renderer::DrawCallCount() const { return m_impl->drawCallCount; }
+    uint32_t Renderer::PSOSwitchCount() const { return m_impl->psoSwitchCount; }
+
+    bool Renderer::Init(GLFWwindow *window, bool strictValidation) {
 #if ENGINE_DLL
         // Shared-library build: load the Vulkan engine DLL and fetch its factory.
         auto GetEngineFactoryVk = LoadGraphicsEngineVk();
@@ -952,6 +1027,17 @@ namespace toon {
         IEngineFactoryVk *factory = GetEngineFactoryVk();
 
         EngineVkCreateInfo engineCI;
+        // EngineCreateInfo's own constructor already turns on VALIDATION_LEVEL_1 under
+        // DILIGENT_DEVELOPMENT (i.e. every Debug build already gets some validation) --
+        // strictValidation means going further than that implicit default, not merely relying
+        // on it: VALIDATION_LEVEL_2 turns on every validation option Diligent has, regardless of
+        // build config, and installs the counting callback (StrictValidationCallback above) so
+        // app/headless_render.h can fail its run on a real error. Never set for the editor or
+        // the normal player -- see this parameter's own comment in renderer.h.
+        if (strictValidation) {
+            engineCI.SetValidationLevel(VALIDATION_LEVEL_2);
+            SetDebugMessageCallback(StrictValidationCallback);
+        }
         // Requested, not left to default (DEVICE_FEATURE_STATE_DISABLED): CreateSpritePipeline
         // (roadmap #13) sets BlendDesc.IndependentBlendEnable = True unconditionally, with no
         // fallback if the underlying Vulkan device feature isn't actually enabled -- without
@@ -2378,6 +2464,16 @@ namespace toon {
 
     void Renderer::Shutdown() {
         if (!m_impl) { return; }
+        // Idempotency guard: ~Renderer() (below) always calls Shutdown() again after a caller's
+        // own explicit Shutdown() call (see runtime_init.cpp's ShutdownRuntime) -- m_impl itself
+        // survives between the two calls (only ~Renderer nulls it, AFTER this returns), so the
+        // guard above alone never catches the second call; `device` does, since it's the last
+        // thing the first call Releases below. Discovered via --headless-render (app/
+        // headless_render.h): running this function's full body a second time on an
+        // already-torn-down device reproduced a reliable access violation in this session's own
+        // testing, isolated by bisection to be independent of window visibility, validation
+        // level, and draw/capture content -- purely the double-teardown itself.
+        if (!m_impl->device) { return; }
         // Wait for the GPU to finish the last submitted frame before releasing anything.
         // Its commands may still be reading the HDR / bloom / depth targets; releasing
         // those while they're in flight trips Diligent's in-use checks and pops the
@@ -2516,13 +2612,13 @@ namespace toon {
         if (auto *v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_AO")) { v->Set(aoInput); }
         if (auto *v = m_impl->tonemapSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_SSR")) { v->Set(ssrInput); }
 
-        m_impl->context->SetPipelineState(m_impl->tonemapPSO);
+        m_impl->CountedSetPSO(m_impl->tonemapPSO);
         m_impl->context->CommitShaderResources(m_impl->tonemapSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         DrawAttribs draw;
         draw.NumVertices = 3; // full-screen triangle
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->context->Draw(draw);
+        m_impl->CountedDraw(draw);
 
         // Snapshot this frame's now-finalized depth into prevSceneDepth, ready to be the
         // REAL "previous frame" for next frame's RunPostFX (see its declaration + the
@@ -2535,6 +2631,85 @@ namespace toon {
         copyDepth.pDstTexture = m_impl->prevSceneDepth;
         copyDepth.DstTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
         m_impl->context->CopyTexture(copyDepth);
+    }
+
+    // --headless-render (app/headless_render.h) frame capture: reads the swap chain's current
+    // back buffer -- whatever the just-finished BeginFrame/.../EndScene/DrawUI sequence left in
+    // it -- into a CPU-readable staging texture, then encodes it as a PNG via DiligentTools'
+    // Image::Encode (TextureLoader/interface/Image.h -- the same decoder SetWindowIcon above
+    // uses, in reverse; already linked via Diligent-TextureLoader, no new dependency). Must run
+    // AFTER RenderHUD/DrawUI and BEFORE EndFrame(): Present() transitions the back buffer out of
+    // a state CopyTexture can read from.
+    bool Renderer::CaptureFrameToPNG(const char *path) const {
+        if (!HasDevice() || !path) { return false; }
+
+        ITextureView *backBufferRTV = m_impl->swapChain->GetCurrentBackBufferRTV();
+        ITexture *backBuffer = backBufferRTV->GetTexture();
+        const TextureDesc &srcDesc = backBuffer->GetDesc();
+
+        TextureDesc stagingDesc;
+        stagingDesc.Name = "headless-render capture staging texture";
+        stagingDesc.Type = RESOURCE_DIM_TEX_2D;
+        stagingDesc.Width = srcDesc.Width;
+        stagingDesc.Height = srcDesc.Height;
+        stagingDesc.Format = srcDesc.Format;
+        stagingDesc.MipLevels = 1;
+        stagingDesc.Usage = USAGE_STAGING;
+        stagingDesc.CPUAccessFlags = CPU_ACCESS_READ;
+        stagingDesc.BindFlags = BIND_NONE;
+
+        RefCntAutoPtr<ITexture> staging;
+        m_impl->device->CreateTexture(stagingDesc, nullptr, &staging);
+        if (!staging) {
+            std::fprintf(stderr, "Renderer::CaptureFrameToPNG: failed to create the staging texture\n");
+            return false;
+        }
+
+        CopyTextureAttribs copyAttribs(backBuffer, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, staging,
+                                       RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_impl->context->CopyTexture(copyAttribs);
+        // The copy above is only ENQUEUED; MapTextureSubresource(MAP_READ) needs it to have
+        // actually finished on the GPU first, so flush and wait rather than risk mapping stale
+        // or in-flight memory. Capture is a once-per-requested-frame operation, not a hot path,
+        // so the stall this costs is a non-issue.
+        m_impl->context->WaitForIdle();
+
+        MappedTextureSubresource mapped;
+        m_impl->context->MapTextureSubresource(staging, 0, 0, MAP_READ, MAP_FLAG_DO_NOT_WAIT, nullptr, mapped);
+        if (!mapped.pData) {
+            std::fprintf(stderr, "Renderer::CaptureFrameToPNG: failed to map the staging texture\n");
+            return false;
+        }
+
+        Image::EncodeInfo encodeInfo;
+        encodeInfo.Width = srcDesc.Width;
+        encodeInfo.Height = srcDesc.Height;
+        encodeInfo.TexFormat = srcDesc.Format;
+        encodeInfo.KeepAlpha = false; // a screenshot has no meaningful alpha channel
+        encodeInfo.FlipY = false;     // UNVERIFIED -- see this task's impl-notes for why
+        encodeInfo.pData = mapped.pData;
+        encodeInfo.Stride = static_cast<Uint32>(mapped.Stride);
+        encodeInfo.FileFormat = IMAGE_FILE_FORMAT_PNG;
+
+        RefCntAutoPtr<IDataBlob> encoded;
+        Image::Encode(encodeInfo, &encoded);
+        m_impl->context->UnmapTextureSubresource(staging, 0, 0);
+
+        if (!encoded) {
+            std::fprintf(stderr, "Renderer::CaptureFrameToPNG: PNG encode failed\n");
+            return false;
+        }
+
+        std::error_code ec; // create_directories: report via return value, never throw
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+
+        std::ofstream f(path, std::ios::binary);
+        if (!f.is_open()) {
+            std::fprintf(stderr, "Renderer::CaptureFrameToPNG: failed to open '%s' for writing\n", path);
+            return false;
+        }
+        f.write(static_cast<const char *>(encoded->GetConstDataPtr()), static_cast<std::streamsize>(encoded->GetSize()));
+        return f.good();
     }
 
     void Renderer::EndFrame() {
@@ -2555,6 +2730,11 @@ namespace toon {
     MeshHandle Renderer::CreateMesh(const Vertex *vertices, uint32_t vertexCount, const uint32_t *indices,
                                     uint32_t indexCount) {
         if (!vertices || vertexCount == 0 || !indices || indexCount == 0) { return MeshHandle::Invalid; }
+        // No device (--sim-only, app/sim_runtime.h): there is nothing to upload to. The scene
+        // still loads -- every entity keeps its transform, collider, body, scripts and audio
+        // source, which is all the simulation reads -- it just renders nothing, and
+        // app/runtime_render.cpp already skips a MeshHandle::Invalid entity.
+        if (!HasDevice()) { return MeshHandle::Invalid; }
 
         Impl::GpuMesh mesh;
         mesh.indexCount = indexCount;
@@ -2595,6 +2775,13 @@ namespace toon {
     }
 
     void Renderer::SetCamera(const Camera &cam) {
+        // The aspect ratio below comes from the swap chain, so with no window/device there is no
+        // view to build -- and nothing in the simulation reads the result back (GetViewProj and
+        // ScreenPointToRay serve the editor's gizmo and mouse-pick only). --sim-only calls this
+        // every tick through TickRuntime, so this guard is what keeps the sim path off a null
+        // dereference; it is unreachable whenever a device exists.
+        if (!m_impl->swapChain) { return; }
+
         const SwapChainDesc &sc = m_impl->swapChain->GetDesc();
         const float aspect = sc.Height > 0 ? static_cast<float>(sc.Width) / static_cast<float>(sc.Height) : 1.0f;
 
@@ -2712,13 +2899,13 @@ namespace toon {
         m_impl->context->SetVertexBuffers(0, 1, vbs, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
                                           SET_VERTEX_BUFFERS_FLAG_RESET);
 
-        m_impl->context->SetPipelineState(m_impl->wireframePSO);
+        m_impl->CountedSetPSO(m_impl->wireframePSO);
         m_impl->context->CommitShaderResources(m_impl->wireframeSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         DrawAttribs draw;
         draw.NumVertices = count;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->context->Draw(draw);
+        m_impl->CountedDraw(draw);
     }
 
     // --- Editor backdrop: sky gradient + ground grid (roadmap #12) --------------
@@ -2739,13 +2926,13 @@ namespace toon {
             cb->skyBottom = float4(bottom.r, bottom.g, bottom.b, bottom.a);
         }
 
-        m_impl->context->SetPipelineState(m_impl->skyPSO);
+        m_impl->CountedSetPSO(m_impl->skyPSO);
         m_impl->context->CommitShaderResources(m_impl->skySRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         DrawAttribs draw;
         draw.NumVertices = 3; // full-screen triangle
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->context->Draw(draw);
+        m_impl->CountedDraw(draw);
     }
 
     // Infinite grid on the XZ (Y=0) ground plane, or the XY sprite plane while 2D editor mode
@@ -2828,13 +3015,13 @@ namespace toon {
         ITextureView *srv = m_impl->textures[idx - 1]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
         if (auto *v = m_impl->spriteSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_SpriteTex")) { v->Set(srv); }
 
-        m_impl->context->SetPipelineState(m_impl->spritePSO);
+        m_impl->CountedSetPSO(m_impl->spritePSO);
         m_impl->context->CommitShaderResources(m_impl->spriteSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         DrawAttribs draw;
         draw.NumVertices = 6; // the shared unit quad (CreateSpritePipeline), two triangles
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->context->Draw(draw);
+        m_impl->CountedDraw(draw);
     }
 
     // --- In-game UI overlay (roadmap #17) ----------------------------------------
@@ -2885,13 +3072,13 @@ namespace toon {
         ITextureView *rtv = m_impl->swapChain->GetCurrentBackBufferRTV();
         m_impl->context->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
-        m_impl->context->SetPipelineState(m_impl->uiPSO);
+        m_impl->CountedSetPSO(m_impl->uiPSO);
         m_impl->context->CommitShaderResources(m_impl->uiSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         DrawAttribs draw;
         draw.NumVertices = vertexCount;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->context->Draw(draw);
+        m_impl->CountedDraw(draw);
     }
 
     // --- Cascaded shadow maps ----------------------------------------------------
@@ -2905,6 +3092,12 @@ namespace toon {
     // also what correctly blanks a stale/never-rendered shadow map on the first frame or
     // right after the toggle turns shadows off.
     uint32_t Renderer::BeginShadowPass() {
+        // First call in a frame's real sequence (RenderScene calls this before BeginFrame) --
+        // reset the draw-call/PSO-switch counters here so they cover exactly one frame.
+        m_impl->drawCallCount = 0;
+        m_impl->psoSwitchCount = 0;
+        m_impl->lastBoundPSO = nullptr;
+
         if (!m_impl->post.shadows) {
             m_impl->shadowMapAttribs.iNumCascades = 0;
             MapHelper<ShadowMapAttribs> cb(m_impl->context, m_impl->shadowAttribsCB, MAP_WRITE, MAP_FLAG_DISCARD);
@@ -2963,9 +3156,9 @@ namespace toon {
         draw.NumIndices = mesh.indexCount;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
 
-        m_impl->context->SetPipelineState(m_impl->shadowPSO);
+        m_impl->CountedSetPSO(m_impl->shadowPSO);
         m_impl->context->CommitShaderResources(m_impl->shadowSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        m_impl->context->DrawIndexed(draw);
+        m_impl->CountedDrawIndexed(draw);
     }
 
     // Same idea as DrawModel, stripped to depth-only: walk the model's nodes, transform each
@@ -3031,7 +3224,7 @@ namespace toon {
             // the next draw -- same idiom DrawMesh/DrawModel already use per primitive.
             IPipelineState *pso = skinned ? m_impl->modelShadowSkinnedPSO : m_impl->modelShadowPSO;
             IShaderResourceBinding *srb = skinned ? m_impl->modelShadowSkinnedSRB : m_impl->modelShadowSRB;
-            m_impl->context->SetPipelineState(pso);
+            m_impl->CountedSetPSO(pso);
             m_impl->context->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
             for (const GLTF::Primitive &prim : node->pMesh->Primitives) {
@@ -3043,13 +3236,13 @@ namespace toon {
                     draw.FirstIndexLocation = baseIndex + prim.FirstIndex;
                     draw.BaseVertex = baseVertex + prim.FirstVertex;
                     draw.Flags = DRAW_FLAG_VERIFY_ALL;
-                    m_impl->context->DrawIndexed(draw);
+                    m_impl->CountedDrawIndexed(draw);
                 } else {
                     DrawAttribs draw;
                     draw.NumVertices = prim.VertexCount;
                     draw.StartVertexLocation = baseVertex + prim.FirstVertex;
                     draw.Flags = DRAW_FLAG_VERIFY_ALL;
-                    m_impl->context->Draw(draw);
+                    m_impl->CountedDraw(draw);
                 }
             }
         }
@@ -3160,13 +3353,13 @@ namespace toon {
 
         // Outline first (enlarged back-facing shell), then the fill on top: the
         // fill's nearer depth overwrites the shell everywhere except the rim.
-        m_impl->context->SetPipelineState(m_impl->outlinePSO);
+        m_impl->CountedSetPSO(m_impl->outlinePSO);
         m_impl->context->CommitShaderResources(m_impl->outlineSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        m_impl->context->DrawIndexed(draw);
+        m_impl->CountedDrawIndexed(draw);
 
-        m_impl->context->SetPipelineState(m_impl->fillPSO);
+        m_impl->CountedSetPSO(m_impl->fillPSO);
         m_impl->context->CommitShaderResources(m_impl->fillSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        m_impl->context->DrawIndexed(draw);
+        m_impl->CountedDrawIndexed(draw);
     }
 
     // Convenience: a single object's placement. Builds world matrices from the transforms
@@ -3178,6 +3371,11 @@ namespace toon {
     // --- Scene: glTF models -----------------------------------------------------
 
     ModelHandle Renderer::LoadModel(const char *path) {
+        // No device: nothing to upload the glTF's buffers/textures into. See CreateMesh's guard --
+        // the scene still loads, it just carries no renderable. NOTE this also means
+        // GetModelAnimationDuration below reports 0 for every clip in a --sim-only run; see its
+        // own comment for what that costs the animation tick.
+        if (!HasDevice()) { return ModelHandle::Invalid; }
         if (!path) { return ModelHandle::Invalid; }
 
         size_t attribCount = 0;
@@ -3243,6 +3441,13 @@ namespace toon {
     // Animations[i].Start/End are the clip's own playable range in seconds (glTF sampler
     // input times -- not necessarily zero-based, though in practice they always are); the
     // duration is their difference, not End alone.
+    //
+    // Returns 0 for an unknown handle, which is also what EVERY clip reports in a device-less
+    // run (--sim-only): the durations live inside the loaded GLTF::Model, and LoadModel above
+    // uploads nothing without a device. app/runtime_tick.cpp treats 0 as "don't wrap or clamp",
+    // so a sim-only animation's clip time advances but never loops -- see the warning
+    // app/sim_runtime.cpp prints. Making clip metadata available without a device means holding
+    // it CPU-side, which belongs with the resource manager (roadmap #21), not here.
     float Renderer::GetModelAnimationDuration(ModelHandle handle, uint32_t index) const {
         const uint32_t idx = static_cast<uint32_t>(handle);
         if (idx == 0 || idx > m_impl->models.size()) { return 0.0f; }
@@ -3310,13 +3515,13 @@ namespace toon {
                 draw.FirstIndexLocation = baseIndex + p.FirstIndex;
                 draw.BaseVertex = baseVertex + p.FirstVertex;
                 draw.Flags = DRAW_FLAG_VERIFY_ALL;
-                m_impl->context->DrawIndexed(draw);
+                m_impl->CountedDrawIndexed(draw);
             } else {
                 DrawAttribs draw;
                 draw.NumVertices = p.VertexCount;
                 draw.StartVertexLocation = baseVertex + p.FirstVertex;
                 draw.Flags = DRAW_FLAG_VERIFY_ALL;
-                m_impl->context->Draw(draw);
+                m_impl->CountedDraw(draw);
             }
         };
 
@@ -3399,11 +3604,11 @@ namespace toon {
 
                 // Outline first (enlarged back-facing shell), then the textured fill on top:
                 // the fill's nearer depth overwrites the shell everywhere but the silhouette rim.
-                m_impl->context->SetPipelineState(outlinePSO);
+                m_impl->CountedSetPSO(outlinePSO);
                 m_impl->context->CommitShaderResources(outlineSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
                 issueDraw(prim);
 
-                m_impl->context->SetPipelineState(fillPSO);
+                m_impl->CountedSetPSO(fillPSO);
                 m_impl->context->CommitShaderResources(fillSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
                 issueDraw(prim);
             }
@@ -3430,6 +3635,10 @@ namespace toon {
     // is device-only (uploads mips as immutable initial data, no immediate-context work), so
     // this never touches m_impl->context.
     TextureHandle Renderer::LoadTexture(const char *path, bool srgb) {
+        // No device: same contract as CreateMesh/LoadModel above. A sprite entity keeps its
+        // texturePath and every other field; only the GPU handle stays Invalid, which
+        // app/runtime_render.cpp's sprite pass already skips.
+        if (!HasDevice()) { return TextureHandle::Invalid; }
         if (!path) { return TextureHandle::Invalid; }
 
         TextureLoadInfo info;

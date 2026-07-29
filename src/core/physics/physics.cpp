@@ -165,6 +165,12 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
     // reader, so nothing here needs to be thread-safe beyond the mutex itself.
     std::mutex contactMutex;
     std::vector<ContactEvent> pendingEvents;
+    // Cumulative Enter+Stay+Exit count over the PhysicsWorld's whole lifetime, for
+    // app/metrics.h's jolt.contacts -- a running total, not a live "touching right now" gauge
+    // (Stay fires every tick two bodies rest against each other, so this dominates quickly for
+    // any resting contact). Incremented at both pendingEvents.push_back sites below, already
+    // inside contactMutex's lock.
+    uint64_t totalContactEvents = 0;
 
     struct ContactGeom {
         Vec3 point;
@@ -210,6 +216,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
         ev.point = point;
         ev.normal = normal;
         pendingEvents.push_back(ev);
+        ++totalContactEvents;
     }
 
     void OnContactAdded(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold,
@@ -240,6 +247,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
         ev.point = geom.point;
         ev.normal = geom.normal;
         pendingEvents.push_back(ev);
+        ++totalContactEvents;
     }
 };
 
@@ -371,6 +379,16 @@ bool PhysicsWorld::GetBodyTransform(BodyHandle body, Vec3 &outPosition, Quat &ou
     return true;
 }
 
+bool PhysicsWorld::GetBodyVelocity(BodyHandle body, Vec3 &outLinear, Vec3 &outAngular) const {
+    const auto it = m_impl->bodies.find(static_cast<uint32_t>(body));
+    if (it == m_impl->bodies.end()) { return false; }
+
+    JPH::BodyInterface &bodyInterface = m_impl->physicsSystem.GetBodyInterface();
+    outLinear = ToVec3(bodyInterface.GetLinearVelocity(it->second));
+    outAngular = ToVec3(bodyInterface.GetAngularVelocity(it->second));
+    return true;
+}
+
 void PhysicsWorld::Step(float dt) {
     // 1 collision step per call: correct as long as the caller passes Jolt's own
     // recommended fixed 1/60 s tick (dt larger than that needs more steps to stay stable;
@@ -417,6 +435,17 @@ std::vector<ContactEvent> PhysicsWorld::ConsumeContactEvents() {
     std::vector<ContactEvent> events;
     events.swap(m_impl->pendingEvents); // pendingEvents left empty, ready for the next tick
     return events;
+}
+
+uint32_t PhysicsWorld::BodyCount() const { return m_impl->physicsSystem.GetNumBodies(); }
+
+uint32_t PhysicsWorld::ActiveBodyCount() const {
+    return m_impl->physicsSystem.GetNumActiveBodies(JPH::EBodyType::RigidBody);
+}
+
+uint64_t PhysicsWorld::TotalContactEvents() const {
+    const std::lock_guard<std::mutex> lock(m_impl->contactMutex); // written from Jolt's worker threads
+    return m_impl->totalContactEvents;
 }
 
 // Pure geometry -- no Jolt dependency, despite living in this Jolt-only file (see the

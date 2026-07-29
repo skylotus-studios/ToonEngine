@@ -20,6 +20,56 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# scripts/verify.py's deep-tier `asan_sim_only` step (the agent-debug-asan preset,
+# CMakePresets.json): clang-cl's own AddressSanitizer, applied globally and BEFORE every
+# add_subdirectory below so the whole vendored dependency tree (Diligent, Jolt, GLFW) builds
+# ASan-consistent -- a mismatched runtime between TUs is the classic way this silently stops
+# catching anything. Only what clang-cl actually offers on this toolchain: no UBSan/TSan, which
+# clang-cl doesn't realistically support on Windows. Off by default; every other preset is
+# unaffected.
+#
+# Two toolchain wrinkles, both discovered by actually trying it, not guessed at:
+#
+# 1. clang-cl's ASan refuses to link against the DEBUG CRT ("AddressSanitizer doesn't support
+#    linking with debug runtime libraries yet") -- a real, documented clang-cl limitation, not a
+#    quirk to patch around with manual /MD + _ITERATOR_DEBUG_LEVEL overrides (tried first: forcing
+#    /MD onto a Debug CMAKE_BUILD_TYPE still leaves `_DEBUG` defined everywhere, which independently
+#    drives both _ITERATOR_DEBUG_LEVEL and the auto-selected C++ runtime import lib
+#    (msvcprtd.lib), producing a cascade of ABI mismatches one flag at a time). The real fix:
+#    `agent-debug-asan` (CMakePresets.json) inherits `agent-release`'s RelWithDebInfo build type
+#    instead of Debug -- /MD and no `_DEBUG` come for free, correctly, everywhere, with none of
+#    that by-hand patching.
+#
+# 2. `/fsanitize=address` is a clang-cl DRIVER flag: passing it at COMPILE time (clang-cl.exe)
+#    works fine, but this project's Ninja+clang-cl setup links EVERY target -- executables and
+#    shared libraries alike -- via `cmake -E vs_link_exe`/`vs_link_dll` calling `lld-link.exe`
+#    DIRECTLY, bypassing the clang-cl driver that would normally translate the flag into the
+#    right ASan runtime linkage. Raw lld-link has no idea what `/fsanitize=address` means and
+#    fails trying to open it as a literal filename. So: no `add_link_options` here at all --
+#    compile-time instrumentation stays global (below), and the actual ASan runtime import
+#    library gets linked explicitly, by name, onto the specific targets that need it (see the
+#    two `TOONENGINE_ASAN` blocks further down: one excludes DiligentCore's two shared-library
+#    targets from instrumentation entirely, since --sim-only never loads them; the other links
+#    the runtime import lib onto ToonEngine/ToonPlayer/ToonUnitTests once they exist).
+option(TOONENGINE_ASAN "Build with clang-cl AddressSanitizer (/fsanitize=address)" OFF)
+
+if(TOONENGINE_ASAN)
+    add_compile_options(
+        $<$<AND:$<NOT:$<STREQUAL:$<TARGET_PROPERTY:NAME>,Diligent-GraphicsEngineVk-shared>>,$<NOT:$<STREQUAL:$<TARGET_PROPERTY:NAME>,Diligent-Archiver-shared>>>:/fsanitize=address>
+    )
+
+    # Switching this preset's build type to RelWithDebInfo (CMakePresets.json, see this block's
+    # own banner) turns on /O2, which is what makes vendored SPIRV-Tools' own CMakeLists.txt add
+    # /GL (whole-program optimization) -- an MSVC-only flag clang-cl doesn't implement, normally
+    # a harmless "unused argument" warning, except SPIRV-Tools' own CMakeLists.txt hard-codes
+    # /WX (warnings-as-errors) on its MSVC branch UNCONDITIONALLY -- its own `SPIRV_WERROR`
+    # option (tried first) only guards a second, redundant `/WX` append and doesn't actually
+    # control this path, a real oversight in that vendored script, not something to hand-patch.
+    # Suppress the specific diagnostic class instead (clang-cl still recognizes -Wno-* form):
+    # nothing to escalate to /WX once the warning itself is off.
+    add_compile_options(-Wno-unused-command-line-argument)
+endif()
+
 # --- Diligent Engine (git submodules under external/) ------------------------
 # Core defaults to building every backend the platform can support (on
 # Windows: D3D11, D3D12, OpenGL, Vulkan) regardless of which ones we actually
@@ -122,6 +172,10 @@ endif()
 add_library(ToonRuntime STATIC
     src/core/platform/paths.h         # (header-only interface, listed for IDE visibility)
     src/core/platform/paths.cpp       # exe-relative asset path resolution (roadmap #16)
+    src/core/platform/clock.h         # (header-only interface, listed for IDE visibility)
+    src/core/platform/clock.cpp       # monotonic wall clock; what freed the sim half from GLFW
+    src/core/platform/memstats.h      # (header-only interface, listed for IDE visibility)
+    src/core/platform/memstats.cpp    # process peak working-set size (metrics.json's alloc.peak_bytes)
     src/core/rendering/renderer.cpp
     src/core/rendering/primitives.cpp
     src/core/ui/text.h                # (header-only interface, listed for IDE visibility)
@@ -153,6 +207,18 @@ add_library(ToonRuntime STATIC
     src/app/runtime_ui.h         # (header-only interface, listed for IDE visibility)
     src/app/runtime_ui.cpp       # in-game HUD/menu driver (roadmap #17), shared with the player
     src/app/runtime_init.cpp     # runtime bring-up/teardown + the main loop (no ImGui)
+    src/app/sim_runtime.h        # (header-only interface, listed for IDE visibility)
+    src/app/sim_runtime.cpp      # --sim-only: the headless sim harness (no window, no device, no audio)
+    src/app/world_hash.h         # (header-only interface, listed for IDE visibility)
+    src/app/world_hash.cpp       # HashWorldState: a 64-bit fingerprint of simulated state (--hash-every)
+    src/app/metrics.h            # (header-only interface, listed for IDE visibility)
+    src/app/metrics.cpp          # WriteMetrics: emits artifacts/metrics.json
+    src/app/headless_render.h    # (header-only interface, listed for IDE visibility)
+    src/app/headless_render.cpp  # --headless-render: real device, hidden window, strict validation, PNG capture
+    src/app/scene_roundtrip.h    # (header-only interface, listed for IDE visibility)
+    src/app/scene_roundtrip.cpp  # --scene-roundtrip: load/save idempotency check (scripts/verify.py's fast tier)
+    src/app/resize_soak.h        # (header-only interface, listed for IDE visibility)
+    src/app/resize_soak.cpp      # --resize-soak: repeated Renderer::Resize under a real device (scripts/verify.py's deep tier)
     src/app/physics_glue.cpp     # collider-extent scaling + physics-world (re)construction
     src/app/audio_glue.cpp       # audio-world (re)construction from AudioSource-bearing entities
     src/app/session.h            # (header-only interface, listed for IDE visibility)
@@ -196,6 +262,83 @@ target_include_directories(ToonEngine PRIVATE
 # by reachability, since player_main.cpp never names a ui/panels/ symbol.
 add_executable(ToonPlayer src/app/player_main.cpp)
 target_link_libraries(ToonPlayer PRIVATE ToonRuntime)
+
+# ToonUnitTests: scripts/verify.py's fast-tier `unit_tests` step and deep-tier `savegame_compat`
+# step (tests/unit/test_framework.h's own banner: a hand-rolled registry, no gtest/Catch2 -- no
+# new dependency, matching this repo's "no vcpkg" rule 5). Links ToonRuntime for
+# core/save/savegame.h's symbols; core/math.h is header-only and needs none, but shares the same
+# include root. Two CTest entries filter the same binary by name substring rather than building
+# two executables -- see test_main.cpp's --filter handling.
+enable_testing()
+add_executable(ToonUnitTests
+    tests/unit/test_framework.h
+    tests/unit/test_main.cpp
+    tests/unit/math_tests.cpp
+    tests/unit/savegame_tests.cpp
+)
+target_link_libraries(ToonUnitTests PRIVATE ToonRuntime)
+target_include_directories(ToonUnitTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit)
+add_test(NAME ToonUnitTests_Math COMMAND ToonUnitTests --filter=Math)
+add_test(NAME ToonUnitTests_SaveGame COMMAND ToonUnitTests --filter=SaveGame)
+
+# TOONENGINE_ASAN, part 2 (see this file's earlier banner, right after CMAKE_CXX_STANDARD_REQUIRED,
+# for why this isn't a plain add_link_options(/fsanitize=address)): link the ASan runtime import
+# library explicitly, by name, onto every target that produces a FINAL linked artifact under ASan
+# -- not just the three executables, but also DiligentCore's two shared libraries
+# (Diligent-GraphicsEngineVk-shared, Diligent-Archiver-shared). Those two are excluded from
+# INSTRUMENTATION (no /fsanitize=address on their own compile, see the exclusion above), but they
+# still LINK against many instrumented static libraries (GraphicsEngine, Common, BasicPlatform,
+# ...), which reference ASan runtime symbols (e.g. __asan_shadow_memory_dynamic_address) that
+# only the runtime import library resolves -- excluding a target from instrumentation doesn't
+# exempt it from satisfying symbols its own dependencies pull in. Static libraries need none of
+# this: they have no link-time symbol resolution step of their own. Matches /MD (the dynamic
+# release CRT this preset forces): the DYNAMIC ASan runtime, not the static one.
+if(TOONENGINE_ASAN)
+    file(GLOB TOONENGINE_ASAN_RUNTIME_LIB
+        "C:/Program Files/LLVM/lib/clang/*/lib/windows/clang_rt.asan_dynamic-x86_64.lib")
+    file(GLOB TOONENGINE_ASAN_RUNTIME_DLL
+        "C:/Program Files/LLVM/lib/clang/*/lib/windows/clang_rt.asan_dynamic-x86_64.dll")
+    # The dynamic import lib above only exports the INDIRECT `__imp_*` symbols; instrumented
+    # code compiled as if the runtime were in the SAME module (clang's normal assumption)
+    # references the DIRECT symbol (e.g. `__asan_shadow_memory_dynamic_address`, confirmed via
+    # llvm-nm: only `__imp___asan_shadow_memory_dynamic_address` is exported, not the plain
+    # name). LLVM's documented fix for "runtime lives in a separate DLL": also link the runtime
+    # THUNK library, force-included with /WHOLEARCHIVE since its symbols aren't otherwise pulled
+    # in by ordinary reference resolution.
+    file(GLOB TOONENGINE_ASAN_RUNTIME_THUNK
+        "C:/Program Files/LLVM/lib/clang/*/lib/windows/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
+    list(GET TOONENGINE_ASAN_RUNTIME_LIB 0 TOONENGINE_ASAN_RUNTIME_LIB)
+    list(GET TOONENGINE_ASAN_RUNTIME_DLL 0 TOONENGINE_ASAN_RUNTIME_DLL)
+    list(GET TOONENGINE_ASAN_RUNTIME_THUNK 0 TOONENGINE_ASAN_RUNTIME_THUNK)
+    set(TOONENGINE_ASAN_LINK_FLAGS
+        "${TOONENGINE_ASAN_RUNTIME_LIB}" "/WHOLEARCHIVE:${TOONENGINE_ASAN_RUNTIME_THUNK}")
+    # Diligent-GraphicsEngineVk-shared/Diligent-Archiver-shared are defined inside
+    # external/DiligentCore's own subdirectory scope, not here -- target_link_libraries works
+    # across directory scopes for an existing target, but add_custom_command(TARGET ...) does
+    # not (a hard CMake restriction: it can only attach to a target defined in the CURRENT
+    # directory). They don't need their own copy of the ASan runtime DLL anyway: every target
+    # here shares the same CMAKE_RUNTIME_OUTPUT_DIRECTORY, so the copy the executables' loop
+    # below performs already lands it in the one directory all of these load from.
+    foreach(_toon_asan_link_only_target Diligent-GraphicsEngineVk-shared Diligent-Archiver-shared)
+        # target_link_options, not target_link_libraries: CMake's LINK_LIBRARIES ordering
+        # interleaves a plain-path library with the target's PUBLIC/transitively-propagated
+        # dependencies (topologically resolved from the static libs it depends on), which can
+        # place it BEFORE the object files that actually reference its symbols -- lld-link, like
+        # link.exe, resolves archive/import-lib symbols in a single left-to-right pass, so a
+        # runtime support library needs to be LAST, not wherever LINK_LIBRARIES ordering happens
+        # to put it. target_link_options appends straight onto the end of the raw command line.
+        target_link_options(${_toon_asan_link_only_target} PRIVATE ${TOONENGINE_ASAN_LINK_FLAGS})
+    endforeach()
+
+    foreach(_toon_asan_target ToonEngine ToonPlayer ToonUnitTests)
+        target_link_options(${_toon_asan_target} PRIVATE ${TOONENGINE_ASAN_LINK_FLAGS})
+        # The ASan DLL itself (loaded at runtime, same as copy_required_dlls does for Diligent's
+        # engine DLLs below) has to sit next to the exe, not just its import library at link time.
+        add_custom_command(TARGET ${_toon_asan_target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${TOONENGINE_ASAN_RUNTIME_DLL}" "$<TARGET_FILE_DIR:${_toon_asan_target}>")
+    endforeach()
+endif()
 
 # Embed the window icon into the .exe itself (RT_GROUP_ICON/RT_ICON resources), not just
 # set it at runtime (core/renderer.cpp's SetWindowIcon, called from main.cpp, still does
@@ -280,6 +423,12 @@ endif()
 # dwmapi.lib. Windows-only, like the icon/RC block above -- Linux/macOS don't build yet.
 if(WIN32)
     target_link_libraries(ToonRuntime PUBLIC dwmapi)
+endif()
+
+# core/platform/memstats.cpp's PeakWorkingSetBytes (app/metrics.h's alloc.peak_bytes) needs
+# GetProcessMemoryInfo, declared in psapi.h. Same Windows-only shape as the dwmapi link above.
+if(WIN32)
+    target_link_libraries(ToonRuntime PUBLIC Psapi)
 endif()
 
 # We link the Vulkan engine as a SHARED library, which Diligent loads at runtime

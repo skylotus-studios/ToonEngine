@@ -12,6 +12,12 @@
 
 namespace toon {
 
+    // Simulation rate: 60 Hz. The render rate is decoupled from this (see TickRuntime's
+    // accumulator). Lives in the header rather than file-local to runtime_tick.cpp because
+    // app/sim_runtime.cpp drives the same loop with no wall clock at all, feeding this value
+    // directly as the frame delta -- one definition, so the two can never drift apart.
+    constexpr double kFixedDt = 1.0 / 60.0;
+
     // What the sim should do this frame. The two callers differ only in how they fill this:
     // the editor from its EditorMode/Step state, the player from its AppState.
     struct SimTickParams {

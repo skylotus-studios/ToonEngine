@@ -1,0 +1,105 @@
+# ToonEngine golden scene -- all four cascaded shadow maps.
+#
+# Four cube "pillars" spread across depth (z = 4, 20, 45, 80, inside the camera's own
+# near=0.1/far=100 range -- see the "camera" line on entity "Camera" below) under a raking
+# directional light, so Renderer::BeginShadowPass's DistributeCascades (renderer.cpp,
+# kShadowCascades = 4) has real shadow-casting geometry to place in every one of the 4 cascades,
+# not just the nearest. A long ground plane catches every pillar's shadow so a missing or
+# mis-transformed cascade shows up as a visibly wrong/missing shadow segment along the ground,
+# not a subtle pixel shift.
+#
+# MUST be run with `ToonPlayer --headless-render --post off` (see golden_fill_outline.scene's
+# banner for why: bloom/SSAO/DoF/SSR/TAA are all non-deterministic frame-to-frame). Shadows are
+# left ON here deliberately -- this scene's whole point -- unlike --post off, which never
+# touches PostParams::shadows.
+#
+# No rigidbody, no script: fully static.
+
+camera.pivot 0.000000 1.500000 40.000000
+camera.distance 45.000000
+camera.yaw 0.000000
+camera.pitch 0.350000
+camera.fov 0.950000
+
+entity "Scene"
+  parent -1
+
+entity "Sun"
+  parent 0
+  position 0.000000 20.000000 -10.000000
+  rotation -0.560000 0.270000 0.180000 0.760000
+  scale 1.000000 1.000000 1.000000
+  light.color 1.000000 0.960000 0.880000
+  light.intensity 1.000000
+
+entity "Camera"
+  parent 0
+  position 0.000000 6.000000 0.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  camera 0.950000 0.100000 100.000000 0 45.000000 1
+
+entity "Ground"
+  parent 0
+  position 0.000000 0.000000 40.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive plane 60.000000
+  material.baseColor 0.320000 0.400000 0.360000
+  material.outlineColor 0.060000 0.100000 0.080000
+  material.outlineWidth 0.020000
+  material.bands 3.000000
+  material.ambient 0.200000
+  material.roughness 0.950000
+
+entity "PillarNear"
+  parent 0
+  position -3.000000 1.500000 4.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive cube 1.400000
+  material.baseColor 0.850000 0.300000 0.350000
+  material.outlineColor 0.050000 0.050000 0.070000
+  material.outlineWidth 0.030000
+  material.bands 3.000000
+  material.ambient 0.200000
+  material.roughness 0.900000
+
+entity "PillarMid"
+  parent 0
+  position 2.000000 1.500000 20.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive cube 1.400000
+  material.baseColor 0.400000 0.550000 0.900000
+  material.outlineColor 0.060000 0.100000 0.200000
+  material.outlineWidth 0.030000
+  material.bands 3.000000
+  material.ambient 0.200000
+  material.roughness 0.900000
+
+entity "PillarFar"
+  parent 0
+  position -2.500000 1.500000 45.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive cube 1.400000
+  material.baseColor 0.950000 0.650000 0.200000
+  material.outlineColor 0.200000 0.100000 0.020000
+  material.outlineWidth 0.030000
+  material.bands 3.000000
+  material.ambient 0.200000
+  material.roughness 0.900000
+
+entity "PillarFarthest"
+  parent 0
+  position 3.000000 1.500000 80.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  primitive cube 1.400000
+  material.baseColor 0.550000 0.850000 0.400000
+  material.outlineColor 0.100000 0.180000 0.060000
+  material.outlineWidth 0.030000
+  material.bands 3.000000
+  material.ambient 0.200000
+  material.roughness 0.900000

@@ -28,8 +28,30 @@ struct GLFWwindow;
 
 namespace toon {
 
+    // Which presentation subsystems this process actually brought up. Two INDEPENDENT axes, not
+    // one "headless" bool: the editor and the normal player have both; --sim-only
+    // (app/sim_runtime.h) has neither.
+    //
+    // --headless-render (app/headless_render.h) turned out NOT to be the third combination this
+    // comment originally predicted (renderDevice without window): RenderHUD's
+    // glfwGetFramebufferSize calls need a real GLFWwindow*, so that mode's window is a genuine
+    // (merely GLFW_VISIBLE-false) handle, not a null one -- its RuntimeMode is {true, true},
+    // identical to the windowed player's. The axis that's actually false there -- on-screen
+    // visibility -- isn't one this struct tracks; nothing downstream needs to distinguish
+    // "shown" from "hidden" at the RuntimeState level, only "does rs.window hold a real handle."
+    //
+    // Defaults are true, so nothing that doesn't opt out changes behavior. This is a statement of
+    // INTENT that a mode can verify against reality (sim-only checks rs.window and
+    // Renderer::HasDevice every tick); it is not itself the source of truth.
+    struct RuntimeMode {
+        bool window = true;
+        bool renderDevice = true;
+    };
+
     struct RuntimeState {
         GLFWwindow *window = nullptr;
+
+        RuntimeMode mode;
 
         Renderer renderer;
         PhysicsWorld physicsWorld;

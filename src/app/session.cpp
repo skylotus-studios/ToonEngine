@@ -6,10 +6,9 @@
 #include "app/audio_glue.h"   // BuildAudioWorld
 #include "app/physics_glue.h" // BuildPhysicsWorld
 #include "app/runtime_state.h"
+#include "core/platform/clock.h"   // Clock::Now (sim-clock reset across the swap)
 #include "core/scene/script.h"     // CreateScripts / DestroyScripts
 #include "core/scene/serializer.h" // LoadSceneData
-
-#include <GLFW/glfw3.h> // glfwGetTime (sim-clock reset across the swap)
 
 #include <cstdio>
 #include <utility>
@@ -54,7 +53,7 @@ namespace toon {
             //    fixed ticks -- a burst of catch-up steps that reads as a physics lurch on the
             //    new level's first frame. Same reasoning, same two lines, as SetAppState's
             //    Playing arm (app/app_state.cpp).
-            rs.lastTime = glfwGetTime();
+            rs.lastTime = Clock::Now();
             rs.accumulator = 0.0;
             return true;
         }

@@ -10,6 +10,7 @@
 #include "core/scene/scripts/builtin_scripts.h" // RegisterBuiltinScripts
 #include "app/runtime_ui.h" // RenderHUD (roadmap #17: the in-game HUD/menu)
 #include "core/input/input_system.h"
+#include "core/platform/clock.h" // Clock::Now (seeds the sim clock; see clock.h)
 #include "core/platform/paths.h" // Assets::Icon (exe-relative asset paths)
 
 #include <GLFW/glfw3.h>
@@ -19,17 +20,21 @@
 
 namespace toon {
 
-    bool InitRuntime(RuntimeState &rs, GLFWwindow *window, const char *scenePath) {
+    bool InitRuntime(RuntimeState &rs, GLFWwindow *window, const char *scenePath, bool strictValidation) {
         // Before anything can load a scene: the name -> factory registry has to know the script
         // types this build ships with, and nothing else populates it (see builtin_scripts.h --
         // the self-registering statics this replaced were being dropped by the linker, which is
         // why a shipped player silently ran no scripts at all).
         RegisterBuiltinScripts();
 
+        // Window-backed bring-up: both presentation axes are on. The sim-only path
+        // (app/sim_runtime.h) is the one that clears them, and never comes through here.
+        rs.mode = RuntimeMode{};
+
         rs.window = window;
         SetWindowIcon(window, Assets::Icon().c_str());
 
-        if (!rs.renderer.Init(window)) {
+        if (!rs.renderer.Init(window, strictValidation)) {
             std::fprintf(stderr, "Renderer init failed\n");
             return false;
         }
@@ -57,7 +62,7 @@ namespace toon {
         // DrainLoadJob), so the load happens inside the frame loop with the window responsive.
         rs.pendingScenePath = scenePath ? scenePath : "";
 
-        rs.lastTime = glfwGetTime();
+        rs.lastTime = Clock::Now();
         rs.appState = AppState::Boot;
         return true;
     }
@@ -100,6 +105,17 @@ namespace toon {
         // order the destructors below happen to run in.
         EndSession(rs);
         Input::Shutdown();
+        // AudioEngine::Shutdown's own header comment says "Shutdown once at exit" -- this call
+        // was simply missing. EndSession's StopAll() above only stops/releases individual
+        // handled sounds; it leaves miniaudio's ma_engine (and the realtime audio callback
+        // thread that owns, per audio.cpp's own banner) running. Without this, that background
+        // thread keeps touching AudioEngine::Impl's memory while ~RuntimeState's member
+        // destructors free it out from under it moments later -- a use-after-free race that
+        // reproduced as a reliable access-violation crash on every clean exit (editor, player,
+        // and --headless-render alike), isolated during this session's own testing by bisecting
+        // down to exactly this gap. The same fix is needed in main.cpp's separate editor
+        // teardown block, which has the identical gap.
+        rs.audio.Shutdown();
         rs.physicsWorld.Shutdown();
         rs.renderer.Shutdown(); // ShutdownUI inside is a no-op: InitUI was never called
     }

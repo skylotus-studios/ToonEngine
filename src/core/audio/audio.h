@@ -95,6 +95,14 @@ namespace toon {
 
         void SetMasterVolume(float volume); // Settings panel's mute/volume control
 
+        // How many persistent (handled) sounds are currently live -- app/metrics.h's
+        // audio.voices_active. Before Init() (or after Shutdown()), this is always exactly 0:
+        // not a placeholder, the correct value, since nothing can be handled by an engine that
+        // was never brought up.
+        size_t ActiveVoiceCount() const;
+
+
+
     private:
         struct Impl; // defined in audio.cpp: hides all miniaudio types
         Impl *m_impl = nullptr;

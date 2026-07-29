@@ -112,6 +112,14 @@ public:
     // Transform. Returns false (out-params untouched) for an invalid/unknown handle.
     bool GetBodyTransform(BodyHandle body, Vec3 &outPosition, Quat &outRotation) const;
 
+    // Read a body's current linear + angular velocity. Same contract as GetBodyTransform above
+    // (false, out-params untouched, for an invalid/unknown handle). Added for app/world_hash.h's
+    // HashWorldState: velocity is part of a body's simulated state but isn't written back into
+    // any Entity field today, so a hash of Entity::transform alone would miss a body that's
+    // moving with the same POSE two runs apart but a different velocity -- a real divergence a
+    // pose-only hash would let straight through.
+    bool GetBodyVelocity(BodyHandle body, Vec3 &outLinear, Vec3 &outAngular) const;
+
     // Advance the simulation by exactly `dt` (one collision step); call once per fixed
     // sim tick, at Jolt's own recommended fixed rate (1/60 s).
     void Step(float dt);
@@ -130,6 +138,19 @@ public:
     // events are collected on Jolt's own physics worker threads during Step (see physics.cpp),
     // and only safe to read from the caller's thread once Step has returned. Clears the queue.
     std::vector<ContactEvent> ConsumeContactEvents();
+
+    // --- Metrics (app/metrics.h) --------------------------------------------------
+    // Live body count -- everything CreateBody has handed out and DestroyBody/Clear hasn't
+    // taken back.
+    uint32_t BodyCount() const;
+    // How many of those are actually awake and being integrated this step, vs. asleep (Jolt
+    // deactivates a body that's been at rest long enough). RigidBody only -- this seam never
+    // creates Jolt's other body type (soft bodies).
+    uint32_t ActiveBodyCount() const;
+    // Cumulative Enter+Stay+Exit contact events over this PhysicsWorld's whole lifetime; see
+    // ConsumeContactEvents' own comment on Enter/Stay/Exit semantics. NOT drained/reset by
+    // ConsumeContactEvents -- a separate running total, purely for metrics.
+    uint64_t TotalContactEvents() const;
 
 private:
     struct Impl; // defined in physics.cpp; hides all Jolt types

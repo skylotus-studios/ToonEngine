@@ -1,0 +1,60 @@
+# ToonEngine golden scene -- overlapping transparent sprites.
+#
+# Three sprite entities on the existing assets/sprites/icon.png, placed at increasing depth
+# along the camera's view (z = 0, 1.2, 2.4) with overlapping screen-space position and distinct
+# tints (two with alpha < 1). Exercises the back-to-front transparent sprite pass
+# (app/runtime_render.cpp: sorted by view depth, depth WRITES off so overlapping sprites
+# actually composite instead of z-fighting/occluding) -- a wrong sort order or a depth-write
+# regression shows up as a visibly wrong blend (front sprite fully opaque over what should show
+# through, or back-to-front order flipped), not a subtle pixel shift.
+#
+# MUST be run with `ToonPlayer --headless-render --post off` (see golden_fill_outline.scene's
+# banner for why). No shadow casters or receivers matter here; shadows stay at the renderer's
+# default (on) but have nothing to interact with.
+#
+# No rigidbody, no script: fully static.
+
+camera.pivot 0.000000 0.000000 0.000000
+camera.distance 6.000000
+camera.yaw 0.000000
+camera.pitch 0.000000
+camera.fov 0.900000
+
+entity "Scene"
+  parent -1
+
+entity "Sun"
+  parent 0
+  position 0.000000 6.000000 -4.000000
+  rotation -0.684440 0.427860 0.000000 0.590380
+  scale 1.000000 1.000000 1.000000
+  light.color 1.000000 0.980000 0.920000
+  light.intensity 1.000000
+
+entity "Camera"
+  parent 0
+  position 0.000000 0.000000 -6.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 1.000000 1.000000 1.000000
+  camera 0.900000 0.100000 100.000000 0 6.000000 1
+
+entity "SpriteBack"
+  parent 0
+  position -0.600000 -0.300000 2.400000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 2.200000 2.200000 1.000000
+  sprite icon.png 1.000000 0.300000 0.300000 0.700000 0.000000 0.000000 1.000000 1.000000 0 0
+
+entity "SpriteMid"
+  parent 0
+  position 0.000000 0.000000 1.200000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 2.200000 2.200000 1.000000
+  sprite icon.png 0.300000 1.000000 0.300000 0.650000 0.000000 0.000000 1.000000 1.000000 0 0
+
+entity "SpriteFront"
+  parent 0
+  position 0.600000 0.300000 0.000000
+  rotation 0.000000 0.000000 0.000000 1.000000
+  scale 2.200000 2.200000 1.000000
+  sprite icon.png 0.300000 0.500000 1.000000 1.000000 0.000000 0.000000 1.000000 1.000000 0 0

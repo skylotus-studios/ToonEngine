@@ -1,0 +1,291 @@
+{
+  "alloc": {
+    "count_after_init": null,
+    "peak_bytes": 25362432
+  },
+  "assets": {
+    "fallback_used": true
+  },
+  "audio": {
+    "handles_leaked": 0,
+    "voices_active": 0
+  },
+  "gpu": {
+    "mem_bytes": null
+  },
+  "jolt": {
+    "active_bodies": 0,
+    "bodies": 2,
+    "contacts": 37
+  },
+  "render": {
+    "draw_calls": null,
+    "frame_ms": {
+      "p50": null,
+      "p99": null
+    },
+    "pso_switches": null
+  },
+  "scripts": {
+    "order_hash": "35ccf7b75b2bcf68",
+    "ran": 3599
+  },
+  "sim": {
+    "state_hash": [
+      {
+        "hash": "289bd3227dc0924c",
+        "tick": 0
+      },
+      {
+        "hash": "63ccbdbe33c9a1eb",
+        "tick": 60
+      },
+      {
+        "hash": "fdf15a43761f8a44",
+        "tick": 120
+      },
+      {
+        "hash": "7e15508e424d16f4",
+        "tick": 180
+      },
+      {
+        "hash": "4683d48080fa1cbd",
+        "tick": 240
+      },
+      {
+        "hash": "d442a5642747419c",
+        "tick": 300
+      },
+      {
+        "hash": "eb573368982c8100",
+        "tick": 360
+      },
+      {
+        "hash": "709c6a7e09b0a22f",
+        "tick": 420
+      },
+      {
+        "hash": "5972962d44215e41",
+        "tick": 480
+      },
+      {
+        "hash": "5196621eefcc0d8a",
+        "tick": 540
+      },
+      {
+        "hash": "8628c8a1d8e717ca",
+        "tick": 600
+      },
+      {
+        "hash": "e56c36229fe2a97e",
+        "tick": 660
+      },
+      {
+        "hash": "dcf717f3e2f97534",
+        "tick": 720
+      },
+      {
+        "hash": "162e3681149eea13",
+        "tick": 780
+      },
+      {
+        "hash": "8daae8b12df34a73",
+        "tick": 840
+      },
+      {
+        "hash": "fed112d1b935e919",
+        "tick": 900
+      },
+      {
+        "hash": "8710dacd048d08f7",
+        "tick": 960
+      },
+      {
+        "hash": "8c774ab661f50b47",
+        "tick": 1020
+      },
+      {
+        "hash": "2fd24bffcdfb4baa",
+        "tick": 1080
+      },
+      {
+        "hash": "78f6599d039b1cfb",
+        "tick": 1140
+      },
+      {
+        "hash": "185ff74d419e4010",
+        "tick": 1200
+      },
+      {
+        "hash": "e00549f1f316435e",
+        "tick": 1260
+      },
+      {
+        "hash": "731102b2263317dc",
+        "tick": 1320
+      },
+      {
+        "hash": "4f5ef6d4db59e1ee",
+        "tick": 1380
+      },
+      {
+        "hash": "3955caab3473d202",
+        "tick": 1440
+      },
+      {
+        "hash": "502847cf4565ab6e",
+        "tick": 1500
+      },
+      {
+        "hash": "9d91b9a5cfc1ea5f",
+        "tick": 1560
+      },
+      {
+        "hash": "5c84c61cbe7fd9ab",
+        "tick": 1620
+      },
+      {
+        "hash": "f6fc27a40e100829",
+        "tick": 1680
+      },
+      {
+        "hash": "f808f16a3335d96f",
+        "tick": 1740
+      },
+      {
+        "hash": "f03440cbe89dc349",
+        "tick": 1800
+      },
+      {
+        "hash": "3538bab72bd18d00",
+        "tick": 1860
+      },
+      {
+        "hash": "482784408b89113d",
+        "tick": 1920
+      },
+      {
+        "hash": "4fff12786353c375",
+        "tick": 1980
+      },
+      {
+        "hash": "4c5ed73f76a95151",
+        "tick": 2040
+      },
+      {
+        "hash": "f1d1f51fcef4195f",
+        "tick": 2100
+      },
+      {
+        "hash": "5b9f761bc2442039",
+        "tick": 2160
+      },
+      {
+        "hash": "b1793ed64b3a0ac1",
+        "tick": 2220
+      },
+      {
+        "hash": "131b40126380ae6b",
+        "tick": 2280
+      },
+      {
+        "hash": "174f6e0b13600b76",
+        "tick": 2340
+      },
+      {
+        "hash": "62b76ed48cf47ab3",
+        "tick": 2400
+      },
+      {
+        "hash": "428d2b9b58c18497",
+        "tick": 2460
+      },
+      {
+        "hash": "78dcdbcb14ba7416",
+        "tick": 2520
+      },
+      {
+        "hash": "22fe8642c01eeaae",
+        "tick": 2580
+      },
+      {
+        "hash": "395065e164e3ef0f",
+        "tick": 2640
+      },
+      {
+        "hash": "222218e922ab29d1",
+        "tick": 2700
+      },
+      {
+        "hash": "99dc3cddf8587c96",
+        "tick": 2760
+      },
+      {
+        "hash": "38a0da0af5670934",
+        "tick": 2820
+      },
+      {
+        "hash": "5cdc9763eb558e6c",
+        "tick": 2880
+      },
+      {
+        "hash": "a11548e8aec3802c",
+        "tick": 2940
+      },
+      {
+        "hash": "9078eb04f05b50b5",
+        "tick": 3000
+      },
+      {
+        "hash": "9e4330b5ab88549d",
+        "tick": 3060
+      },
+      {
+        "hash": "9053530903867ed9",
+        "tick": 3120
+      },
+      {
+        "hash": "823ff930ebfb1418",
+        "tick": 3180
+      },
+      {
+        "hash": "c45f224d42f48996",
+        "tick": 3240
+      },
+      {
+        "hash": "a7391bb3614d6915",
+        "tick": 3300
+      },
+      {
+        "hash": "1d763a15537bfc43",
+        "tick": 3360
+      },
+      {
+        "hash": "648d09a2deb4cbc0",
+        "tick": 3420
+      },
+      {
+        "hash": "8fed98c9ec52944e",
+        "tick": 3480
+      },
+      {
+        "hash": "75fa22bbad5f1314",
+        "tick": 3540
+      }
+    ],
+    "tick_ms": {
+      "p50": 0.016399999999999748,
+      "p99": 0.08640000000000037
+    }
+  },
+  "ui": {
+    "boxes_live": null,
+    "boxes_pruned": null
+  },
+  "vulkan": {
+    "device_extensions": null,
+    "instance_extensions": null,
+    "validation_errors": null,
+    "validation_warnings": null
+  }
+}

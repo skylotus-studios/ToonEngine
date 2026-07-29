@@ -172,6 +172,12 @@ namespace toon {
         const Font *font = nullptr;  // text sizing + rendering
         std::vector<UIVertex> batch; // built by UI_Render, drawn via Renderer::DrawUI
         TextureHandle batchTexture = TextureHandle::Invalid; // texture bound for the in-flight batch
+
+        // Set by UI_EndBuild's prune pass, for app/metrics.h's ui.boxes_live/boxes_pruned:
+        // boxesLive is cache.size() after pruning, boxesPruned is how many were dropped this
+        // build. Both stay 0 until UI_EndBuild has run at least once.
+        uint32_t boxesLive = 0;
+        uint32_t boxesPruned = 0;
     };
 
     // --- Lifecycle --------------------------------------------------------------
