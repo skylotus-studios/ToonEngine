@@ -64,7 +64,7 @@ stated reason, and update that file when you do.
 | Topic | File                                                       |
 |---|------------------------------------------------------------|
 | Architecture, current state, source layout, platform support | [docs/architecture.md](docs/architecture.md)               |
-| The five rules, in full, with reasoning | [docs/invariants.md](docs/invariants.md)                   |
+| The six rules, in full, with reasoning | [docs/invariants.md](docs/invariants.md)                   |
 | Build-time and frame-time cost centres | [docs/performance.md](docs/performance.md)                 |
 | Architectural decision records | [docs/decisions/](docs/decisions/)                         |
 | Per-feature designs, written before implementation | [docs/specs/](docs/specs/)                                 |

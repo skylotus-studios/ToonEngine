@@ -8,38 +8,51 @@ ImGui.
 
 Two layers work together:
 
-1. **`.clang-format`** (repo root) mechanically enforces layout — indentation,
-   braces, column limit. CLion applies it on *Reformat Code* (`Ctrl+Alt+L`). Run it
-   before committing; don't hand-fight it.
-2. **This guide** covers what a formatter can't: file structure, comment intent,
-   naming, and the architectural rules that keep the codebase approachable. When
-   you clean a file, apply both.
+1. **Layout** — indentation, braces, column budget (§1). Held by hand, matching the
+   file you're editing. There is deliberately no `.clang-format` in this repo; §1 says
+   why.
+2. **Everything a formatter couldn't decide anyway** — file structure, comment intent,
+   naming, and the architectural rules that keep the codebase approachable (§2 onward).
+
+When you clean a file, apply both.
 
 The goal above all: **a newcomer should be able to open any file and understand what
 it does and why, without reading the whole engine.** Optimize for the reader.
 
 ---
 
-## 1. What `.clang-format` already handles
+## 1. Layout
 
-You don't need to think about these — the formatter does them. Listed so you know
-what's intentional and won't "fix" it by hand:
+Nothing enforces these — match the file you're editing. Listed so you know what's
+intentional and won't "fix" it by hand:
 
 | Rule | Value |
 |------|-------|
-| Base style | LLVM, C++ latest |
 | Indent | 4 spaces, never tabs |
-| Column limit | 120 |
+| Column budget | 120, as a target rather than a hard stop (31 lines under `src/` exceed it) |
 | Braces | attached (K&R): `void f() {` |
-| Braces required | always — the formatter inserts missing ones (`InsertBraces`) |
+| Braces required | always, including single-statement bodies |
 | Tiny guards | a short `if (!p) { return; }` may stay on one line |
 | Namespaces | indented, closing brace labelled `} // namespace toon` |
 | `public:`/`private:` | flush with `class` |
-| Pointers | bind right: `int *p`, `const Vertex* v` |
+| Pointers | bind right: `int *p` |
 | Includes | **never reordered** — order-sensitive headers are safe |
-| Consecutive-assignment alignment | **off in the tool** (see §3 — we align by hand where it helps) |
+| Consecutive-assignment alignment | by hand where it helps (see §3) |
 
-Requires clang-format 15+ (for `InsertBraces`). CLion's bundled one is fine.
+### Why there's no `.clang-format`
+
+`src/` was written to the table above by hand, and hand-written code and a formatter
+config drift apart even when they agree on paper. A `.clang-format` reconstructed from
+this table, run over `src/`, rewrites 4,375 of 16,554 lines across 63 of 110 files
+(measured with clang-format 22.1.3). Checking one in means either landing that reformat
+as its own commit first, or handing whoever next presses *Reformat Code* a 4,000-line
+diff on top of their actual change.
+
+Adopting one later is a reasonable call. It just has to be a deliberate commit that does
+nothing else, not something discovered by accident. CLion's "no `.clang-format` found"
+prompt has already been dismissed for this project (`.idea/workspace.xml`), so its
+*Reformat Code* uses the IDE's own scheme, which is not this table either. Prefer hand
+layout over reaching for the IDE shortcut.
 
 ---
 
@@ -76,7 +89,7 @@ any order dependency.
 
 ---
 
-## 3. Spacing & alignment (beyond the formatter)
+## 3. Spacing & alignment
 
 - **One blank line** between functions and between logical paragraphs inside a
   function. No double blanks, no blank right after `{` or before `}`.
@@ -90,10 +103,9 @@ any order dependency.
   cd.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
   ```
 
-  The formatter is set to *leave alignment alone* (`AlignConsecutive* = None`), so it
-  won't add or strip it — alignment is a deliberate authoring choice. Align only
-  within a tight, related block; don't align across unrelated statements, and don't
-  chase alignment so hard it hurts the diff.
+  Nothing will add or strip this for you (§1), so alignment is a deliberate authoring
+  choice. Align only within a tight, related block; don't align across unrelated
+  statements, and don't chase alignment so hard it hurts the diff.
 - Let related one-liners share a shape (see the `Vec3` operators in `core/math.h`).
 
 ---
@@ -209,7 +221,8 @@ as they are — each already names its justification.
 
 When tidying a file (or running the `tidy-cpp` skill), walk this list:
 
-1. Runs *Reformat Code* / clang-format cleanly, no manual layout fights left.
+1. Layout matches §1 and the rest of the file. Don't reach for *Reformat Code* to get
+   there — its scheme isn't §1's, and it will churn lines you didn't touch.
 2. Banner present and accurate; sections under correct dividers in lifecycle order.
 3. Every function has a clear lead comment; comments say *why*; none are stale.
 4. No dead/commented-out code, no leftover debug prints, no unused includes or
