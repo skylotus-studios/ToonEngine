@@ -5,8 +5,9 @@ Ties together every CI-shaped tool this repo already has (--sim-only, --hash-eve
 metrics.json/metrics_diff.py, --headless-render, the golden tests, --scene-roundtrip,
 --resize-soak, ToonUnitTests, the SaveGame round-trip, an ASan build) into three gates:
 
-  fast  -- pre-commit: configure+build, unit tests, a --sim-only hash smoke check, a scene
-           load/save idempotency check, and a stand-in "player purity" check (see below).
+  fast  -- pre-commit: the static hard-rule checks (scripts/check_invariants.py), configure+build,
+           unit tests, a --sim-only hash smoke check, a scene load/save idempotency check, and a
+           stand-in "player purity" check (see below).
   full  = fast + the structural golden-image tests, a metrics.json diff against the checked-in
           baseline, and a Vulkan-validation-errors-must-be-zero check.
   deep  = full + a 20-run determinism soak, an AddressSanitizer run of --sim-only, an install
@@ -114,6 +115,17 @@ def ok(detail=""):
 
 
 # --- fast tier steps -----------------------------------------------------------------------------
+
+
+def step_invariants(ctx):
+    # First in the tier and build-free on purpose: the three mechanically checkable hard rules
+    # (the Diligent/Jolt/miniaudio seams, HLSL-only, the CMake backend disables) are decidable
+    # from the source text alone, so a seam violation should cost a second, not a full build.
+    rc, out, err = run([sys.executable, str(REPO_ROOT / "scripts/check_invariants.py")],
+                       cwd=REPO_ROOT, timeout=60)
+    if rc != 0:
+        return fail(f"CLAUDE.md hard-rule violation(s): {(out + err)[-900:]}")
+    return ok()
 
 
 def step_configure(ctx):
@@ -390,6 +402,7 @@ def step_savegame_compat(ctx):
 # --- registry ------------------------------------------------------------------------------------
 
 FAST_STEPS = [
+    ("invariants", step_invariants),
     ("configure", step_configure),
     ("build", step_build),
     ("unit_tests", step_unit_tests),
