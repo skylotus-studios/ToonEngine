@@ -30,8 +30,10 @@ cmake --build --preset windows-debug
 ```
 
 Presets are `windows-debug` and `windows-release`, building into `build/<preset>/` with the
-engine DLLs copied next to the executable. The `/verify` skill builds, launches, and captures a
-screenshot; this machine has no live input desktop.
+engine DLLs copied next to the executable. The `/verify` skill runs `scripts/verify.py`'s
+fast, full, or deep tier and reports pass/fail; it never launches the editor. For a live
+screenshot or interaction check, use `/verify-build-launch-screenshot-archived`, which also
+writes up why input injection does not work here: this machine has no live input desktop.
 
 Agents always build with `--preset agent-*` (`agent-debug` / `agent-release`), an isolated
 configure/build dir with compile commands exported for clangd; `cmake-build-*` is off-limits —
@@ -86,18 +88,22 @@ size of this file.
 
 ## Local-Only Files
 
-This file, `MEMORY.md`, `ARCHIVE.md`, both style guides, and `.claude/skills` and
-`.claude/agents` are gitignored on `develop` and `main`, and live on the orphan `backup` branch
-(`claude.md`, `memory.md`, `archive.md`, `cpp-style-guide.md`, `md-style-guide.md`,
-`project/skills`, `project/agents`), checked out as the sibling worktree `../backup` and
+This file, `MEMORY.md`, `ARCHIVE.md`, both style guides, `.clang-format`, `.clangd`,
+`.claude/skills`, `.claude/agents`, and `.agent` are gitignored on `develop` and `main`, and
+live on the orphan `backup` branch (`claude.md`, `memory.md`, `archive.md`,
+`cpp-style-guide.md`, `md-style-guide.md`, `clang-format`, `clangd`, `project/skills`,
+`project/agents`, `project/agent`), checked out as the sibling worktree `../backup` and
 symlinked into place. None of this is pushed from `develop` or `main`; editing any of it changes
-the `backup` branch. `bootstrap.sh` on `backup` rebuilds this whole layout (both worktrees,
-submodules, and every symlink) from a single clone of that branch. Your global Claude Code
-config (`~/.claude`) is backed up separately in the `ClaudeUserBackup` repo, unrelated to this
-branch.
+the `backup` branch. `bootstrap.cmd` on `backup` (or `bootstrap.sh` outside Windows) rebuilds
+this whole layout: both worktrees, submodules, the `C:\ted`/`C:\tem` short-path junctions, and
+every symlink, from a single clone of that branch. Your global Claude Code config
+(`~/.claude`) is backed up separately in the `ClaudeUserBackup` repo, unrelated to this branch.
 
 ## Skills
 
 `/tidy-cpp` cleans `src/**` to the C++ style guide. `/tidy-md` keeps these docs accurate and
-right-sized. `/verify` builds, launches, and screenshots. `/plan-roadmap` designs the next
-roadmap item; `/update-roadmap` reprioritises the list.
+right-sized. `/verify` runs `scripts/verify.py fast|full|deep` and reports pass/fail;
+`/verified-commit` commits and pushes gated on a fresh passing fast tier.
+`/verify-build-launch-screenshot-archived` is the superseded build/launch/screenshot flow, kept
+for its input-injection writeup. `/plan-roadmap` designs the next roadmap item;
+`/update-roadmap` reprioritises the list.
