@@ -20,9 +20,9 @@ param(
 #
 # Adds the `develop` and `main` worktrees as siblings of this checkout,
 # initializes their submodules recursively, and re-links CLAUDE.md, MEMORY.md,
-# ARCHIVE.md, both style guides, and the project-level Claude skills, agents,
-# and .agent scratch dir from this branch so both worktrees come back exactly
-# as they were. Your global Claude Code config (~/.claude) is backed up
+# ARCHIVE.md, both style guides, .clang-format, .clangd, and the project-level
+# Claude skills, agents, and .agent scratch dir from this branch so both
+# worktrees come back exactly as they were. Your global Claude Code config (~/.claude) is backed up
 # separately in the ClaudeUserBackup repo, not here.
 #
 # Every link is a symbolic link. Creating one on Windows needs
@@ -106,12 +106,17 @@ function Test-SymlinkCapability {
     return $ok
 }
 
+# Targets are named without the leading dot on this branch (clang-format, not
+# .clang-format) so they are ordinary visible files in this checkout; the leading
+# dot only appears at the destination, where the tool looks for it.
 $LINKS = @(
     @{ Target = 'claude.md';          Dest = 'CLAUDE.md' }
     @{ Target = 'memory.md';          Dest = 'MEMORY.md' }
     @{ Target = 'archive.md';         Dest = 'ARCHIVE.md' }
     @{ Target = 'cpp-style-guide.md'; Dest = 'docs\cpp-style-guide.md' }
     @{ Target = 'md-style-guide.md';  Dest = 'docs\md-style-guide.md' }
+    @{ Target = 'clang-format';       Dest = '.clang-format' }
+    @{ Target = 'clangd';             Dest = '.clangd' }
     @{ Target = 'project\skills';     Dest = '.claude\skills' }
     @{ Target = 'project\agents';     Dest = '.claude\agents' }
     @{ Target = 'project\agent';      Dest = '.agent' }

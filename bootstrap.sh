@@ -18,9 +18,9 @@
 #
 # This adds the `develop` and `main` worktrees as siblings of this checkout,
 # initializes their submodules recursively, and re-links CLAUDE.md,
-# MEMORY.md, ARCHIVE.md, both style guides, and the project-level Claude
-# skills, agents, and .agent scratch dir from this branch so both worktrees
-# come back exactly as they were. Your global Claude Code config (~/.claude)
+# MEMORY.md, ARCHIVE.md, both style guides, .clang-format, .clangd, and the
+# project-level Claude skills, agents, and .agent scratch dir from this branch
+# so both worktrees come back exactly as they were. Your global Claude Code config (~/.claude)
 # is backed up separately in the ClaudeUserBackup repo, not here.
 #
 # Safe to re-run: existing worktrees are left alone, links already pointing
@@ -114,6 +114,10 @@ for W in "$DEVELOP" "$MAIN"; do
   link "$HERE/archive.md"          "$W/ARCHIVE.md"               || true
   link "$HERE/cpp-style-guide.md"  "$W/docs/cpp-style-guide.md"  || true
   link "$HERE/md-style-guide.md"   "$W/docs/md-style-guide.md"   || true
+  # Named without the leading dot on this branch; the dot only appears at the
+  # destination, where clang-format and clangd look for it.
+  link "$HERE/clang-format"        "$W/.clang-format"            || true
+  link "$HERE/clangd"              "$W/.clangd"                  || true
   link "$HERE/project/skills"      "$W/.claude/skills"           || true
   link "$HERE/project/agents"      "$W/.claude/agents"           || true
   link "$HERE/project/agent"       "$W/.agent"                   || true

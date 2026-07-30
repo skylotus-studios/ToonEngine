@@ -8,51 +8,59 @@ ImGui.
 
 Two layers work together:
 
-1. **Layout** — indentation, braces, column budget (§1). Held by hand, matching the
-   file you're editing. There is deliberately no `.clang-format` in this repo; §1 says
-   why.
-2. **Everything a formatter couldn't decide anyway** — file structure, comment intent,
-   naming, and the architectural rules that keep the codebase approachable (§2 onward).
-
-When you clean a file, apply both.
+1. **`.clang-format`** (repo root) mechanically enforces layout — indentation, braces,
+   column limit. CLion applies it on *Reformat Code* (`Ctrl+Alt+L`). Read §1 before you
+   run it over an existing file: the tree has drifted from it and a blind reformat will
+   bury your change.
+2. **This guide** covers what a formatter can't: file structure, comment intent,
+   naming, and the architectural rules that keep the codebase approachable. When
+   you clean a file, apply both.
 
 The goal above all: **a newcomer should be able to open any file and understand what
 it does and why, without reading the whole engine.** Optimize for the reader.
 
 ---
 
-## 1. Layout
+## 1. What `.clang-format` already handles
 
-Nothing enforces these — match the file you're editing. Listed so you know what's
-intentional and won't "fix" it by hand:
+You don't need to think about these — the formatter does them. Listed so you know
+what's intentional and won't "fix" it by hand:
 
 | Rule | Value |
 |------|-------|
+| Base style | LLVM, C++ latest |
 | Indent | 4 spaces, never tabs |
-| Column budget | 120, as a target rather than a hard stop (31 lines under `src/` exceed it) |
+| Column limit | 120 |
 | Braces | attached (K&R): `void f() {` |
-| Braces required | always, including single-statement bodies |
+| Braces required | always — the formatter inserts missing ones (`InsertBraces`) |
 | Tiny guards | a short `if (!p) { return; }` may stay on one line |
 | Namespaces | indented, closing brace labelled `} // namespace toon` |
 | `public:`/`private:` | flush with `class` |
-| Pointers | bind right: `int *p` |
+| Pointers | bind right: `int *p`, `const Vertex* v` |
 | Includes | **never reordered** — order-sensitive headers are safe |
-| Consecutive-assignment alignment | by hand where it helps (see §3) |
+| Consecutive-assignment alignment | **off in the tool** (see §3) |
 
-### Why there's no `.clang-format`
+Requires clang-format 15+ (for `InsertBraces`). CLion's bundled one is fine.
 
-`src/` was written to the table above by hand, and hand-written code and a formatter
-config drift apart even when they agree on paper. A `.clang-format` reconstructed from
-this table, run over `src/`, rewrites 4,375 of 16,554 lines across 63 of 110 files
-(measured with clang-format 22.1.3). Checking one in means either landing that reformat
-as its own commit first, or handing whoever next presses *Reformat Code* a 4,000-line
-diff on top of their actual change.
+`.clang-format` is gitignored on `develop` and `main` and symlinked in from the `backup`
+branch (where it is named `clang-format`, no leading dot), like `CLAUDE.md` and this
+file. `bootstrap.cmd` re-links it, along with `.clangd`. If it is missing, you are
+looking at a checkout that has not been bootstrapped.
 
-Adopting one later is a reasonable call. It just has to be a deliberate commit that does
-nothing else, not something discovered by accident. CLion's "no `.clang-format` found"
-prompt has already been dismissed for this project (`.idea/workspace.xml`), so its
-*Reformat Code* uses the IDE's own scheme, which is not this table either. Prefer hand
-layout over reaching for the IDE shortcut.
+### Don't reformat a file you're only editing
+
+`src/` and this config have drifted: running clang-format over every file under `src/`
+rewrites 2,455 of 16,554 lines across 40 of 110 files (clang-format 22.1.3). Most of it
+is trailing-comment alignment and rewrapping, not real style breaches — 31 lines exceed
+the 120-column limit.
+
+So reformat the lines you touched, not the file, and never the tree. Closing that gap is
+worth doing as a commit that does nothing else, reviewed as a diff of its own; folded
+into a feature change it just buries the change. Note also that CLion's "no
+`.clang-format` found" prompt was dismissed for this project at some point
+(`.idea/workspace.xml`), so check *Settings > Editor > Code Style > Enable ClangFormat*
+is actually on before trusting `Ctrl+Alt+L` to apply this file rather than the IDE's own
+scheme.
 
 ---
 
@@ -89,7 +97,7 @@ any order dependency.
 
 ---
 
-## 3. Spacing & alignment
+## 3. Spacing & alignment (beyond the formatter)
 
 - **One blank line** between functions and between logical paragraphs inside a
   function. No double blanks, no blank right after `{` or before `}`.
@@ -103,9 +111,14 @@ any order dependency.
   cd.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
   ```
 
-  Nothing will add or strip this for you (§1), so alignment is a deliberate authoring
-  choice. Align only within a tight, related block; don't align across unrelated
-  statements, and don't chase alignment so hard it hurts the diff.
+  Guard any such block with `// clang-format off` / `// clang-format on`. `§1`'s
+  `AlignConsecutiveAssignments: None` does *not* mean "leave alignment alone" — it means
+  one space around `=`, so running the formatter over the block above flattens it back
+  to `cd.Name = ...`. Verified, not assumed. Without the guard, the alignment survives
+  only until someone reformats.
+
+  Align only within a tight, related block; don't align across unrelated statements,
+  and don't chase alignment so hard it hurts the diff.
 - Let related one-liners share a shape (see the `Vec3` operators in `core/math.h`).
 
 ---

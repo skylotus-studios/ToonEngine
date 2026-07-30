@@ -42,6 +42,11 @@ CLion owns those.
 Full reasoning for each is in [docs/invariants.md](docs/invariants.md). Break one only with a
 stated reason, and update that file when you do.
 
+Rules 2, 3, and 4, plus the CMake half of 5, are machine-checked by
+`scripts/check_invariants.py`, which runs first in `scripts/verify.py`'s fast tier and needs no
+build. Breaking one fails in under a second, before anything compiles. Rule 1 is review-only
+and rule 6 is enforced by `scripts/rebaseline.py` refusing to run without `--reason`.
+
 1. **Build on Diligent, don't reinvent it.** Use Diligent's loaders, post-processing, ImGui
    integration, shader cross-compilation, and math utilities. The thin layer ToonEngine adds
    exists to remove real boilerplate and hold the portability boundary, nothing else. Never
