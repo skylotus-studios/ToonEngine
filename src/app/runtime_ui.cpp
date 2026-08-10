@@ -8,6 +8,7 @@
 #include "core/input/input_system.h"
 #include "core/platform/paths.h"   // Assets::Fonts
 #include "core/save/savegame.h"    // SaveExists
+#include "core/platform/clock.h"   // Clock::Now (RenderHUD's optional ui.solve_ms timing)
 #include "core/ui/strings.h"       // Text / StrId (roadmap #17: localization-ready strings)
 #include "core/ui/text.h"          // LoadFont
 
@@ -264,7 +265,7 @@ namespace toon {
         return UIScreen::None;
     }
 
-    void RenderHUD(RuntimeState &rs, UIScreen screen) {
+    void RenderHUD(RuntimeState &rs, UIScreen screen, double *uiSolveMsOut) {
         if (screen == UIScreen::None) { return; }
 
         // Lazy one-time font load (serves the player and the editor's play-in-editor alike).
@@ -286,6 +287,7 @@ namespace toon {
         if (fbW <= 0 || fbH <= 0) { return; }
 
         const UIInput in = GatherInput(rs, static_cast<float>(fbW), static_cast<float>(fbH));
+        const double solveStart = uiSolveMsOut ? Clock::Now() : 0.0;
         UI_BeginBuild(rs.ui, in, 1.0f / 60.0f, static_cast<float>(fbW), static_cast<float>(fbH), rs.uiFont);
         switch (screen) {
             case UIScreen::Title: BuildTitle(rs); break;
@@ -295,6 +297,7 @@ namespace toon {
             case UIScreen::None: break;
         }
         UI_EndBuild(rs.ui);
+        if (uiSolveMsOut) { *uiSolveMsOut = (Clock::Now() - solveStart) * 1000.0; }
         UI_Render(rs.ui, rs.renderer);
     }
 

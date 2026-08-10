@@ -49,6 +49,20 @@ namespace toon {
         uint32_t validationWarnings = 0;
         uint32_t uiBoxesLive = 0;
         uint32_t uiBoxesPruned = 0;
+
+        // Per-pass draw-call breakdown (Renderer::DrawCallsByPass), last frame's snapshot, same
+        // convention as drawCalls above. postResolve is only our own ACES tonemap draw --
+        // DiligentFX's SSAO/TAA/DoF/SSR/Bloom draws aren't visible to Renderer's counter; see
+        // renderer.h's RenderPassCounts comment.
+        uint32_t drawCallsShadow = 0;
+        uint32_t drawCallsOpaqueToon = 0;
+        uint32_t drawCallsSprite = 0;
+        uint32_t drawCallsUI = 0;
+        uint32_t drawCallsPostResolve = 0;
+        uint32_t drawCallsOther = 0;
+        uint32_t shadowCascades = 0; // Renderer::ShadowCascadeCount()
+        uint64_t gpuMemBytes = 0;    // Renderer::GpuMemBytes() -- see its own "not total VRAM" caveat
+        std::vector<double> uiSolveMs; // one entry per rendered frame (RenderHUD's uiSolveMsOut)
     };
 
     // Writes `mopts.outPath` (creating parent directories as needed, same as

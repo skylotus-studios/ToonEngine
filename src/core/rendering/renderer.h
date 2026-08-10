@@ -267,6 +267,36 @@ namespace toon {
         uint32_t DrawCallCount() const;
         uint32_t PSOSwitchCount() const;
 
+        // Per-pass breakdown of this frame's draw calls (app/metrics.h's render.draw_calls_*,
+        // --headless-render only). Same reset/read timing as DrawCallCount above; the six
+        // fields sum to it. `postResolve` is only the ACES tonemap resolve draw this file
+        // issues itself -- DiligentFX's SSAO/TAA/DoF/SSR/Bloom Execute() calls (Impl::RunPostFX)
+        // issue their own draws directly on the context, bypassing CountedDraw entirely, so
+        // they are NOT reflected anywhere in this struct. `other` covers the debug wireframe
+        // and editor sky passes.
+        struct RenderPassCounts {
+            uint32_t shadow = 0;
+            uint32_t opaqueToon = 0;
+            uint32_t sprite = 0;
+            uint32_t ui = 0;
+            uint32_t postResolve = 0;
+            uint32_t other = 0;
+        };
+        RenderPassCounts DrawCallsByPass() const;
+
+        // Configured cascade count for the shadow map (kShadowCascades in renderer.cpp) --
+        // app/metrics.h's render.shadow_cascades.
+        uint32_t ShadowCascadeCount() const;
+
+        // Sum of GPU-resource byte sizes this Renderer directly owns: the offscreen G-buffer
+        // targets, loaded editor/sprite textures, and per-mesh vertex/index buffers --
+        // app/metrics.h's gpu.mem_bytes, --headless-render only. NOT total VRAM use: glTF model
+        // vertex/index/texture data (owned inside Diligent::GLTF::Model, not this class) and
+        // DiligentFX's own post-chain intermediates (bloom mips, SSAO/SSR/TAA history) are both
+        // out of reach the same way their draws are invisible to DrawCallsByPass above, and are
+        // excluded rather than estimated.
+        uint64_t GpuMemBytes() const;
+
         // Reads the swap chain's CURRENT back buffer (whatever the last BeginFrame/EndScene/
         // DrawUI sequence left in it) and writes it to `path` as a PNG. Call AFTER RenderHUD and
         // BEFORE EndFrame -- EndFrame's Present() transitions the back buffer out of a

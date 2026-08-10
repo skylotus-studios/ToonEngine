@@ -97,11 +97,105 @@ The collider debug wireframe is a separate pass and should be off when measuring
 Mouse picking is a geometric ray-vs-bounds test rather than a physics raycast, so it costs
 nothing in the physics world and runs in Editing mode.
 
+## Measured Actuals
+
+Taken on the development machine (Windows 11, NVIDIA GeForce RTX 3080, Vulkan driver
+79.344.0, `agent-debug` build) against the demo scene
+([`assets/scenes/default.scene`](../assets/scenes/default.scene), the one
+[architecture.md](architecture.md) calls "the demo scene"). `--sim-only` gives the sim-tick
+figures (3600 ticks, seed 0, no window/device at all); `--headless-render` gives everything
+render-side (300 frames, a real Vulkan device, at both the tool's default window size and 4K):
+
+```
+ToonPlayer.exe --sim-only --scene assets/scenes/default.scene --seed 0 --ticks 3600 \
+    --hash-every 60 --metrics-out artifacts/perf/sim_only.json
+
+ToonPlayer.exe --headless-render --scene assets/scenes/default.scene --width 1600 --height 900 \
+    --frames 300 --metrics-out artifacts/perf/headless_1600x900.json
+
+ToonPlayer.exe --headless-render --scene assets/scenes/default.scene --width 3840 --height 2160 \
+    --frames 300 --metrics-out artifacts/perf/headless_4k.json
+```
+
+| Metric | Value |
+|---|---:|
+| `sim.tick_ms.p50` / `.p99` | 0.017 ms / 0.089 ms |
+| `render.frame_ms.p50` / `.p99`, 1600x900 | 6.81 ms / 13.97 ms |
+| `render.frame_ms.p50` / `.p99`, 3840x2160 (4K) | 6.87 ms / 25.04 ms |
+| `render.draw_calls` (total, both resolutions) | 27 |
+| &nbsp;&nbsp;`draw_calls_shadow` | 16 (4 cascades x [mesh + model], see below) |
+| &nbsp;&nbsp;`draw_calls_opaque_toon` | 8 (outline + fill, per mesh/model) |
+| &nbsp;&nbsp;`draw_calls_sprite` | 0 (the demo scene has no sprites) |
+| &nbsp;&nbsp;`draw_calls_ui` | 1 (one HUD batch) |
+| &nbsp;&nbsp;`draw_calls_post_resolve` | 1 (the ACES tonemap resolve -- see caveat below) |
+| &nbsp;&nbsp;`draw_calls_other` | 1 (editor sky; debug wireframe is off) |
+| `render.shadow_cascades` | 4 |
+| `render.pso_switches` | 12 |
+| `alloc.peak_bytes`, `--sim-only` | 25.4 MB |
+| `alloc.peak_bytes`, `--headless-render` | 292.2 MB (both resolutions -- CPU-side, not window-sized) |
+| `gpu.mem_bytes`, 1600x900 | 104.0 MB |
+| `gpu.mem_bytes`, 3840x2160 (4K) | 284.0 MB |
+| `ui.solve_ms.p50` / `.p99`, 1600x900 | 0.023 ms / 0.115 ms |
+| `ui.solve_ms.p50` / `.p99`, 3840x2160 | 0.015 ms / 0.062 ms |
+
+Two caveats these numbers carry, not hidden:
+
+- **`draw_calls_post_resolve` is not "the post chain."** DiligentFX's SSAO/TAA/DoF/SSR/Bloom
+  `Execute()` calls issue their own draws directly on the Vulkan context (`Impl::RunPostFX`),
+  bypassing the `CountedDraw`/`CountedDrawIndexed` wrappers every draw in `renderer.cpp` owns
+  routes through. `draw_calls_post_resolve` is only the one draw this file issues itself, the
+  ACES tonemap resolve. How many draws SSAO/Bloom/etc. cost internally isn't measured; patching
+  DiligentFX itself to count them is out of scope (invariant 1 -- don't reinvent/modify
+  Diligent's own modules).
+- **`gpu.mem_bytes` is "engine-owned GPU memory we can see," not total VRAM use.** It sums the
+  offscreen G-buffer targets, the shadow map, loaded editor/sprite textures, and per-mesh vertex/
+  index buffers (`Renderer::GpuMemBytes`, `core/rendering/renderer.h`). Excluded: glTF model
+  vertex/index/texture data (owned inside `Diligent::GLTF::Model`, not `Renderer`) and
+  DiligentFX's own post-chain intermediates (bloom mips, SSAO/SSR/TAA history) -- the same
+  resources `draw_calls_post_resolve` can't see the draws for. The G-buffer targets alone explain
+  most of the 1600x900 -> 4K jump (5 window-sized RGBA16F/D32/RG16F targets scale with pixel
+  count; everything else in the sum doesn't).
+
+## Proposed Budgets
+
+Budget = actual + headroom, using `scripts/metrics_diff.py`'s own existing convention: timing
+fields get the same 20% relative tolerance already defined there (so the number below is exactly
+what CI would flag once a tier exercises it -- see the "Enforced today" column). Draw-call/
+cascade/memory counts are exact-match fields in `metrics_diff.py`: not a ceiling in the timing
+sense, but a tripwire -- any change should be a reviewed, intentional rendering change, not silent
+drift. Their "headroom" column below is a rough scene-growth planning number for a bigger future
+scene, not something CI enforces on top of the exact match.
+
+| Metric | Actual | Budget | Enforced today |
+|---|---:|---:|:---|
+| `sim.tick_ms.p99` | 0.089 ms | 0.107 ms (+20%) | **Yes** -- every fast/full tier run |
+| `render.frame_ms.p99`, 1600x900 | 13.97 ms | 16.76 ms (+20%) | No -- no tier runs `--headless-render` |
+| `render.frame_ms.p99`, 4K | 25.04 ms | 30.05 ms (+20%) | No |
+| `render.draw_calls` (total) | 27 | exact match; +~15 headroom for scene growth | No |
+| `render.draw_calls_shadow` | 16 | exact match | No |
+| `render.draw_calls_opaque_toon` | 8 | exact match | No |
+| `render.shadow_cascades` | 4 | exact match (a deliberate config change, not drift) | No |
+| `alloc.peak_bytes`, `--headless-render` | 292.2 MB | 350.6 MB (+20%) | No |
+| `gpu.mem_bytes`, 4K | 284.0 MB | exact match; +~100 MB headroom for scene growth | No |
+| `ui.solve_ms.p99` | 0.115 ms | 0.138 ms (+20%) | No |
+
+**None of the render/gpu/ui budgets are enforced by `verify.py` today.** Only `sim.tick_ms` is,
+because only `step_sim_only_smoke`/`step_metrics_diff` in `scripts/verify.py` ever run
+`--sim-only` -- no fast/full/deep tier step runs `--headless-render`, so every render/gpu/ui field
+above stays null in the baselines those steps diff against, and `metrics_diff.py`'s "baseline
+missing this key" behavior silently skips the comparison. `scripts/metrics_diff.py` already
+carries tolerance/exact-match entries for all of them (`TOLERANCE_FIELDS`/`EXACT_FIELDS`), ready
+for whichever tier eventually adds a `--headless-render` step -- see Known Open Questions below.
+
 ## Known Open Questions
 
-- No frame-time target has been set for any platform.
+- No CI tier runs `--headless-render`, so the render/gpu/ui budgets above are documented targets
+  only, not gated -- wiring a `--headless-render` step (with its own checked-in baseline) into
+  `scripts/verify.py` would close that gap.
 - The two-pass toon draw doubles draw-call count; no instancing or batching exists yet.
 - Shadow cascade count and resolution have not been tuned against a measured cost.
+- DiligentFX's post-chain draw count (SSAO/TAA/DoF/SSR/Bloom) isn't measured -- see Measured
+  Actuals' first caveat above.
 - The GPU leak noted when scene transitions landed (roadmap #19) was deferred to #20 and is
   still open. See [roadmap.md](roadmap.md).
 

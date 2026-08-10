@@ -25,6 +25,11 @@ namespace toon {
     struct HeadlessRenderOptions {
         // The scene to render. Same path-or-bare-filename resolution as --sim-only's SimOptions.
         std::string scenePath;
+        // Hidden window / swap-chain size (see RunHeadlessRender's own comment on why this is the
+        // one point that controls it). 1600x900 matches the normal player's window default; pass
+        // e.g. 3840x2160 via --width/--height for a 4K frame-time measurement.
+        int width = 1600;
+        int height = 900;
         // How many frames to render before exiting.
         int frames = 300;
         // Zero-based frame indices to capture to PNG (e.g. {60, 150, 299}). A requested index

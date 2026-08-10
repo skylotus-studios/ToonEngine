@@ -25,6 +25,12 @@ namespace toon {
 
     // Build + draw `screen` for this frame. Reads raw mouse (scaled to framebuffer pixels) +
     // keyboard/gamepad nav from Input::. A no-op for UIScreen::None or before the font loads.
-    void RenderHUD(RuntimeState &rs, UIScreen screen);
+    //
+    // `uiSolveMsOut`, default nullptr (every call site but --headless-render's): when non-null,
+    // set to the UI_BeginBuild->UI_EndBuild wall-clock span in milliseconds -- app/metrics.h's
+    // ui.solve_ms. Left untouched (not zeroed) on an early-out (UIScreen::None / font not yet
+    // loaded), same "no sample, not a zero sample" convention app/metrics.h's Percentiles uses
+    // for an empty vector.
+    void RenderHUD(RuntimeState &rs, UIScreen screen, double *uiSolveMsOut = nullptr);
 
 } // namespace toon

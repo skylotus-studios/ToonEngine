@@ -63,6 +63,15 @@ namespace toon {
             {"frame_ms", Percentiles(inputs.hasRenderData ? inputs.frameMs : std::vector<double>{})},
             {"draw_calls", inputs.hasRenderData ? json(inputs.drawCalls) : nullptr},
             {"pso_switches", inputs.hasRenderData ? json(inputs.psoSwitches) : nullptr},
+            // Per-pass breakdown of draw_calls above -- see MetricsInputs' own comment on what
+            // draw_calls_post_resolve does and doesn't cover.
+            {"draw_calls_shadow", inputs.hasRenderData ? json(inputs.drawCallsShadow) : nullptr},
+            {"draw_calls_opaque_toon", inputs.hasRenderData ? json(inputs.drawCallsOpaqueToon) : nullptr},
+            {"draw_calls_sprite", inputs.hasRenderData ? json(inputs.drawCallsSprite) : nullptr},
+            {"draw_calls_ui", inputs.hasRenderData ? json(inputs.drawCallsUI) : nullptr},
+            {"draw_calls_post_resolve", inputs.hasRenderData ? json(inputs.drawCallsPostResolve) : nullptr},
+            {"draw_calls_other", inputs.hasRenderData ? json(inputs.drawCallsOther) : nullptr},
+            {"shadow_cascades", inputs.hasRenderData ? json(inputs.shadowCascades) : nullptr},
         };
         root["vulkan"] = {
             {"validation_errors", inputs.hasRenderData ? json(inputs.validationErrors) : nullptr},
@@ -75,15 +84,16 @@ namespace toon {
             {"device_extensions", nullptr},
         };
         root["gpu"] = {
-            // Unconditionally null: Diligent exposes only the ADAPTER's total capacity
-            // (IRenderDevice::GetAdapterInfo().Memory), not this process's live allocated bytes.
-            // A true figure needs new manual GPU resource-size bookkeeping -- the same class of
-            // follow-up as alloc.count_after_init below, out of scope for this pass.
-            {"mem_bytes", nullptr},
+            // Renderer::GpuMemBytes() -- engine-owned GPU memory we can see (G-buffer targets,
+            // shadow map, loaded textures, mesh buffers), NOT total VRAM use: glTF model buffers
+            // and DiligentFX's own post-chain intermediates are out of reach; see renderer.h's
+            // GpuMemBytes comment. Still null under --sim-only (no device at all).
+            {"mem_bytes", inputs.hasRenderData ? json(inputs.gpuMemBytes) : nullptr},
         };
         root["ui"] = {
             {"boxes_live", inputs.hasRenderData ? json(inputs.uiBoxesLive) : nullptr},
             {"boxes_pruned", inputs.hasRenderData ? json(inputs.uiBoxesPruned) : nullptr},
+            {"solve_ms", Percentiles(inputs.hasRenderData ? inputs.uiSolveMs : std::vector<double>{})},
         };
 
         root["jolt"] = {

@@ -49,6 +49,7 @@
 #include "Buffer.h"
 #include "Texture.h"
 #include "TextureUtilities.h" // CreateTextureFromFile: asset-browser thumbnails/previews
+#include "GraphicsAccessories.hpp" // GetMipLevelProperties: Renderer::GpuMemBytes' texture sizing
 #include "Sampler.h"
 #include "Shader.h"
 #include "PipelineState.h"
@@ -115,6 +116,7 @@
 #include "ImGuiImplDiligent.hpp"
 #include "backends/imgui_impl_glfw.h"
 
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -282,6 +284,12 @@ namespace toon {
     // shadow map atlas doesn't need to resize with the swap chain).
     static constexpr Uint32 kShadowCascades = 4;
     static constexpr Uint32 kShadowResolution = 2048;
+
+    // Which bucket of Renderer::RenderPassCounts (renderer.h) a CountedDraw/CountedDrawIndexed
+    // call belongs to -- see Impl::drawCallsByPass below. Internal to this file: callers only
+    // ever see the aggregate RenderPassCounts the public accessor hands out.
+    enum class DrawPass : uint8_t { Shadow, OpaqueToon, Sprite, UI, PostResolve, Other };
+    static constexpr size_t kDrawPassCount = 6;
 
     // Debug wireframe overlay (M2.1): a fixed-capacity dynamic vertex buffer, remapped per
     // DrawWireframe call. Comfortably above any ColliderWireframe shape's point count
@@ -633,6 +641,9 @@ namespace toon {
         IPipelineState *lastBoundPSO = nullptr;
         Uint32 drawCallCount = 0;
         Uint32 psoSwitchCount = 0;
+        // Per-pass breakdown of drawCallCount above, indexed by DrawPass -- app/metrics.h's
+        // render.draw_calls_* (see Renderer::DrawCallsByPass). Reset alongside drawCallCount.
+        std::array<Uint32, kDrawPassCount> drawCallsByPass{};
 
         void CountedSetPSO(IPipelineState *pso) {
             if (pso != lastBoundPSO) {
@@ -641,12 +652,14 @@ namespace toon {
             }
             context->SetPipelineState(pso);
         }
-        void CountedDraw(const DrawAttribs &attribs) {
+        void CountedDraw(const DrawAttribs &attribs, DrawPass pass) {
             ++drawCallCount;
+            ++drawCallsByPass[static_cast<size_t>(pass)];
             context->Draw(attribs);
         }
-        void CountedDrawIndexed(const DrawIndexedAttribs &attribs) {
+        void CountedDrawIndexed(const DrawIndexedAttribs &attribs, DrawPass pass) {
             ++drawCallCount;
+            ++drawCallsByPass[static_cast<size_t>(pass)];
             context->DrawIndexed(attribs);
         }
 
@@ -1018,6 +1031,72 @@ namespace toon {
     }
     uint32_t Renderer::DrawCallCount() const { return m_impl->drawCallCount; }
     uint32_t Renderer::PSOSwitchCount() const { return m_impl->psoSwitchCount; }
+
+    Renderer::RenderPassCounts Renderer::DrawCallsByPass() const {
+        const auto &c = m_impl->drawCallsByPass;
+        RenderPassCounts counts;
+        counts.shadow = c[static_cast<size_t>(DrawPass::Shadow)];
+        counts.opaqueToon = c[static_cast<size_t>(DrawPass::OpaqueToon)];
+        counts.sprite = c[static_cast<size_t>(DrawPass::Sprite)];
+        counts.ui = c[static_cast<size_t>(DrawPass::UI)];
+        counts.postResolve = c[static_cast<size_t>(DrawPass::PostResolve)];
+        counts.other = c[static_cast<size_t>(DrawPass::Other)];
+        return counts;
+    }
+
+    uint32_t Renderer::ShadowCascadeCount() const { return kShadowCascades; }
+
+    // Sums IBuffer::GetDesc().Size directly (Diligent buffers already carry their byte size) and
+    // ITexture sizes via GetMipLevelProperties (GraphicsAccessories.hpp), which is format-aware
+    // (correct for the compressed formats loaded textures may use) rather than a hand-rolled
+    // bytes-per-texel table. See renderer.h's own comment on what this deliberately excludes.
+    uint64_t Renderer::GpuMemBytes() const {
+        if (!HasDevice()) { return 0; }
+
+        const auto textureBytes = [](ITexture *tex) -> uint64_t {
+            if (!tex) { return 0; }
+            const TextureDesc &desc = tex->GetDesc();
+            const Uint32 rawArraySize = desc.ArraySize;
+            const Uint32 arraySize =
+                (desc.Type == RESOURCE_DIM_TEX_3D) ? 1u : (rawArraySize > 1u ? rawArraySize : 1u);
+            uint64_t bytes = 0;
+            for (Uint32 mip = 0; mip < desc.MipLevels; ++mip) {
+                bytes += GetMipLevelProperties(desc, mip).MipSize;
+            }
+            return bytes * arraySize;
+        };
+        const auto bufferBytes = [](IBuffer *buf) -> uint64_t { return buf ? buf->GetDesc().Size : 0; };
+
+        uint64_t total = 0;
+
+        // Offscreen G-buffer targets (window-sized; dominate at 4K).
+        total += textureBytes(m_impl->hdrColor);
+        total += textureBytes(m_impl->normalBuffer);
+        total += textureBytes(m_impl->sceneDepth);
+        total += textureBytes(m_impl->prevSceneDepth);
+        total += textureBytes(m_impl->motionVectors);
+
+        // 1x1 defaults -- negligible, included for completeness.
+        total += textureBytes(m_impl->aoWhite);
+        total += textureBytes(m_impl->ssrBlack);
+        total += textureBytes(m_impl->modelWhite);
+
+        // Cascaded shadow map (Diligent's ShadowMapManager owns the array texture).
+        if (ITextureView *srv = m_impl->shadowMap.GetSRV()) { total += textureBytes(srv->GetTexture()); }
+
+        // Loaded editor/sprite textures.
+        for (const auto &tex : m_impl->textures) { total += textureBytes(tex); }
+        total += textureBytes(m_impl->uiWhiteTex);
+
+        // Per-mesh vertex/index buffers. glTF model buffers are excluded -- see renderer.h's
+        // GpuMemBytes comment: they're owned inside Diligent::GLTF::Model, not this class.
+        for (const auto &mesh : m_impl->meshes) {
+            total += bufferBytes(mesh.vertexBuffer);
+            total += bufferBytes(mesh.indexBuffer);
+        }
+
+        return total;
+    }
 
     bool Renderer::Init(GLFWwindow *window, bool strictValidation) {
 #if ENGINE_DLL
@@ -2618,7 +2697,7 @@ namespace toon {
         DrawAttribs draw;
         draw.NumVertices = 3; // full-screen triangle
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->CountedDraw(draw);
+        m_impl->CountedDraw(draw, DrawPass::PostResolve);
 
         // Snapshot this frame's now-finalized depth into prevSceneDepth, ready to be the
         // REAL "previous frame" for next frame's RunPostFX (see its declaration + the
@@ -2905,7 +2984,7 @@ namespace toon {
         DrawAttribs draw;
         draw.NumVertices = count;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->CountedDraw(draw);
+        m_impl->CountedDraw(draw, DrawPass::Other);
     }
 
     // --- Editor backdrop: sky gradient + ground grid (roadmap #12) --------------
@@ -2932,7 +3011,7 @@ namespace toon {
         DrawAttribs draw;
         draw.NumVertices = 3; // full-screen triangle
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->CountedDraw(draw);
+        m_impl->CountedDraw(draw, DrawPass::Other);
     }
 
     // Infinite grid on the XZ (Y=0) ground plane, or the XY sprite plane while 2D editor mode
@@ -3021,7 +3100,7 @@ namespace toon {
         DrawAttribs draw;
         draw.NumVertices = 6; // the shared unit quad (CreateSpritePipeline), two triangles
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->CountedDraw(draw);
+        m_impl->CountedDraw(draw, DrawPass::Sprite);
     }
 
     // --- In-game UI overlay (roadmap #17) ----------------------------------------
@@ -3078,7 +3157,7 @@ namespace toon {
         DrawAttribs draw;
         draw.NumVertices = vertexCount;
         draw.Flags = DRAW_FLAG_VERIFY_ALL;
-        m_impl->CountedDraw(draw);
+        m_impl->CountedDraw(draw, DrawPass::UI);
     }
 
     // --- Cascaded shadow maps ----------------------------------------------------
@@ -3097,6 +3176,7 @@ namespace toon {
         m_impl->drawCallCount = 0;
         m_impl->psoSwitchCount = 0;
         m_impl->lastBoundPSO = nullptr;
+        m_impl->drawCallsByPass.fill(0);
 
         if (!m_impl->post.shadows) {
             m_impl->shadowMapAttribs.iNumCascades = 0;
@@ -3158,7 +3238,7 @@ namespace toon {
 
         m_impl->CountedSetPSO(m_impl->shadowPSO);
         m_impl->context->CommitShaderResources(m_impl->shadowSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        m_impl->CountedDrawIndexed(draw);
+        m_impl->CountedDrawIndexed(draw, DrawPass::Shadow);
     }
 
     // Same idea as DrawModel, stripped to depth-only: walk the model's nodes, transform each
@@ -3236,13 +3316,13 @@ namespace toon {
                     draw.FirstIndexLocation = baseIndex + prim.FirstIndex;
                     draw.BaseVertex = baseVertex + prim.FirstVertex;
                     draw.Flags = DRAW_FLAG_VERIFY_ALL;
-                    m_impl->CountedDrawIndexed(draw);
+                    m_impl->CountedDrawIndexed(draw, DrawPass::Shadow);
                 } else {
                     DrawAttribs draw;
                     draw.NumVertices = prim.VertexCount;
                     draw.StartVertexLocation = baseVertex + prim.FirstVertex;
                     draw.Flags = DRAW_FLAG_VERIFY_ALL;
-                    m_impl->CountedDraw(draw);
+                    m_impl->CountedDraw(draw, DrawPass::Shadow);
                 }
             }
         }
@@ -3355,11 +3435,11 @@ namespace toon {
         // fill's nearer depth overwrites the shell everywhere except the rim.
         m_impl->CountedSetPSO(m_impl->outlinePSO);
         m_impl->context->CommitShaderResources(m_impl->outlineSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        m_impl->CountedDrawIndexed(draw);
+        m_impl->CountedDrawIndexed(draw, DrawPass::OpaqueToon);
 
         m_impl->CountedSetPSO(m_impl->fillPSO);
         m_impl->context->CommitShaderResources(m_impl->fillSRB, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        m_impl->CountedDrawIndexed(draw);
+        m_impl->CountedDrawIndexed(draw, DrawPass::OpaqueToon);
     }
 
     // Convenience: a single object's placement. Builds world matrices from the transforms
@@ -3515,13 +3595,13 @@ namespace toon {
                 draw.FirstIndexLocation = baseIndex + p.FirstIndex;
                 draw.BaseVertex = baseVertex + p.FirstVertex;
                 draw.Flags = DRAW_FLAG_VERIFY_ALL;
-                m_impl->CountedDrawIndexed(draw);
+                m_impl->CountedDrawIndexed(draw, DrawPass::OpaqueToon);
             } else {
                 DrawAttribs draw;
                 draw.NumVertices = p.VertexCount;
                 draw.StartVertexLocation = baseVertex + p.FirstVertex;
                 draw.Flags = DRAW_FLAG_VERIFY_ALL;
-                m_impl->CountedDraw(draw);
+                m_impl->CountedDraw(draw, DrawPass::OpaqueToon);
             }
         };
 

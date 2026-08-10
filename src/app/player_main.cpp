@@ -102,6 +102,22 @@ int main(int argc, char **argv) {
                 std::fprintf(stderr, "--resize-soak must be positive (got '%s')\n", v);
                 return 1;
             }
+        } else if (std::strcmp(argv[i], "--width") == 0) {
+            const char *v = FlagValue(argc, argv, i);
+            if (!v) { return 1; }
+            headless.width = std::atoi(v);
+            if (headless.width <= 0) {
+                std::fprintf(stderr, "--width must be positive (got '%s')\n", v);
+                return 1;
+            }
+        } else if (std::strcmp(argv[i], "--height") == 0) {
+            const char *v = FlagValue(argc, argv, i);
+            if (!v) { return 1; }
+            headless.height = std::atoi(v);
+            if (headless.height <= 0) {
+                std::fprintf(stderr, "--height must be positive (got '%s')\n", v);
+                return 1;
+            }
         } else if (std::strcmp(argv[i], "--frames") == 0) {
             const char *v = FlagValue(argc, argv, i);
             if (!v) { return 1; }

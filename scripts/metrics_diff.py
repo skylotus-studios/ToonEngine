@@ -38,6 +38,12 @@ TOLERANCE_FIELDS = {
     # --sim-only runs of the same scene differed by ~110KB / <0.5%). An exact match here was
     # scripts/verify.py's own fast tier's first real false positive.
     "alloc.peak_bytes": 0.20,
+    # ui.solve_ms: --headless-render only (app/metrics.h), CPU-timed like sim.tick_ms/
+    # render.frame_ms above -- same noise, same starting tolerance. NOT exercised by verify.py
+    # today (see docs/performance.md's "Enforced today" column): no fast/full/deep tier step
+    # runs --headless-render, so this entry is inert until one does.
+    "ui.solve_ms.p50": 0.20,
+    "ui.solve_ms.p99": 0.20,
 }
 
 # Exact-match fields: any two values that differ are a breach, no tolerance. sim.state_hash and
@@ -52,6 +58,15 @@ EXACT_FIELDS = [
     "audio.handles_leaked",
     "render.draw_calls",
     "render.pso_switches",
+    # Per-pass breakdown of render.draw_calls -- --headless-render only, same "not exercised by
+    # verify.py today" caveat as ui.solve_ms above.
+    "render.draw_calls_shadow",
+    "render.draw_calls_opaque_toon",
+    "render.draw_calls_sprite",
+    "render.draw_calls_ui",
+    "render.draw_calls_post_resolve",
+    "render.draw_calls_other",
+    "render.shadow_cascades",
     "vulkan.validation_errors",
     "vulkan.validation_warnings",
     "gpu.mem_bytes",

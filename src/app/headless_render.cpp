@@ -76,7 +76,8 @@ namespace toon {
         // windowless Vulkan.
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
-        GLFWwindow *window = glfwCreateWindow(1600, 900, "ToonEngine (headless-render)", nullptr, nullptr);
+        GLFWwindow *window =
+            glfwCreateWindow(opts.width, opts.height, "ToonEngine (headless-render)", nullptr, nullptr);
         if (!window) {
             std::fprintf(stderr, "--headless-render: failed to create the hidden window\n");
             glfwTerminate();
@@ -134,6 +135,7 @@ namespace toon {
             MetricsInputs metrics;
             metrics.hasRenderData = true;
             metrics.frameMs.reserve(static_cast<size_t>(opts.frames));
+            metrics.uiSolveMs.reserve(static_cast<size_t>(opts.frames));
 
             int framesRun = 0;
 
@@ -173,7 +175,9 @@ namespace toon {
 
                 const double renderStart = Clock::Now();
                 RenderScene(rs);
-                RenderHUD(rs, ScreenForAppState(rs.appState));
+                double uiSolveMs = 0.0;
+                RenderHUD(rs, ScreenForAppState(rs.appState), &uiSolveMs);
+                metrics.uiSolveMs.push_back(uiSolveMs);
 
                 // ui.boxes_live/pruned (app/metrics.h): overwritten every frame, so after the
                 // loop these hold the LAST frame's numbers -- same "last frame's snapshot, not a
@@ -195,6 +199,16 @@ namespace toon {
 
                 metrics.drawCalls = rs.renderer.DrawCallCount();
                 metrics.psoSwitches = rs.renderer.PSOSwitchCount();
+
+                const Renderer::RenderPassCounts passCounts = rs.renderer.DrawCallsByPass();
+                metrics.drawCallsShadow = passCounts.shadow;
+                metrics.drawCallsOpaqueToon = passCounts.opaqueToon;
+                metrics.drawCallsSprite = passCounts.sprite;
+                metrics.drawCallsUI = passCounts.ui;
+                metrics.drawCallsPostResolve = passCounts.postResolve;
+                metrics.drawCallsOther = passCounts.other;
+                metrics.shadowCascades = rs.renderer.ShadowCascadeCount();
+                metrics.gpuMemBytes = rs.renderer.GpuMemBytes();
 
                 rs.renderer.EndFrame();
                 metrics.frameMs.push_back((Clock::Now() - renderStart) * 1000.0);
